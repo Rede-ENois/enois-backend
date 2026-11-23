@@ -219,7 +219,9 @@ public class PapoRetoWorker {
 					contarComTeto(doSubject, antesDoCorte.minus(HORA), antesDoCorte), pesoPessoas, pesoCrescimento);
 
 			assuntos.add(new PapoAssunto(subject, falasPost, falasComentario, autores.size(), falasUltimaHora,
-					ultimaFala, publicacoes, publicacoesDaJanela, potencia, potenciaAntes));
+					ultimaFala, publicacoes, publicacoesDaJanela, potencia, potenciaAntes, contarComTeto(doSubject,
+							agora.minus(Duration.ofDays(1)), agora),
+					contarComTeto(doSubject, agora.minus(Duration.ofDays(2)), agora.minus(Duration.ofDays(1)))));
 		}
 		repository.salvarAssuntos(escopo, assuntos);
 		repository.apagarAssuntosSemFala(escopo);

@@ -22,6 +22,10 @@ import org.springframework.context.annotation.Configuration;
  * Aqui o boot limpa esse marcador com `repair()` — que so remove entradas FAILED e realinha
  * checksums — e tenta de novo. Sem isso, tirar o backend do ar exigiria alguem com acesso ao banco
  * rodando `flyway repair` na mao.
+ *
+ * O repair e a ultima tentativa, nao o sucesso: se a migracao reparada continuar pendente ou falhar
+ * de novo, o boot termina com erro. Sem essa checagem o pod subia sem ela, servindo a versao nova do
+ * codigo sobre o schema velho.
  */
 @Configuration(proxyBeanMethods = false)
 class FlywayMigrationConfig {
@@ -34,16 +38,37 @@ class FlywayMigrationConfig {
 	}
 
 	static void migrateWithRepair(Flyway flyway) {
-		List<String> failed = Arrays.stream(flyway.info().all())
+		List<MigrationInfo> failed = Arrays.stream(flyway.info().all())
 			.filter(info -> info.getState() != null && info.getState().isFailed())
-			.map(FlywayMigrationConfig::describe)
 			.toList();
 		if (!failed.isEmpty()) {
 			LOG.warn("Flyway encontrou migracao(oes) FAILED {}; limpando o marcador (repair) antes de migrar.",
-				failed);
+				failed.stream().map(FlywayMigrationConfig::describe).toList());
 			flyway.repair();
 		}
 		flyway.migrate();
+		if (!failed.isEmpty()) {
+			refuseToBootWithUnapplied(flyway, failed);
+		}
+	}
+
+	private static void refuseToBootWithUnapplied(Flyway flyway, List<MigrationInfo> repaired) {
+		List<String> unapplied = Arrays.stream(flyway.info().all())
+			.filter(FlywayMigrationConfig::neverRan)
+			.map(FlywayMigrationConfig::describe)
+			.toList();
+		if (!unapplied.isEmpty()) {
+			throw new IllegalStateException("Migracao(oes) sem aplicacao apos o repair "
+				+ repaired.stream().map(FlywayMigrationConfig::describe).toList() + ": " + unapplied
+				+ ". O servico nao sobe com o schema antigo.");
+		}
+	}
+
+	private static boolean neverRan(MigrationInfo info) {
+		return switch (info.getState()) {
+			case PENDING, FAILED, IGNORED, OUT_OF_ORDER, ABOVE_TARGET -> true;
+			default -> false;
+		};
 	}
 
 	private static String describe(MigrationInfo info) {

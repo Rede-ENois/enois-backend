@@ -20,6 +20,10 @@ class PapoAssuntoTests {
 		return new PapoAssunto(subject, 40, 0, 12, 3, AGORA, publicacoes, publicacoesDoEscopo, 20.0, 10.0);
 	}
 
+	private static PapoAssunto assuntoDePessoas(long pessoas) {
+		return new PapoAssunto("meetup", 10, 0, pessoas, 1, AGORA, pessoas, 10, 9.0, 9.0);
+	}
+
 	@Test
 	void decaimentoEhPorFalaEComMeiaVidaDeUmDia() {
 		assertThat(PapoAssunto.decaimento(AGORA, AGORA)).isEqualTo(1.0);
@@ -27,6 +31,23 @@ class PapoAssuntoTests {
 		assertThat(PapoAssunto.decaimento(AGORA.minus(PapoAssunto.MEIA_VIDA.multipliedBy(3)), AGORA)).isEqualTo(0.125);
 		// Fala "do futuro" (relógio torto da fonte) não vale mais que a fala de agora.
 		assertThat(PapoAssunto.decaimento(AGORA.plusSeconds(600), AGORA)).isEqualTo(1.0);
+	}
+
+	@Test
+	void chaoDePessoasCaiQuandoABaseEhPequenaEMarcaAAmostragem() {
+		// Base com massa de dados: o chão é o de sempre (cinco pessoas).
+		assertThat(PapoAssunto.chaoDePessoas(25)).isEqualTo(PapoAssunto.MINIMO_PESSOAS);
+		assertThat(PapoAssunto.chaoDePessoas(PapoAssunto.MINIMO_PUBLICACOES_REGUA))
+			.isEqualTo(PapoAssunto.MINIMO_PESSOAS);
+		// Base pequena: dois já estão conversando, e o assunto entre dois e quatro aparece
+		// marcado como amostragem menor — a tela diz quantas pessoas falaram.
+		assertThat(PapoAssunto.chaoDePessoas(0)).isEqualTo(PapoAssunto.MINIMO_PESSOAS_BASE_MENOR);
+		assertThat(PapoAssunto.chaoDePessoas(19)).isEqualTo(PapoAssunto.MINIMO_PESSOAS_BASE_MENOR);
+		assertThat(assuntoDePessoas(2).amostragemMenor()).isTrue();
+		assertThat(assuntoDePessoas(4).amostragemMenor()).isTrue();
+		assertThat(assuntoDePessoas(5).amostragemMenor()).isFalse();
+		// O chão nunca desce abaixo de dois: uma pessoa repetindo não é conversa.
+		assertThat(PapoAssunto.MINIMO_PESSOAS_BASE_MENOR).isGreaterThan(1);
 	}
 
 	@Test
@@ -89,7 +110,27 @@ class PapoAssuntoTests {
 		assertThat(lido.janelaPublicacoes()).isEqualTo(400);
 		assertThat(lido.potencia()).isCloseTo(20.0, within(0.000001));
 		assertThat(lido.potenciaAntes()).isCloseTo(10.0, within(0.000001));
+		// A sobrecarga sem janelas é do teste e da linha legada: sem véspera comparável.
+		assertThat(lido.falasDia()).isZero();
+		assertThat(lido.falasDiaAnterior()).isZero();
 		assertThat(lido.legado()).isFalse();
+	}
+
+	@Test
+	void janelasDoCrescimentoSobrevivemAoJson() {
+		PapoAssunto original = new PapoAssunto("meetup", 14, 0, 9, 4, AGORA, 9, 400, 30.0, 12.0, 14, 6);
+
+		PapoAssunto lido = PapoAssunto.de("meetup", original.estadoComoJson());
+
+		assertThat(lido.falasDia()).isEqualTo(14);
+		assertThat(lido.falasDiaAnterior()).isEqualTo(6);
+		assertThat(lido.legado()).isFalse();
+		// A linha gravada antes da janela existir (e sem potência) lê zero: é nova em alta até o
+		// primeiro corte medir as duas vésperas dela.
+		PapoAssunto antiga = PapoAssunto.de("meetup", "{\"falasPost\":10,\"falasComentario\":0,\"pessoas\":9,"
+				+ "\"falasUltimaHora\":0,\"ultimaFalaEpoch\":" + AGORA.getEpochSecond() + "}");
+		assertThat(antiga.falasDia()).isZero();
+		assertThat(antiga.falasDiaAnterior()).isZero();
 	}
 
 	@Test

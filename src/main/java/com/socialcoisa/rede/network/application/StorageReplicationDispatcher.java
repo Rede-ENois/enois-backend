@@ -98,6 +98,34 @@ public class StorageReplicationDispatcher {
 			&& object.servable() && object.sha256() != null && object.bytes() != null;
 	}
 
+	/** Prazo padrão da tarefa quando ninguém pediu teto: o de sempre, uma hora. */
+	static final java.time.Duration PRAZO_PADRAO = java.time.Duration.ofHours(1);
+
+	/**
+	 * O prazo da {@code OBJECT_PUT} que leva o objeto ao nó.
+	 *
+	 * <p><b>Antes:</b> sempre {@code agora + 1 h}. Com teto de banda pedido pelo operador
+	 * ({@code bandwidthLimitMbps}) e um objeto grande, o tempo mínimo de transferência passa de uma
+	 * hora: a tarefa expirava no meio, o nó perdia o trabalho e a réplica nunca era confirmada — e o
+	 * operador repetia a mesma transferência com o mesmo teto sem ligar uma coisa à outra.</p>
+	 *
+	 * <p><b>Agora:</b> o prazo é o maior entre o padrão e o tempo mínimo no teto (bytes / MB por
+	 * segundo, com 1 MB = 1 s a 8 Mbps, o mesmo cálculo do {@code --limit-rate} do nó), com folga de
+	 * 20% para o nó ter tempo de conferir o digest. Sem teto declarado não há estimativa honesta — a
+	 * banda do nó é que manda — e vale o prazo padrão.</p>
+	 */
+	static Instant prazo(StorageObject object, Optional<Integer> tetoMbps, Instant now) {
+		if (tetoMbps.isEmpty() || object.bytes() == null || object.bytes() <= 0) {
+			return now.plus(PRAZO_PADRAO);
+		}
+		// 1 Mbps = 125 kB/s (o nó aplica `--limit-rate <mbps*125>k`): 8 Mbps movem 1 MiB por segundo.
+		// A conta é em bytes reais, não em "MB" decimal — 100 GiB a 8 Mbps leva ~28 h, não 3,5 h.
+		long bytesPorSegundo = tetoMbps.get() * 125L * 1024L;
+		long segundosMinimos = object.bytes() / bytesPorSegundo;
+		java.time.Duration minimo = java.time.Duration.ofSeconds(segundosMinimos + segundosMinimos / 5);
+		return now.plus(minimo.compareTo(PRAZO_PADRAO) > 0 ? minimo : PRAZO_PADRAO);
+	}
+
 	/**
 	 * Enfileira um {@code OBJECT_PUT} para cada designação pendente de um objeto.
 	 *
@@ -138,12 +166,15 @@ public class StorageReplicationDispatcher {
 				continue;
 			}
 			String payload;
+			// O teto da transferência vale para o payload E para o prazo: é ele que decide quanto
+			// tempo o nó leva para mover os bytes.
+			Optional<Integer> teto;
 			try {
 				// O teto da transferência vai junto quando existe uma: sem ele, o
 				// `bandwidthLimitMbps` do rebalanceamento era gravado no banco e nunca chegava ao nó,
 				// que aplicava só a banda declarada. A transferência é a que DESTINA esta réplica
 				// (`toReplica`), não a que sai dela. O nó usa o MENOR entre este e o que declarou.
-				Optional<Integer> teto = transferencias.stream()
+				teto = transferencias.stream()
 					.filter(r -> r.objectId().equals(object.id()) && r.toReplica() == p.replica())
 					.map(com.socialcoisa.rede.network.domain.StorageRebalance::bandwidthLimitMbps)
 					.filter(mbps -> mbps != null && mbps > 0)
@@ -163,8 +194,7 @@ public class StorageReplicationDispatcher {
 			}
 			String idempotency = "storage:" + object.id() + ":" + p.replica();
 			var task = tasks.enqueue(new NetworkTaskService.EnqueueCommand(TaskType.OBJECT_PUT, idempotency,
-				payload, DataClass.PUBLIC_MEDIA, null, now.plus(1, java.time.temporal.ChronoUnit.HOURS),
-				node.id()));
+				payload, DataClass.PUBLIC_MEDIA, null, prazo(object, teto, now), node.id()));
 			enviadas.add(new Dispatched(objectId, p.replica(), node.id(), task.id()));
 		}
 		// Designar ao nó é o passo seguinte, e é aqui: sem ele a tarefa nasce PENDING e espera a

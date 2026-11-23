@@ -100,6 +100,69 @@ class StorageReplicationDispatcherTests {
 		assertThat(payloadEnviado()).doesNotContain("bandwidthLimitMbps");
 	}
 
+	/**
+	 * O prazo da tarefa cobre o tempo <b>mínimo</b> de transferência no teto de banda pedido.
+	 *
+	 * <p><b>Antes:</b> o prazo era sempre {@code agora + 1 h}, sem olhar o tamanho do objeto nem o
+	 * teto. Com {@code bandwidthLimitMbps=8} e um objeto de 100 GB, o nó leva ~28 h: a tarefa expirava
+	 * no meio, o nó perdia o trabalho e a réplica nunca era confirmada — e o operador via "transferência
+	 * falhou" repetidas vezes com o mesmo teto, sem ligar uma coisa à outra.</p>
+	 *
+	 * <p><b>Agora:</b> teto baixo que não cabe em 1 h estica o prazo para caber. Sem teto (ou teto
+	 * zero), vale o prazo de antes — a banda do nó é quem manda, e estimar com ela seria adivinhação
+	 * do que o nó declarou.</p>
+	 */
+	@Test
+	void teto_baixo_estica_o_prazo_para_a_transferencia_caber() {
+		withCatalog(storageGrande(100L * 1024 * 1024 * 1024));
+		when(catalog.activeRebalances(any(Integer.class))).thenReturn(List.of(transferencia(2, 8)));
+
+		dispatcher.dispatch("sob_1");
+
+		// 100 GiB a 8 Mbps (1 MB/s) = 102400 s ≈ 28,4 h. O prazo tem de passar disso.
+		Instant prazo = prazoEnviado();
+		assertThat(prazo).isAfter(NOW.plus(28, java.time.temporal.ChronoUnit.HOURS));
+	}
+
+	/** Sem teto declarado, o prazo continua o de antes: 1 h. */
+	@Test
+	void sem_teto_o_prazo_continua_uma_hora() {
+		withCatalog(storageGrande(100L * 1024 * 1024 * 1024));
+		when(catalog.activeRebalances(any(Integer.class))).thenReturn(List.of());
+
+		dispatcher.dispatch("sob_1");
+
+		assertThat(prazoEnviado()).isEqualTo(NOW.plus(1, java.time.temporal.ChronoUnit.HOURS));
+	}
+
+	/** Objeto pequeno sob teto baixo ainda cabe na hora: o prazo não aumenta sem necessidade. */
+	@Test
+	void objeto_pequeno_no_teto_baixo_cabe_no_prazo_de_uma_hora() {
+		when(catalog.activeRebalances(any(Integer.class))).thenReturn(List.of(transferencia(2, 8)));
+
+		dispatcher.dispatch("sob_1");
+
+		assertThat(prazoEnviado()).isEqualTo(NOW.plus(1, java.time.temporal.ChronoUnit.HOURS));
+	}
+
+	private void withCatalog(StorageObject objeto) {
+		when(catalog.findById("sob_1")).thenReturn(Optional.of(objeto));
+		when(catalog.copies("sob_1")).thenReturn(List.of(new StoragePlacement("sob_1", 2, "nd_destino",
+			objeto.bytes(), SHA, StoragePlacement.State.PENDING_REMOTE, NOW)));
+	}
+
+	private static StorageObject storageGrande(long bytes) {
+		return StorageObject.current("sob_1", "fotos", "grande.bin", "application/octet-stream", bytes, SHA,
+			StorageObjectState.STORED, "user_1", NOW, NOW, null);
+	}
+
+	private Instant prazoEnviado() {
+		ArgumentCaptor<NetworkTaskService.EnqueueCommand> captor =
+			ArgumentCaptor.forClass(NetworkTaskService.EnqueueCommand.class);
+		verify(tasks).enqueue(captor.capture());
+		return captor.getValue().deadline();
+	}
+
 	private String payloadEnviado() {
 		ArgumentCaptor<NetworkTaskService.EnqueueCommand> captor =
 			ArgumentCaptor.forClass(NetworkTaskService.EnqueueCommand.class);

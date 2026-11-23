@@ -50,8 +50,30 @@ public class PapoAssunto {
 	/** A meia-vida do decaimento temporal: uma fala de 24 horas atrás vale metade. */
 	public static final Duration MEIA_VIDA = Duration.ofHours(24);
 
-	/** Quantas pessoas distintas, no mínimo, para o assunto aparecer na lista. */
+	/**
+	 * Quantas pessoas distintas, no mínimo, para o assunto aparecer na lista.
+	 *
+	 * O chão é ADAPTATIVO: numa base com gente de sobra, cinco pessoas separam a conversa da
+	 * repetição de uma mão de contas; numa rede do tamanho de hoje, cinco pessoas na mesma
+	 * semana tornam a lista quase vazia. Quando o escopo tem menos de
+	 * {@link #BASE_PARA_CHAO_CHEIO} PUBLICAÇÕES na janela — a mesma massa em que a régua de
+	 * discriminação já não julga —, o chão cai para {@link #MINIMO_PESSOAS_BASE_MENOR}; o assunto
+	 * que só passa pela porta estreita aparece marcado como amostragem menor na tela, com o
+	 * número de pessoas. O chão nunca desce abaixo de dois: uma pessoa repetindo não é conversa.
+	 */
 	public static final int MINIMO_PESSOAS = 5;
+
+	/** O chão da base pequena: com pouca gente publicando, dois já estão conversando. */
+	public static final int MINIMO_PESSOAS_BASE_MENOR = 2;
+
+	/**
+	 * O chão de pessoas do assunto, dado o tamanho da base (publicações distintas no escopo na
+	 * janela): cinco pessoas quando o escopo tem massa de dados, dois quando tem pouco — e o
+	 * assunto que só passa pela porta estreita aparece marcado como amostragem menor.
+	 */
+	public static int chaoDePessoas(long publicacoesNaBase) {
+		return publicacoesNaBase >= BASE_PARA_CHAO_CHEIO ? MINIMO_PESSOAS : MINIMO_PESSOAS_BASE_MENOR;
+	}
 
 	/**
 	 * O teto de falas que UMA pessoa soma no assunto: repetir a mesma palavra na mesma conversa
@@ -74,6 +96,13 @@ public class PapoAssunto {
 
 	/** Sem esta massa de publicações na janela, a fração de publicações distintas não julga. */
 	public static final int MINIMO_PUBLICACOES_REGUA = 20;
+
+	/**
+	 * A partir de quantas publicações distintas no escopo a base é grande o bastante para o
+	 * chão cheio. Abaixo disso a amostragem é menor e o chão é o de
+	 * {@link #MINIMO_PESSOAS_BASE_MENOR} — a mesma massa de {@link #MINIMO_PUBLICACOES_REGUA}.
+	 */
+	public static final int BASE_PARA_CHAO_CHEIO = MINIMO_PUBLICACOES_REGUA;
 
 	private final String subject;
 
@@ -103,18 +132,34 @@ public class PapoAssunto {
 	/** A potência medida 24 horas antes do corte — a trajetória de verdade, não a fórmula. */
 	private final double potenciaAntes;
 
+	/**
+	 * O volume real das últimas 24 horas (com o teto por autor) e o da véspera. É a matéria do
+	 * CRESCIMENTO EXIBIDO — proporção de volume, e não de potência (a potência soma gente e
+	 * decaimento; percentual sobre ela inventava número, o "+127%" da tela).
+	 */
+	private final long falasDia;
+
+	private final long falasDiaAnterior;
+
 	/** A linha foi gravada antes da régua nova e ainda não passou por um corte? */
 	private final boolean legado;
 
 	public PapoAssunto(String subject, long falasPost, long falasComentario, long pessoas, long falasUltimaHora,
 			Instant ultimaFala, long publicacoes, long janelaPublicacoes, double potencia, double potenciaAntes) {
 		this(subject, falasPost, falasComentario, pessoas, falasUltimaHora, ultimaFala, publicacoes, janelaPublicacoes,
-				potencia, potenciaAntes, false);
+				potencia, potenciaAntes, 0, 0, false);
+	}
+
+	public PapoAssunto(String subject, long falasPost, long falasComentario, long pessoas, long falasUltimaHora,
+			Instant ultimaFala, long publicacoes, long janelaPublicacoes, double potencia, double potenciaAntes,
+			long falasDia, long falasDiaAnterior) {
+		this(subject, falasPost, falasComentario, pessoas, falasUltimaHora, ultimaFala, publicacoes, janelaPublicacoes,
+				potencia, potenciaAntes, falasDia, falasDiaAnterior, false);
 	}
 
 	private PapoAssunto(String subject, long falasPost, long falasComentario, long pessoas, long falasUltimaHora,
 			Instant ultimaFala, long publicacoes, long janelaPublicacoes, double potencia, double potenciaAntes,
-			boolean legado) {
+			long falasDia, long falasDiaAnterior, boolean legado) {
 		this.subject = subject;
 		this.falasPost = falasPost;
 		this.falasComentario = falasComentario;
@@ -125,6 +170,8 @@ public class PapoAssunto {
 		this.janelaPublicacoes = janelaPublicacoes;
 		this.potencia = potencia;
 		this.potenciaAntes = potenciaAntes;
+		this.falasDia = falasDia;
+		this.falasDiaAnterior = falasDiaAnterior;
 		this.legado = legado;
 	}
 
@@ -168,6 +215,16 @@ public class PapoAssunto {
 	/** A potência de 24 horas atrás, medida nas falas que existiam então. */
 	public double potenciaAntes() {
 		return potenciaAntes;
+	}
+
+	/** As falas das últimas 24 horas, com o teto por autor — o numerador do crescimento. */
+	public long falasDia() {
+		return falasDia;
+	}
+
+	/** As falas da véspera (24 horas antes das últimas 24), com o teto por autor. */
+	public long falasDiaAnterior() {
+		return falasDiaAnterior;
 	}
 
 	/** A linha gravada antes da régua nova, que ainda não passou por um corte. */
@@ -232,6 +289,15 @@ public class PapoAssunto {
 	}
 
 	/**
+	 * O assunto passou pela porta estreita: tem gente de verdade, mas menos que o chão cheio —
+	 * a tela mostra o marcador de amostragem menor com o número de pessoas. Também cobre a base
+	 * pequena, onde dois já são conversa por falta de gente, não por excesso de ruído.
+	 */
+	public boolean amostragemMenor() {
+		return pessoas >= MINIMO_PESSOAS_BASE_MENOR && pessoas < MINIMO_PESSOAS;
+	}
+
+	/**
 	 * A potência da régua ANTIGA, usada só para ler a linha gravada antes da virada (até o
 	 * primeiro corte reescrevê-la): contagens acumuladas com um único decaimento, o da última
 	 * fala. Mantida de propósito porque a leitura tolera o que já está na base.
@@ -256,7 +322,8 @@ public class PapoAssunto {
 		return "{\"falasPost\":" + falasPost + ",\"falasComentario\":" + falasComentario + ",\"pessoas\":" + pessoas
 				+ ",\"falasUltimaHora\":" + falasUltimaHora + ",\"ultimaFalaEpoch\":" + ultimaFala.getEpochSecond()
 				+ ",\"publicacoes\":" + publicacoes + ",\"janelaPublicacoes\":" + janelaPublicacoes
-				+ ",\"potencia\":" + formatar(potencia) + ",\"potenciaAntes\":" + formatar(potenciaAntes) + "}";
+				+ ",\"potencia\":" + formatar(potencia) + ",\"potenciaAntes\":" + formatar(potenciaAntes)
+				+ ",\"falasDia\":" + falasDia + ",\"falasDiaAnterior\":" + falasDiaAnterior + "}";
 	}
 
 	/**
@@ -279,7 +346,7 @@ public class PapoAssunto {
 		return new PapoAssunto(subject, numero(campos, "falasPost"), numero(campos, "falasComentario"),
 				numero(campos, "pessoas"), numero(campos, "falasUltimaHora"), ultimaFala, numero(campos, "publicacoes"),
 				numero(campos, "janelaPublicacoes"), decimal(campos, "potencia"), decimal(campos, "potenciaAntes"),
-				legado);
+				numero(campos, "falasDia"), numero(campos, "falasDiaAnterior"), legado);
 	}
 
 	private static long numero(Map<String, String> campos, String chave) {

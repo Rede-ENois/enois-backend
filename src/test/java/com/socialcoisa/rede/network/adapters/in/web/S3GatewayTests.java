@@ -10,14 +10,21 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import jakarta.servlet.ServletInputStream;
+import jakarta.servlet.http.HttpServletRequest;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,9 +33,12 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.HttpHeaders;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
+import com.socialcoisa.rede.network.domain.StorageObject;
+import com.socialcoisa.rede.network.domain.StorageObjectState;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
 import com.socialcoisa.rede.network.application.SigV4Verifier;
@@ -324,6 +334,92 @@ class S3GatewayTests {
 	}
 
 	/**
+	 * `If-None-Match: *` no PUT: grava só se a chave não existe; se existe, {@code 412}.
+	 *
+	 * <p><b>Antes:</b> o PUT ignorava {@code If-Match} e {@code If-None-Match} por completo. O
+	 * {@code aws s3api put-object --if-none-match '*'} (e o {@code .ifNoneMatch("*")} do SDK) é o
+	 * jeito de criar um objeto <b>sem sobrescrever</b> — o cliente recebia {@code 200} em silêncio
+	 * quando a chave já existia, e o objeto que estava lá era substituído (ou, aqui, recusado com
+	 * {@code 409 ObjectAlreadyStored}, que é outra resposta: o cliente pediu condição, não
+	 * sobrescrita). Num fluxo com duas fontes escrevendo o mesmo nome, o {@code If-None-Match: *}
+	 * é o que impede a segunda de perder/vencer sem saber.</p>
+	 *
+	 * <p><b>Agora:</b> a condição é conferida contra o objeto que está na chave antes de abrir
+	 * upload: chave ocupada → {@code 412 PreconditionFailed} sem tocar no objeto; chave livre →
+	 * grava como antes. {@code If-Match} divergente também responde {@code 412}.</p>
+	 */
+	@Test
+void put_com_if_none_match_nao_sobrescreve_chave_ocupada() throws Exception {
+	byte[] antigo = "versao que fica".getBytes(StandardCharsets.UTF_8);
+	gravar("condicional/ocupada.txt", "versao que fica");
+
+	MockHttpServletRequestBuilder segundo = put("/s3/" + bucket + "/condicional/ocupada.txt")
+		.content("versao que perde".getBytes(StandardCharsets.UTF_8)).contentType("text/plain")
+		.header("If-None-Match", "*");
+	assinar(segundo, SECRET, shaDe("versao que perde"));
+	var resposta = mockMvc.perform(segundo).andReturn().getResponse();
+	assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(412);
+	assertThat(resposta.getContentAsString()).contains("<Code>PreconditionFailed</Code>");
+	assertThat(ler("condicional/ocupada.txt")).isEqualTo(new String(antigo, StandardCharsets.UTF_8));
+
+	// Chave livre: a mesma condição grava, porque "não existe" é verdade.
+	MockHttpServletRequestBuilder livre = put("/s3/" + bucket + "/condicional/livre.txt")
+		.content("primeira".getBytes(StandardCharsets.UTF_8)).contentType("text/plain")
+		.header("If-None-Match", "*");
+	assinar(livre, SECRET, shaDe("primeira"));
+	mockMvc.perform(livre).andExpect(status().isOk());
+	assertThat(ler("condicional/livre.txt")).isEqualTo("primeira");
+
+	// `If-None-Match` com o ETag de OUTRA versão não casa: a condição está satisfeita e a resposta é
+	// a da sobrescrita (409), não 412 — é o que separa "confiro a lista" de "trato só o asterisco".
+	MockHttpServletRequestBuilder outroEtag = put("/s3/" + bucket + "/condicional/livre.txt")
+		.content("outra".getBytes(StandardCharsets.UTF_8)).contentType("text/plain")
+		.header("If-None-Match", "\"1111111111111111111111111111111111111111111111111111111111111111\"");
+	assinar(outroEtag, SECRET, shaDe("outra"));
+	var naoCasa = mockMvc.perform(outroEtag).andReturn().getResponse();
+	assertThat(naoCasa.getStatus()).as("Et-None-Match que nao casa nao e 412").isEqualTo(409);
+
+	// `If-Match` com o ETag CERTO passa a condição e cai na regra da sobrescrita (409): é o caso
+	// que separa "comparo a lista de ETags" de "aceito só o asterisco" — com a lista, 409; sem, 412.
+	String etagDaChave = jdbc.queryForObject(
+		"select sha256 from network_storage_objects where bucket = ? and object_key = ? and state = 'STORED'",
+		String.class, bucket, "condicional/livre.txt");
+	// Um `PENDING` na chave é gravação em curso, não versão: o `sha256` dele é nulo, e o
+	// `etagNaLista` do `If-Match`/`If-None-Match` comparava com `"null"`. O defeito estava na
+	// comparação, que é estática e testável direto — o caminho HTTP já filtra o `PENDING` antes.
+	StorageObject emCurso = StorageObject.current("s3o_x", bucket, "condicional/em-curso.txt", "text/plain",
+		null, null, StorageObjectState.PENDING, "u1", Instant.now(), Instant.now(), null);
+	assertThat(S3GatewayController.etagNaLista("\"" + etagDaChave + "\"", emCurso))
+		.as("o PENDING em curso nao tem ETag: a comparacao nao pode casar").isFalse();
+	assertThat(S3GatewayController.etagNaLista("*", emCurso)).as("o asterisco vale para qualquer estado").isTrue();
+
+	MockHttpServletRequestBuilder ifNoneMatchCerto = put("/s3/" + bucket + "/condicional/livre.txt")
+		.content("troca".getBytes(StandardCharsets.UTF_8)).contentType("text/plain")
+		.header("If-None-Match", "\"" + etagDaChave + "\"");
+	assinar(ifNoneMatchCerto, SECRET, shaDe("troca"));
+	var noneCasa = mockMvc.perform(ifNoneMatchCerto).andReturn().getResponse();
+	assertThat(noneCasa.getStatus()).as("If-None-Match com o etag certo recusa, como o asterisco")
+		.isEqualTo(412);
+
+	MockHttpServletRequestBuilder ifMatchCerto = put("/s3/" + bucket + "/condicional/livre.txt")
+		.content("troca".getBytes(StandardCharsets.UTF_8)).contentType("text/plain")
+		.header("If-Match", "\"" + etagDaChave + "\"");
+	assinar(ifMatchCerto, SECRET, shaDe("troca"));
+	var casa = mockMvc.perform(ifMatchCerto).andReturn().getResponse();
+	assertThat(casa.getStatus()).as("If-Match com o etag certo passa a condicao").isEqualTo(409);
+
+	// `If-Match` com outro ETag recusa; com o ETag certo, a chave confirmada continua 409 (o
+	// gateway não sobrescreve), mas a condição é avaliada antes e não mente.
+	MockHttpServletRequestBuilder ifMatchErrado = put("/s3/" + bucket + "/condicional/livre.txt")
+		.content("troca".getBytes(StandardCharsets.UTF_8)).contentType("text/plain")
+		.header("If-Match", "\"0000000000000000000000000000000000000000000000000000000000000000\"");
+	assinar(ifMatchErrado, SECRET, shaDe("troca"));
+	var recusado = mockMvc.perform(ifMatchErrado).andReturn().getResponse();
+	assertThat(recusado.getStatus()).as(recusado.getContentAsString()).isEqualTo(412);
+	assertThat(ler("condicional/livre.txt")).isEqualTo("primeira");
+}
+
+	/**
 	 * Reescrever a mesma chave é o caso normal do S3, e o dono continua dono.
 	 *
 	 * <p>Este é o caminho que a donagem pós-gravação poderia quebrar: {@code beginUpload} devolve o objeto
@@ -474,34 +570,514 @@ class S3GatewayTests {
 	}
 
 	/**
-	 * CopyObject não é implementado: o {@code PUT} com {@code x-amz-copy-source} é recusado, não
-	 * gravado vazio.
+	 * CopyObject: o {@code PUT} com {@code x-amz-copy-source} copia os bytes da origem no servidor.
 	 *
-	 * <p><b>Antes:</b> o cabeçalho era ignorado e o PUT comum gravava o corpo vazio que o cliente
-	 * manda na cópia — {@code 200} com um objeto de 0 byte no destino. O {@code aws s3 cp} interno
-	 * respondia sucesso e o arquivo "copiado" estava vazio: pior que a operação não existir.</p>
+	 * <p><b>Antes:</b> o cabeçalho era recusado com {@code 501 NotImplemented} — a operação não
+	 * existia, e {@code aws s3 cp --recursive} / {@code rclone copy} não tinham como copiar sem baixar
+	 * e reenviar cada arquivo.</p>
 	 *
-	 * <p>O discriminante é o par: {@code 501} <b>e</b> a chave de destino inexistente. Só o status
-	 * passaria se a gravação falhasse por outro motivo.</p>
+	 * <p><b>Agora:</b> o destino é gravado pelo mesmo caminho do PUT, com o corpo lido da origem, e a
+	 * resposta é o {@code CopyObjectResult} do S3. O discriminante é o par: {@code 200} com o XML
+	 * <b>e</b> o {@code GET} do destino devolvendo exatamente os bytes da origem — um 200 sem
+	 * gravação passaria só pelo status.</p>
 	 */
 	@Test
-	void put_com_cabecalho_de_copia_e_recusado_e_nao_cria_objeto() throws Exception {
-		gravar("copias/origem.txt", "conteudo que nao pode virar copia vazia");
+	void copia_de_objeto_grava_os_bytes_da_origem_no_destino() throws Exception {
+		gravar("copias/origem.txt", "conteudo que a copia precisa levar");
+		String sha = shaDe("conteudo que a copia precisa levar");
 
-		MockHttpServletRequestBuilder copia = put("/s3/" + bucket + "/copias/destino.txt")
-			.header("x-amz-copy-source", "/" + bucket + "/copias/origem.txt")
+		var resposta = copiar("copias/origem.txt", "copias/destino.txt", null);
+
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(200);
+		assertThat(resposta.getContentAsString())
+			.contains("<CopyObjectResult")
+			.contains("<ETag>\"" + sha + "\"</ETag>")
+			.contains("<LastModified>");
+		assertThat(resposta.getHeader(HttpHeaders.ETAG)).isEqualTo("\"" + sha + "\"");
+
+		assertThat(ler("copias/destino.txt")).isEqualTo("conteudo que a copia precisa levar");
+		assertThat(ler("copias/origem.txt")).as("a origem continua intacta")
+			.isEqualTo("conteudo que a copia precisa levar");
+		assertThat(cabecalhosDe("copias/destino.txt").getHeader(HttpHeaders.CONTENT_LENGTH))
+			.isEqualTo(String.valueOf("conteudo que a copia precisa levar".getBytes(StandardCharsets.UTF_8).length));
+	}
+
+	/**
+	 * O metadado acompanha a cópia; {@code REPLACE} usa o que veio na requisição de cópia.
+	 *
+	 * <p>É o que o SDK usa para copiar um arquivo mudando o {@code Content-Type} ou o nome de anexo
+	 * sem baixar o corpo. O {@code COPY} é o padrão do protocolo e não pode ser confundido com "copiar
+	 * só o metadado": o corpo é o mesmo nos dois.</p>
+	 */
+	@Test
+	void copia_traz_o_metadado_da_origem_e_replace_troca_pelo_do_pedido() throws Exception {
+		byte[] corpo = "foto".getBytes(StandardCharsets.UTF_8);
+		MockHttpServletRequestBuilder origem = put("/s3/" + bucket + "/copias/gato.jpg")
+			.content(corpo).contentType("image/jpeg")
+			.header("Cache-Control", "max-age=120")
+			.header("Content-Disposition", "attachment; filename=\"gato.jpg\"")
+			.header("x-amz-meta-dono", "luna");
+		assinar(origem, SECRET, shaDe("foto"));
+		mockMvc.perform(origem).andExpect(status().isOk());
+
+		var copia = copiar("copias/gato.jpg", "copias/gato-copia.jpg", null);
+		assertThat(copia.getStatus()).as(copia.getContentAsString()).isEqualTo(200);
+
+		var herdados = cabecalhosDe("copias/gato-copia.jpg");
+		assertThat(herdados.getContentType()).isEqualTo("image/jpeg");
+		assertThat(herdados.getHeader(HttpHeaders.CACHE_CONTROL)).isEqualTo("max-age=120");
+		assertThat(herdados.getHeader(HttpHeaders.CONTENT_DISPOSITION))
+			.isEqualTo("attachment; filename=\"gato.jpg\"");
+		assertThat(herdados.getHeader("x-amz-meta-dono")).isEqualTo("luna");
+		assertThat(ler("copias/gato-copia.jpg")).isEqualTo("foto");
+
+		var substituida = copiar("copias/gato.jpg", "copias/gato-novo.jpg", "REPLACE",
+			"Content-Type", "text/plain", "x-amz-meta-dono", "outro");
+		assertThat(substituida.getStatus()).as(substituida.getContentAsString()).isEqualTo(200);
+
+		var novos = cabecalhosDe("copias/gato-novo.jpg");
+		assertThat(novos.getContentType()).isEqualTo("text/plain");
+		assertThat(novos.getHeader("x-amz-meta-dono")).isEqualTo("outro");
+		assertThat(novos.getHeader(HttpHeaders.CACHE_CONTROL))
+			.as("o Cache-Control da origem nao foi herdado no REPLACE").isNotEqualTo("max-age=120");
+		// O corpo é o mesmo nos dois caminhos: REPLACE troca o declarado, não o conteúdo.
+		assertThat(ler("copias/gato-novo.jpg")).isEqualTo("foto");
+	}
+
+	/** Origem que não existe: {@code 404 NoSuchKey} no XML do S3 e nenhuma chave de destino criada. */
+	@Test
+	void copia_de_origem_inexistente_responde_404_sem_criar_destino() throws Exception {
+		var resposta = copiar("copias/nao-existe.txt", "copias/orfao.txt", null);
+
+		assertThat(resposta.getStatus()).isEqualTo(404);
+		assertThat(resposta.getContentAsString()).contains("<Code>NoSuchKey</Code>");
+		assertThat(jdbc.queryForObject("select count(*) from network_storage_objects where bucket = ?"
+			+ " and object_key = ?", Integer.class, bucket, "copias/orfao.txt")).isZero();
+	}
+
+	/**
+	 * A origem também é do dono da credencial: copiar de bucket de outra conta é {@code 403} e não
+	 * grava destino nenhum.
+	 */
+	@Test
+	void copia_de_bucket_de_outra_conta_e_recusada_sem_gravar() throws Exception {
+		var alheio = new TestAuthHelper(mockMvc, objectMapper).authenticate("s3_copia_alheia");
+		String chaveAlheia = ACCESS_KEY_PREFIX + UUID.randomUUID().toString().replace("-", "")
+			.substring(0, 10).toUpperCase();
+		jdbc.update("""
+			insert into network_storage_s3_credentials (id, access_key, secret_hash, secret_encrypted, owner_user_id,
+				allowed_bucket, allowed_operations, created_at)
+			values (?, ?, ?, ?, ?, null, 'GET PUT LIST DELETE', ?)
+			""", "s3c_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12), chaveAlheia,
+			com.socialcoisa.rede.shared.security.Hashes.sha256Hex(SECRET), cipher.encrypt(SECRET),
+			alheio.userId(), java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00Z")));
+		String bucketAlheio = "bkt" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		byte[] segredo = "segredo de outra conta".getBytes(StandardCharsets.UTF_8);
+		MockHttpServletRequestBuilder putAlheio = put("/s3/" + bucketAlheio + "/segredo.txt")
+			.content(segredo).contentType("text/plain");
+		assinar(putAlheio, SECRET, shaDe("segredo de outra conta"), chaveAlheia);
+		mockMvc.perform(putAlheio).andExpect(status().isOk());
+
+		MockHttpServletRequestBuilder copia = put("/s3/" + bucket + "/copias/roubada.txt")
+			.header("x-amz-copy-source", "/" + bucketAlheio + "/segredo.txt")
 			.content(new byte[0]);
 		assinar(copia, SECRET, shaVazio());
-		var resposta = mockMvc.perform(copia).andReturn();
+		var resposta = mockMvc.perform(copia).andReturn().getResponse();
 
-		assertThat(resposta.getResponse().getStatus()).isEqualTo(501);
-		assertThat(resposta.getResponse().getContentAsString()).contains("<Code>NotImplemented</Code>");
+		assertThat(resposta.getStatus()).isEqualTo(403);
+		assertThat(resposta.getContentAsString()).contains("<Code>AccessDenied</Code>");
 		assertThat(jdbc.queryForObject("select count(*) from network_storage_objects where bucket = ?"
-			+ " and object_key = ?", Integer.class, bucket, "copias/destino.txt")).isZero();
+			+ " and object_key = ?", Integer.class, bucket, "copias/roubada.txt")).isZero();
+	}
 
-		MockHttpServletRequestBuilder conferencia = head("/s3/" + bucket + "/copias/destino.txt");
-		assinar(conferencia, SECRET, shaVazio());
-		assertThat(mockMvc.perform(conferencia).andReturn().getResponse().getStatus()).isEqualTo(404);
+	/**
+	 * Subrecurso que gravaria é {@code 501} e <b>o objeto fica como estava</b>.
+	 *
+	 * <p><b>Antes:</b> o {@code PUT} era despachado só pela chave da rota. Um {@code PUT ?tagging}
+	 * — a operação com que o S3 grava etiquetas — abria um upload da chave, gravava o XML da etiqueta
+	 * como corpo, substituía o arquivo e respondia {@code 200}, que é o "sucesso" da etiquetagem.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 501 NotImplemented} no XML do S3, antes do catálogo. O discriminante é o
+	 * par: o status <b>e</b> o {@code HEAD} seguinte devolvendo o mesmo ETag — o ETag é o que prova
+	 * que nada foi reescrito, e o {@code GET} prova que o corpo é o de antes.</p>
+	 */
+	@Test
+	void put_de_subrecurso_que_gravaria_responde_501_sem_alterar_o_objeto() throws Exception {
+		gravar("subrecurso/alvo.txt", "conteudo que nao pode virar etiqueta");
+		String shaOriginal = shaDe("conteudo que nao pode virar etiqueta");
+		String etiqueta = "<Tagging><TagSet><Tag><Key>a</Key><Value>b</Value></Tag></TagSet></Tagging>";
+		MockHttpServletRequestBuilder etiquetar = put("/s3/" + bucket + "/subrecurso/alvo.txt")
+			.queryParam("tagging").content(etiqueta.getBytes(StandardCharsets.UTF_8))
+			.contentType("application/xml");
+		assinar(etiquetar, SECRET, shaDe(etiqueta));
+
+		var resposta = mockMvc.perform(etiquetar).andReturn().getResponse();
+
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(501);
+		assertThat(resposta.getContentAsString()).as(resposta.getContentAsString())
+			.contains("<Code>NotImplemented</Code>")
+			.contains("tagging");
+		assertThat(cabecalhosDe("subrecurso/alvo.txt").getHeader(HttpHeaders.ETAG))
+			.as("o objeto nao pode ter sido reescrito com o XML da etiqueta").isEqualTo("\"" + shaOriginal + "\"");
+		assertThat(ler("subrecurso/alvo.txt")).isEqualTo("conteudo que nao pode virar etiqueta");
+	}
+
+	/**
+	 * Dois subrecursos na mesma requisição ({@code ?tagging&acl}): a mensagem é determinística.
+	 *
+	 * <p>Com um {@code Set.of}, a ordem de iteração não é contrato — a mesma requisição responderia
+	 * {@code tagging} numa execução e {@code acl} em outra. A lista fixa garante que a primeira da
+	 * ordem responde, e o teste trava a ordem, não só o status.</p>
+	 */
+	@Test
+	void dois_subrecursos_que_gravariam_respondem_o_primeiro_da_ordem() throws Exception {
+		gravar("subrecurso/dois.txt", "intacto");
+
+		MockHttpServletRequestBuilder dois = put("/s3/" + bucket + "/subrecurso/dois.txt")
+			.queryParam("acl").queryParam("tagging").content(new byte[0]);
+		assinar(dois, SECRET, shaVazio());
+
+		var resposta = mockMvc.perform(dois).andReturn().getResponse();
+
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(501);
+		assertThat(resposta.getContentAsString()).contains("O subrecurso 'tagging' nao e suportado");
+		assertThat(ler("subrecurso/dois.txt")).isEqualTo("intacto");
+	}
+
+	/**
+	 * O corpo do {@code PUT ?tagging} é <b>consumido</b> antes do {@code 501}.
+	 *
+	 * <p>Em conexão persistente, responder não-2xx deixando o corpo do pedido pendente faz o servidor
+	 * fechar a conexão no meio de um pedido (RFC 9110 §15.6.2). O {@code MockMvc} não simula a borda
+	 * HTTP, então o discriminante é aqui e não no pedido inteiro: o fluxo de entrada do pedido é
+	 * substituído por um que conta os bytes lidos, e o corpo tem que sair inteiro dele.</p>
+	 */
+	@Test
+	void subrecurso_que_gravaria_consome_o_corpo_antes_do_501() throws Exception {
+		byte[] corpo = "<Tagging><TagSet/></Tagging>".getBytes(StandardCharsets.UTF_8);
+		AtomicInteger lidos = new AtomicInteger();
+		MockHttpServletRequest pedido = new MockHttpServletRequest("PUT", "/s3/" + bucket + "/subrecurso/drenar.txt") {
+			@Override
+			public String getQueryString() {
+				return "tagging";
+			}
+
+			@Override
+			public ServletInputStream getInputStream() {
+				ServletInputStream original = super.getInputStream();
+				return new ServletInputStream() {
+					@Override
+					public int read() throws java.io.IOException {
+						int b = original.read();
+						if (b >= 0) {
+							lidos.incrementAndGet();
+						}
+						return b;
+					}
+
+					@Override
+					public int read(byte[] destino, int inicio, int quantidade) throws java.io.IOException {
+						int n = original.read(destino, inicio, quantidade);
+						if (n > 0) {
+							lidos.addAndGet(n);
+						}
+						return n;
+					}
+
+					@Override
+					public boolean isFinished() {
+						return original.isFinished();
+					}
+
+					@Override
+					public boolean isReady() {
+						return original.isReady();
+					}
+
+					@Override
+					public void setReadListener(jakarta.servlet.ReadListener ouvinte) {
+						original.setReadListener(ouvinte);
+					}
+				};
+			}
+		};
+		pedido.setContent(corpo);
+
+		S3GatewayController.drenarCorpo(pedido);
+
+		assertThat(lidos.get()).as("o corpo inteiro tem que sair do fluxo de entrada").isEqualTo(corpo.length);
+	}
+
+	/** {@code GET ?acl} também é {@code 501}, e o objeto não muda. */
+	@Test
+	void get_de_acl_responde_501_sem_alterar_o_objeto() throws Exception {
+		gravar("subrecurso/acl-get.txt", "com acl intacta");
+		String shaOriginal = shaDe("com acl intacta");
+
+		MockHttpServletRequestBuilder consultar = get("/s3/" + bucket + "/subrecurso/acl-get.txt")
+			.queryParam("acl");
+		assinar(consultar, SECRET, "");
+
+		var resposta = mockMvc.perform(consultar).andReturn().getResponse();
+
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(501);
+		assertThat(resposta.getContentAsString()).contains("<Code>NotImplemented</Code>");
+		assertThat(cabecalhosDe("subrecurso/acl-get.txt").getHeader(HttpHeaders.ETAG))
+			.isEqualTo("\"" + shaOriginal + "\"");
+	}
+
+	/**
+	 * A guarda roda <b>antes</b> do desvio para o {@code CopyObject}: {@code PUT ?tagging} com
+	 * {@code x-amz-copy-source} não copia.
+	 *
+	 * <p>Sem a ordem, o cabeçalho de cópia capturaria a requisição de etiqueta e a cópia responderia
+	 * {@code 200} — o cliente via sucesso na etiquetagem e ganhava um objeto novo no destino. O
+	 * discriminante é o par: {@code 501} <b>e</b> o destino inexistente.</p>
+	 */
+	@Test
+	void subrecurso_de_etiqueta_com_cabecalho_de_copia_nao_vira_copia() throws Exception {
+		gravar("subrecurso/origem.txt", "origem");
+		MockHttpServletRequestBuilder mistura = put("/s3/" + bucket + "/subrecurso/etiquetado.txt")
+			.queryParam("tagging").header("x-amz-copy-source", "/" + bucket + "/subrecurso/origem.txt")
+			.content(new byte[0]);
+		assinar(mistura, SECRET, shaVazio());
+
+		var resposta = mockMvc.perform(mistura).andReturn().getResponse();
+
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(501);
+		assertThat(resposta.getContentAsString()).contains("<Code>NotImplemented</Code>");
+		assertThat(jdbc.queryForObject("select count(*) from network_storage_objects where bucket = ?"
+			+ " and object_key = ?", Integer.class, bucket, "subrecurso/etiquetado.txt")).isZero();
+	}
+
+	/** Copiar sobre o próprio objeto sem trocar o conteúdo é {@code 400}, e nada é tocado. */
+	@Test
+	void copia_do_objeto_sobre_ele_mesmo_responde_400_e_preserva_o_conteudo() throws Exception {
+		gravar("copias/eu.txt", "eu mesmo");
+
+		var resposta = copiar("copias/eu.txt", "copias/eu.txt", null);
+
+		assertThat(resposta.getStatus()).isEqualTo(400);
+		assertThat(resposta.getContentAsString()).contains("<Code>InvalidRequest</Code>");
+		assertThat(ler("copias/eu.txt")).isEqualTo("eu mesmo");
+	}
+
+	/**
+	 * {@code x-amz-copy-source} é caminho, não query: {@code +} é {@code +}.
+	 *
+	 * <p>Um decodificador de query transformaria o {@code +} literal em espaço e a cópia procuraria
+	 * uma chave que ninguém gravou. O SDK manda {@code %2B} para a mesma chave; as duas formas
+	 * precisam chegar nela.</p>
+	 */
+	@Test
+	void copia_aceita_mais_literal_e_mais_percent_encoded_na_origem() throws Exception {
+		gravar("copias/a+b.txt", "mais literal");
+
+		assertThat(copiar("copias/a+b.txt", "copias/mais-literal.txt", null).getStatus()).isEqualTo(200);
+		assertThat(ler("copias/mais-literal.txt")).isEqualTo("mais literal");
+
+		assertThat(copiar("copias/a%2Bb.txt", "copias/mais-codificado.txt", null).getStatus()).isEqualTo(200);
+		assertThat(ler("copias/mais-codificado.txt")).isEqualTo("mais literal");
+	}
+
+	/**
+	 * {@code if-match} divergente é {@code 412} e não grava. A condição é do protocolo: o cliente
+	 * pediu a cópia <b>só se</b> a origem ainda fosse a que ele viu; copiar mesmo assim seria uma
+	 * resposta errada com cara de certa.
+	 */
+	@Test
+	void copia_com_if_match_divergente_responde_412_e_nao_grava() throws Exception {
+		gravar("copias/condicional.txt", "condicional");
+
+		var resposta = copiar("copias/condicional.txt", "copias/condicional-destino.txt", null,
+			"x-amz-copy-source-if-match", "\"0000000000000000000000000000000000000000000000000000000000000000\"");
+
+		assertThat(resposta.getStatus()).isEqualTo(412);
+		assertThat(resposta.getContentAsString()).contains("<Code>PreconditionFailed</Code>");
+		assertThat(jdbc.queryForObject("select count(*) from network_storage_objects where bucket = ?"
+			+ " and object_key = ?", Integer.class, bucket, "copias/condicional-destino.txt")).isZero();
+	}
+
+	/**
+	 * Copiar para uma chave já confirmada responde {@code 409}, como o PUT, e o objeto que estava lá
+	 * continua com o <b>conteúdo e o metadado</b> de antes — a recusa não pode decorar a vítima.
+	 */
+	@Test
+	void copia_para_chave_confirmada_responde_409_sem_tocar_no_objeto() throws Exception {
+		byte[] original = "original".getBytes(StandardCharsets.UTF_8);
+		MockHttpServletRequestBuilder ocupada = put("/s3/" + bucket + "/copias/ocupada.png")
+			.content(original).contentType("image/png").header("x-amz-meta-dono", "original");
+		assinar(ocupada, SECRET, shaDe("original"));
+		mockMvc.perform(ocupada).andExpect(status().isOk());
+		gravar("copias/fonte.txt", "fonte da copia");
+
+		var resposta = copiar("copias/fonte.txt", "copias/ocupada.png", "REPLACE",
+			"Content-Type", "text/plain", "x-amz-meta-dono", "invasor");
+
+		assertThat(resposta.getStatus()).isEqualTo(409);
+		assertThat(resposta.getContentAsString()).contains("<Code>ObjectAlreadyStored</Code>");
+		var cabecalhos = cabecalhosDe("copias/ocupada.png");
+		assertThat(cabecalhos.getContentType()).isEqualTo("image/png");
+		assertThat(cabecalhos.getHeader("x-amz-meta-dono")).isEqualTo("original");
+		assertThat(ler("copias/ocupada.png")).isEqualTo("original");
+	}
+
+	/**
+	/**
+	/**
+	 * Recusa por donagem devolve o objeto da chave ao estado de antes — inteiro, não só o estado.
+	 *
+	 * <p><b>Antes:</b> a volta era só {@code STORED → PENDING} com {@code bytes} e {@code sha256}
+	 * apagados: o objeto do dono saía da listagem (só {@code STORED} aparece), respondia {@code 404} no
+	 * {@code HEAD} e no {@code GET}, e o {@code PENDING} que sobrava na linha não era reescrevível — a
+	 * próxima gravação devolvia {@code 409 ObjectAlreadyStored}. O dono perdia o objeto que já tinha.</p>
+	 *
+	 * <p><b>Agora:</b> o retrato lido antes da gravação volta inteiro — o {@code STORED} com o corpo e
+	 * o digest de antes, o tipo, o metadado, o {@code Cache-Control}, o {@code Content-Disposition} e o
+	 * prazo. Quem chega na gravação tem de ser o dono (a lápide de outra conta é recusada antes), então
+	 * o caminho é uma linha {@code STORED} do dono ESTACIONADA como {@code PENDING} — o que a expiração
+	 * deixa — e o {@code PUT} dele mesmo.</p>
+	 */
+	@Test
+	void put_recusado_por_donagem_devolve_o_objeto_que_ja_estava_na_chave() throws Exception {
+		String chave = "donagem/meu.png";
+		String shaOriginal = shaDe("meu conteudo");
+		MockHttpServletRequestBuilder meu = put("/s3/" + bucket + "/" + chave)
+			.content("meu conteudo".getBytes(StandardCharsets.UTF_8)).contentType("image/png")
+			.header("x-amz-meta-dono", "original").header(HttpHeaders.CACHE_CONTROL, "max-age=60")
+			.header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=eu.png");
+		assinar(meu, SECRET, shaOriginal);
+		mockMvc.perform(meu).andExpect(status().isOk());
+
+		// O que fica depois de uma expiração sem coleta: a linha do dono em PENDING com o corpo e o
+		// prazo de antes. É o estado que o reenvio dele encontra.
+		jdbc.update("""
+			update network_storage_objects set state = 'PENDING'
+			where bucket = ? and object_key = ? and superseded_by is null
+			""", bucket, chave);
+
+		// Outra conta entra no bucket (a chave dela é aceita): a partir daí a gravação do dono é recusada
+		// DEPOIS de acontecer — é o caminho da devolução.
+		var intruso = new TestAuthHelper(mockMvc, objectMapper).authenticate("s3_donagem_intruso");
+		String acesso = ACCESS_KEY_PREFIX + UUID.randomUUID().toString().replace("-", "")
+			.substring(0, 10).toUpperCase();
+		jdbc.update("""
+			insert into network_storage_s3_credentials (id, access_key, secret_hash, secret_encrypted, owner_user_id,
+				allowed_bucket, allowed_operations, created_at)
+			values (?, ?, ?, ?, ?, null, 'GET PUT LIST DELETE', ?)
+			""", "s3c_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12), acesso,
+			com.socialcoisa.rede.shared.security.Hashes.sha256Hex(SECRET), cipher.encrypt(SECRET),
+			intruso.userId(), java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00Z")));
+		MockHttpServletRequestBuilder dele = put("/s3/" + bucket + "/donagem/do-intruso.txt")
+			.content("alheio".getBytes(StandardCharsets.UTF_8)).contentType("text/plain");
+		assinar(dele, SECRET, shaDe("alheio"), acesso);
+		mockMvc.perform(dele).andExpect(status().isOk());
+
+		// O dono regrava — com outro conteúdo e sem declarar nada.
+		MockHttpServletRequestBuilder regrava = put("/s3/" + bucket + "/" + chave)
+			.content("conteudo novo".getBytes(StandardCharsets.UTF_8)).contentType("text/plain");
+		assinar(regrava, SECRET, shaDe("conteudo novo"));
+		var resposta = mockMvc.perform(regrava).andReturn().getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(403);
+		assertThat(resposta.getContentAsString()).contains("<Code>AccessDenied</Code>");
+
+		// O objeto do dono volta a ser <b>servível</b>: o HEAD responde o tamanho, o digest e o metadado
+		// dele — não os do corpo recusado.
+		var cabecalhos = cabecalhosDe(chave);
+		assertThat(cabecalhos.getStatus()).as("o objeto do dono nao voltou a ser servivel").isEqualTo(200);
+		assertThat(cabecalhos.getContentLengthLong()).as("o objeto do dono perdeu o tamanho na recusa")
+			.isEqualTo(12L);
+		assertThat(cabecalhos.getHeader(HttpHeaders.ETAG)).as("o objeto do dono perdeu o digest na recusa")
+			.isEqualTo("\"" + shaOriginal + "\"");
+		assertThat(cabecalhos.getContentType()).as("o tipo da gravacao recusada vazou").isEqualTo("image/png");
+		assertThat(cabecalhos.getHeader("x-amz-meta-dono")).as("o metadado da gravacao recusada vazou")
+			.isEqualTo("original");
+		assertThat(cabecalhos.getHeader(HttpHeaders.CACHE_CONTROL)).as("o Cache-Control do dono se perdeu")
+			.isEqualTo("max-age=60");
+		assertThat(cabecalhos.getHeader(HttpHeaders.CONTENT_DISPOSITION)).as("o nome de anexo do dono se perdeu")
+			.isEqualTo("inline; filename=eu.png");
+		// O HEAD prova os cabeçalhos; o GET prova os bytes. `restorePending` mexia no banco e deixava o
+		// arquivo com o corpo recusado: 12 bytes no HEAD e "conteudo novo" no GET.
+		assertThat(ler(chave)).as("o corpo do dono nao voltou na recusa").isEqualTo("meu conteudo");
+	}
+
+	/**
+	 * A chave que uma conta apagou não aceita a escrita de outra.
+	 *
+	 * <p><b>Antes:</b> o {@code PUT} recusava pelo bucket inteiro — e o bucket é do intruso quando a
+	 * chave apagada é a <b>única</b> linha dele, porque a lápide não conta como objeto vivo. O intruso
+	 * gravava na chave apagada pela outra conta: a chave ficava <b>inteira</b> com o objeto dele (tipo,
+	 * metadado e nome de anexo) e a resposta era {@code 200}. O {@code DELETE} não entregava o nome da
+	 * chave.</p>
+	 *
+	 * <p><b>Agora:</b> a lápide é tomada de posse — {@code 403 AccessDenied} conferido antes de abrir a
+	 * chave, e nada é gravado. A guarda é da escrita: a leitura da lápide continua {@code 404}.</p>
+	 */
+	@Test
+	void chave_apagada_por_um_dono_nao_aceita_escrita_de_outra_conta() throws Exception {
+		// Bucket do intruso: a conta dele grava a própria chave, e o bucket nasce dele.
+		var intruso = new TestAuthHelper(mockMvc, objectMapper).authenticate("s3_lapide_intruso");
+		String acesso = ACCESS_KEY_PREFIX + UUID.randomUUID().toString().replace("-", "")
+			.substring(0, 10).toUpperCase();
+		jdbc.update("""
+			insert into network_storage_s3_credentials (id, access_key, secret_hash, secret_encrypted, owner_user_id,
+				allowed_bucket, allowed_operations, created_at)
+			values (?, ?, ?, ?, ?, null, 'GET PUT LIST DELETE', ?)
+			""", "s3c_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12), acesso,
+			com.socialcoisa.rede.shared.security.Hashes.sha256Hex(SECRET), cipher.encrypt(SECRET),
+			intruso.userId(), java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00Z")));
+		String chave = "lapide/minha.png";
+		String shaOriginal = shaDe("da dona");
+		MockHttpServletRequestBuilder doIntruso = put("/s3/" + bucket + "/" + chave)
+			.content("da dona".getBytes(StandardCharsets.UTF_8)).contentType("image/png")
+			.header("x-amz-meta-dono", "original");
+		assinar(doIntruso, SECRET, shaOriginal, acesso);
+		mockMvc.perform(doIntruso).andExpect(status().isOk());
+
+		// O dono do bucket apaga a chave dele, e ela fica como lápide.
+		MockHttpServletRequestBuilder remover = MockMvcRequestBuilders.delete("/s3/" + bucket + "/" + chave);
+		assinar(remover, SECRET, shaVazio(), acesso);
+		mockMvc.perform(remover).andExpect(status().isNoContent());
+
+		// A outra conta (a desta sessão) grava a própria chave no bucket: o bucket passa a ter objeto
+		// dela, e a lápide é do intruso.
+		MockHttpServletRequestBuilder minha = put("/s3/" + bucket + "/lapide/da-outra.txt")
+			.content("minha".getBytes(StandardCharsets.UTF_8)).contentType("text/plain");
+		assinar(minha, SECRET, shaDe("minha"));
+		mockMvc.perform(minha).andExpect(status().isOk());
+
+		// E tenta a chave apagada por outra conta.
+		MockHttpServletRequestBuilder plantado = put("/s3/" + bucket + "/" + chave)
+			.content("plantado".getBytes(StandardCharsets.UTF_8)).contentType("text/plain")
+			.header("x-amz-meta-dono", "invasor")
+			.header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=invasor.txt");
+		assinar(plantado, SECRET, shaDe("plantado"));
+		var resposta = mockMvc.perform(plantado).andReturn().getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(403);
+		assertThat(resposta.getContentAsString()).contains("<Code>AccessDenied</Code>");
+
+		// A lápide fica como estava: nem corpo, nem tipo, nem metadado do que tentou gravar.
+		var linha = jdbc.queryForList("select created_by, state, sha256, content_type, metadata_json,"
+			+ " content_disposition from network_storage_objects where bucket = ? and object_key = ?"
+			+ " and superseded_by is null", bucket, chave);
+		assertThat(linha).hasSize(1);
+		assertThat(linha.get(0).get("CREATED_BY")).as("a chave ficou com o objeto de outra conta")
+			.isEqualTo(intruso.userId());
+		assertThat(linha.get(0).get("STATE")).isEqualTo("DELETED");
+		assertThat(linha.get(0).get("SHA256")).isEqualTo(shaOriginal);
+		assertThat(linha.get(0).get("CONTENT_TYPE")).as("o tipo da gravacao recusada vazou").isEqualTo("image/png");
+		assertThat(linha.get(0).get("METADATA_JSON")).as("o metadado da gravacao recusada vazou")
+			.isEqualTo("{\"dono\":\"original\"}");
+		assertThat(linha.get(0).get("CONTENT_DISPOSITION")).as("o nome de anexo da gravacao recusada vazou").isNull();
+
+		// A guarda é da escrita: o {@code GET} de uma lápide é {@code 404 NoSuchKey}, como era antes — o
+		// que ela não pode mais é <b>gravar</b> na chave apagada.
+		MockHttpServletRequestBuilder leitura = get("/s3/" + bucket + "/" + chave);
+		assinar(leitura, SECRET, shaVazio());
+		var lida = mockMvc.perform(leitura).andReturn().getResponse();
+		assertThat(lida.getStatus()).as(lida.getContentAsString()).isEqualTo(404);
+		assertThat(lida.getContentAsString()).contains("NoSuchKey");
+		assertThat(lida.getContentAsString()).doesNotContain("removida por outra conta");
 	}
 
 	/** O caminho completo: PUT grava, GET devolve o corpo com o ETag, HEAD responde o tamanho. */
@@ -536,6 +1112,177 @@ class S3GatewayTests {
 			.andExpect(status().isOk())
 			.andExpect(header().string(HttpHeaders.CONTENT_LENGTH, String.valueOf(corpo.length)))
 			.andExpect(header().string(HttpHeaders.ETAG, "\"" + sha + "\""));
+	}
+
+	/**
+	 * O `Range` que o módulo não vai servir sai como corpo inteiro, não como faixa do primeiro intervalo.
+	 *
+	 * <p><b>Antes:</b> `ByteRange.parse` devolvia vazio para `bytes=0-1,5-6`, e o `ContentService`
+	 * lia vazio como "sirva tudo" — certo. Mas o `Header` é copiado para a resposta em `finish`, e o
+	 * Spring, vendo `Range: bytes=0-1,5-6` com corpo de 12 bytes, <b>aplicava a faixa</b>: respondia
+	 * `206` com `Content-Range: bytes 0-1/12` e 2 bytes para quem pediu dois intervalos. O cliente
+	 * recebia uma resposta <b>multipart declarada como faixa simples</b> — lixo que nenhum leitor de
+	 * `multipart/byteranges` entende.</p>
+	 *
+	 * <p><b>Agora:</b> o cabeçalho do pedido não volta na resposta; o `Range` só é lido, nunca ecoado.
+	 * A resposta é `200` com os 12 bytes inteiros.</p>
+	 */
+	@Test
+	void range_com_mais_de_um_intervalo_responde_o_corpo_inteiro() throws Exception {
+		String conteudo = "0123456789ab";
+		gravar("faixas/varios.txt", conteudo);
+
+		MockHttpServletRequestBuilder leitura = get("/s3/" + bucket + "/faixas/varios.txt")
+			.header(HttpHeaders.RANGE, "bytes=0-1,5-6");
+		assinar(leitura, SECRET, shaVazio());
+		var resultado = mockMvc.perform(leitura).andReturn();
+		if (resultado.getRequest().isAsyncStarted()) {
+			resultado = mockMvc.perform(asyncDispatch(resultado)).andReturn();
+		}
+		var resposta = resultado.getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(200);
+		assertThat(resposta.getContentAsByteArray()).as("a faixa simples cobriu o corpo inteiro")
+			.isEqualTo(conteudo.getBytes(StandardCharsets.UTF_8));
+		assertThat(resposta.getHeader(HttpHeaders.CONTENT_RANGE)).as("o corpo inteiro nao tem Content-Range").isNull();
+	}
+
+	/**
+	 * Objeto cuja cópia não está neste nó responde `503 SlowDown` no XML do S3, e não `500` sem corpo.
+	 *
+	 * <p><b>Antes:</b> o `GET` era `200` com `Content-Length: 12` e <b>zero bytes</b>: a cópia era
+	 * procurada dentro do corpo da resposta (o `StreamingResponseBody`), depois de os cabeçalhos já
+	 * terem saído — o cliente recebia um download truncado <b>sem erro</b>. E a recusa que viesse
+	 * antes disso (a cópia está em outro nó, ou não há cópia registrada) saía como o erro do
+	 * control plane: `409 STORAGE_REPLICA_ELSEWHERE` / `500` sem corpo, JSON que o SDK não lê.</p>
+	 *
+	 * <p><b>Agora:</b> a cópia é aberta <b>antes</b> do primeiro byte; se ela não abre, a resposta é o
+	 * XML do S3 com `503 SlowDown` e `Retry-After` — o `ClientException` literal que o
+	 * {@code S3Exception.retryable} do SDK repete. Um objeto sem cópia nenhuma continua `409`, mas
+	 * agora em XML.</p>
+	 */
+	@Test
+	void copia_fora_deste_no_responde_503_em_xml() throws Exception {
+		gravar("remota/so.txt", "0123456789ab");
+		// A cópia está em outro nó: os bytes saem da raiz desta instalação e a colocação aponta para um
+		// nó que não é este. É o que sobra quando o objeto foi replicado e a réplica 0 foi podada.
+		jdbc.update("""
+			update network_storage_placements set node_id = 'nd_outro_no'
+			where object_id in (select id from network_storage_objects where bucket = ? and object_key = ?)
+			""", bucket, "remota/so.txt");
+		Path raiz = Path.of(System.getProperty("java.io.tmpdir"), "enois-storage");
+		for (String id : jdbc.queryForList("select id from network_storage_objects where bucket = ? and object_key = ?",
+				String.class, bucket, "remota/so.txt")) {
+			Files.deleteIfExists(raiz.resolve(id));
+		}
+
+		MockHttpServletRequestBuilder leitura = get("/s3/" + bucket + "/remota/so.txt");
+		assinar(leitura, SECRET, shaVazio());
+		var resultado = mockMvc.perform(leitura).andReturn();
+		if (resultado.getRequest().isAsyncStarted()) {
+			resultado = mockMvc.perform(asyncDispatch(resultado)).andReturn();
+		}
+		var resposta = resultado.getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(503);
+		assertThat(resposta.getHeader(HttpHeaders.RETRY_AFTER)).as("sem Retry-After o SDK nao sabe quando tentar")
+			.isNotNull();
+		assertThat(resposta.getContentAsString()).as("o corpo e o XML do S3").contains("<Code>SlowDown</Code>");
+
+		MockHttpServletRequestBuilder cabecalho = head("/s3/" + bucket + "/remota/so.txt");
+		assinar(cabecalho, SECRET, shaVazio());
+		assertThat(mockMvc.perform(cabecalho).andReturn().getResponse().getStatus()).isEqualTo(503);
+	}
+
+	/**
+	 * {@code If-Modified-Since} com a data que o próprio gateway devolveu em {@code Last-Modified}
+	 * dá <b>304</b>, e data anterior dá o corpo.
+	 *
+	 * <p><b>Antes:</b> o GetObject só olhava {@code If-None-Match}. Um SDK que revalida por data
+	 * (ou um cliente atrás de CDN que normaliza o validador para {@code Last-Modified}) recebia o
+	 * objeto inteiro de novo; num vídeo de gigabytes, é a transferência toda por nada.</p>
+	 *
+	 * <p><b>Agora:</b> a data é comparada em <b>segundos</b>, a granularidade do HTTP-date. O teste
+	 * devolve o cabeçalho recebido com {@code updated_at} em milissegundos ({@code .750}): sem
+	 * truncar, a comparação diria "mudou" sempre.</p>
+	 */
+	@Test
+	void get_condicional_por_data_devolve_304() throws Exception {
+		gravar("cache/revalidado.txt", "conteudo cacheavel");
+		String id = jdbc.queryForObject(
+			"select id from network_storage_objects where bucket = ? and object_key = ?", String.class, bucket,
+			"cache/revalidado.txt");
+		jdbc.update("update network_storage_objects set updated_at = ? where id = ?",
+			java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00.750Z")), id);
+
+		MockHttpServletRequestBuilder primeiro = get("/s3/" + bucket + "/cache/revalidado.txt");
+		assinar(primeiro, SECRET, shaVazio());
+		var resultado = mockMvc.perform(primeiro).andReturn();
+		if (resultado.getRequest().isAsyncStarted()) {
+			resultado = mockMvc.perform(asyncDispatch(resultado)).andReturn();
+		}
+		String modificadoEm = resultado.getResponse().getHeader(HttpHeaders.LAST_MODIFIED);
+		assertThat(resultado.getResponse().getStatus()).isEqualTo(200);
+		assertThat(modificadoEm).isNotBlank();
+
+		MockHttpServletRequestBuilder revalidacao = get("/s3/" + bucket + "/cache/revalidado.txt")
+			.header(HttpHeaders.IF_MODIFIED_SINCE, modificadoEm);
+		assinar(revalidacao, SECRET, shaVazio());
+		mockMvc.perform(revalidacao)
+			.andExpect(status().isNotModified())
+			.andExpect(header().string(HttpHeaders.ETAG, "\"" + shaDe("conteudo cacheavel") + "\""));
+
+		MockHttpServletRequestBuilder antiga = get("/s3/" + bucket + "/cache/revalidado.txt")
+			.header(HttpHeaders.IF_MODIFIED_SINCE, "Sat, 31 Oct 2026 00:00:00 GMT");
+		assinar(antiga, SECRET, shaVazio());
+		var comCorpo = mockMvc.perform(antiga).andReturn();
+		if (comCorpo.getRequest().isAsyncStarted()) {
+			comCorpo = mockMvc.perform(asyncDispatch(comCorpo)).andReturn();
+		}
+		assertThat(comCorpo.getResponse().getStatus()).isEqualTo(200);
+		assertThat(comCorpo.getResponse().getContentAsString()).isEqualTo("conteudo cacheavel");
+	}
+
+	/**
+	 * O HEAD condicional também responde <b>304</b> — por ETag ou por data.
+	 *
+	 * <p><b>Antes:</b> o HeadObject ignorava os dois condicionais e sempre devolvia 200 com os
+	 * cabeçalhos. O SDK usa o HEAD para decidir se baixa o objeto; 200 aqui é "baixe de novo", mesmo
+	 * quando o cliente já tem os bytes.</p>
+	 *
+	 * <p>E o {@code If-None-Match}, quando presente, <b>desliga</b> o {@code If-Modified-Since}: se o
+	 * ETag não bate, a resposta é 200, ainda que a data diga "não mudou" (RFC 9110 §13.1.3).</p>
+	 */
+	@Test
+	void head_condicional_responde_304() throws Exception {
+		gravar("cache/cabecalho.txt", "conteudo do cabecalho");
+		String id = jdbc.queryForObject(
+			"select id from network_storage_objects where bucket = ? and object_key = ?", String.class, bucket,
+			"cache/cabecalho.txt");
+		jdbc.update("update network_storage_objects set updated_at = ? where id = ?",
+			java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00.750Z")), id);
+		String sha = shaDe("conteudo do cabecalho");
+
+		MockHttpServletRequestBuilder semCondicional = head("/s3/" + bucket + "/cache/cabecalho.txt");
+		assinar(semCondicional, SECRET, shaVazio());
+		String modificadoEm = mockMvc.perform(semCondicional).andReturn().getResponse()
+			.getHeader(HttpHeaders.LAST_MODIFIED);
+		assertThat(modificadoEm).isNotBlank();
+
+		MockHttpServletRequestBuilder porEtag = head("/s3/" + bucket + "/cache/cabecalho.txt")
+			.header(HttpHeaders.IF_NONE_MATCH, "\"" + sha + "\"");
+		assinar(porEtag, SECRET, shaVazio());
+		mockMvc.perform(porEtag).andExpect(status().isNotModified());
+
+		MockHttpServletRequestBuilder porData = head("/s3/" + bucket + "/cache/cabecalho.txt")
+			.header(HttpHeaders.IF_MODIFIED_SINCE, modificadoEm);
+		assinar(porData, SECRET, shaVazio());
+		mockMvc.perform(porData).andExpect(status().isNotModified());
+
+		// ETag diferente + data igual: o If-None-Match manda sozinho e a resposta é 200.
+		MockHttpServletRequestBuilder etagErrado = head("/s3/" + bucket + "/cache/cabecalho.txt")
+			.header(HttpHeaders.IF_NONE_MATCH, "\"outro-digest\"")
+			.header(HttpHeaders.IF_MODIFIED_SINCE, modificadoEm);
+		assinar(etagErrado, SECRET, shaVazio());
+		mockMvc.perform(etagErrado).andExpect(status().isOk());
 	}
 
 	/**
@@ -780,6 +1527,37 @@ class S3GatewayTests {
 		assertThat(resultado.getResponse().getContentAsString()).contains("BucketNotEmpty");
 	}
 
+	/**
+	 * Objeto de <b>zero byte</b> é aceito, como no S3: é o marcador de "pasta" que
+	 * {@code aws s3 cp --recursive} cria, e o resultado de uma escrita vazia legítima.
+	 *
+	 * <p><b>Antes:</b> o gateway repassava o corpo ao catálogo, e o catálogo recusa
+	 * {@code STORAGE_EMPTY_BODY} (regra da fase 1, para não gravar objeto sem conteúdo). Um cliente
+	 * que sincroniza uma árvore inteira — que sempre cria os marcadores de pasta — recebia
+	 * {@code 400} em cada um deles e tratava a sincronização como falha, mesmo com todos os arquivos
+	 * gravados. A regra era do módulo, mas o gateway S3 é compatível com o S3, e o S3 aceita 0 byte.</p>
+	 */
+	@Test
+	void put_de_corpo_vazio_e_aceito_como_no_s3() throws Exception {
+		MockHttpServletRequestBuilder put = put("/s3/" + bucket + "/marcador-vazio/")
+			.content(new byte[0]).contentType("application/octet-stream");
+		assinar(put, SECRET, shaVazio());
+		mockMvc.perform(put).andExpect(status().isOk());
+
+		MockHttpServletRequestBuilder head = head("/s3/" + bucket + "/marcador-vazio/");
+		assinar(head, SECRET, shaVazio());
+		var resposta = mockMvc.perform(head).andReturn();
+		assertThat(resposta.getResponse().getStatus()).isEqualTo(200);
+		assertThat(resposta.getResponse().getHeader("Content-Length")).isEqualTo("0");
+
+		// O GET devolve corpo vazio com 200 — não 404 nem 416.
+		MockHttpServletRequestBuilder get = get("/s3/" + bucket + "/marcador-vazio/");
+		assinar(get, SECRET, shaVazio());
+		var leitura = mockMvc.perform(get).andReturn();
+		assertThat(leitura.getResponse().getStatus()).isEqualTo(200);
+		assertThat(leitura.getResponse().getContentAsByteArray()).isEmpty();
+	}
+
 	/** DeleteObject responde 204 e a chave deixa de ser servível — a lápide, como no S3 versionado. */
 	@Test
 	void delete_vira_lapide() throws Exception {
@@ -792,11 +1570,320 @@ class S3GatewayTests {
 
 		MockHttpServletRequestBuilder getObject = get("/s3/" + bucket + "/apagar.txt");
 		assinar(getObject, SECRET, shaVazio());
-		// A lápide é a última linha do dono naquele bucket: `bucketsOf` filtra `state <> 'DELETED'` e o
-		// bucket deixa de "existir" para ele. A recusa é 403 ("não é do dono"), não 404 — a ordem
-		// donagem-antes-de-existência está documentada no `getObject`.
+		// A lápide é a última linha do dono naquele bucket. A leitura prova a donagem por
+		// `bucketHasObjectsOf` (vivo ou lápide): o objeto não existe mais, então 404 NoSuchKey — não
+		// 403 "bucket de outra conta".
 		var depoisDaLapide = mockMvc.perform(getObject).andReturn();
-		assertThat(depoisDaLapide.getResponse().getStatus()).isIn(403, 404);
+		assertThat(depoisDaLapide.getResponse().getStatus()).as(depoisDaLapide.getResponse().getContentAsString())
+			.isEqualTo(404);
+	}
+
+	/**
+	 * Ler a lápide própria é {@code 404 NoSuchKey}, não {@code 403 AccessDenied}.
+	 *
+	 * <p><b>Antes:</b> o {@code GET} e o {@code HEAD} provavam a donagem pelo {@code bucketsOf}, que
+	 * filtra {@code state <> 'DELETED'}. Depois que o dono apagava a <b>última</b> chave do bucket, a
+	 * lápide não contava como viva, o bucket deixava de "ser dele" na leitura, e o dono recebia
+	 * {@code 403 AccessDenied} ao pedir o objeto que era seu — a resposta dizia que o bucket era de
+	 * <b>outra conta</b>. O {@code DeleteBucket} (ciclo 100) já usa a régua certa
+	 * ({@code bucketHasObjectsOf}, vivo ou lápide); a leitura não usava.</p>
+	 *
+	 * <p><b>Agora:</b> vale o bucket do dono <b>ou</b> o bucket em que ele tem linha no catálogo —
+	 * vivo ou lápide. A leitura da lápide é {@code 404 NoSuchKey}, e o dono continua podendo regravar
+	 * a chave. Quem nunca gravou nada num bucket alheio continua barrado.</p>
+	 */
+	@Test
+	void lapide_propria_le_404_e_nao_403() throws Exception {
+		gravar("so/uma.txt", "x");
+		MockHttpServletRequestBuilder del = MockMvcRequestBuilders.delete("/s3/" + bucket + "/so/uma.txt");
+		assinar(del, SECRET, shaVazio());
+		mockMvc.perform(del).andExpect(status().isNoContent());
+
+		// A última chave viva do bucket virou lápide: o dono ainda tem o bucket.
+		MockHttpServletRequestBuilder getLapide = get("/s3/" + bucket + "/so/uma.txt");
+		assinar(getLapide, SECRET, shaVazio());
+		var lida = mockMvc.perform(getLapide).andReturn().getResponse();
+		assertThat(lida.getStatus()).as(lida.getContentAsString()).isEqualTo(404);
+		assertThat(lida.getContentAsString()).contains("<Code>NoSuchKey</Code>");
+		assertThat(lida.getContentAsString()).as("a leitura acusou bucket de outra conta").doesNotContain("nao e do dono");
+
+		MockHttpServletRequestBuilder headLapide = MockMvcRequestBuilders.head("/s3/" + bucket + "/so/uma.txt");
+		assinar(headLapide, SECRET, shaVazio());
+		assertThat(mockMvc.perform(headLapide).andReturn().getResponse().getStatus()).isEqualTo(404);
+
+		// E o dono não perdeu o bucket: a listagem continua respondendo 200 e mostrando zero chaves.
+		MockHttpServletRequestBuilder listagem = get("/s3/" + bucket).queryParam("list-type", "2");
+		assinar(listagem, SECRET, shaVazio());
+		var lista = mockMvc.perform(listagem).andReturn().getResponse();
+		assertThat(lista.getStatus()).as(lista.getContentAsString()).isEqualTo(200);
+		assertThat(lista.getContentAsString()).contains("<KeyCount>0</KeyCount>");
+
+		// Regravar a própria chave continua funcionando.
+		gravar("so/uma.txt", "de novo");
+	}
+
+	/**
+	 * `start-after` do ListObjectsV2 começa a listagem **depois** daquela chave.
+	 *
+	 * <p><b>Antes:</b> o parâmetro era ignorado. `aws s3api list-objects-v2 --start-after b` e o
+	 * `listObjectsV2(... .startAfter("b"))` do SDK recebiam a listagem <b>desde o começo</b>, com
+	 * `200` — o cliente que retoma uma varredura a partir de uma chave reescreve tudo o que já
+	 * processou, e num bucket grande isso é a listagem inteira de novo. O `marker` (v1) e o
+	 * `continuation-token` (v2) funcionam; o `start-after` — a forma que o V2 usa para começar no
+	 * meio — não existia.</p>
+	 *
+	 * <p><b>Agora:</b> `start-after` é a chave de partida do V2, e tem precedência sobre o
+	 * `continuation-token` (o S3 o ignora quando há token: o token já diz onde continuar). Só vale
+	 * no `list-type=2`; no V1 o parâmetro não é dele.</p>
+	 */
+	@Test
+	void list_v2_start_after_comeca_depois_da_chave() throws Exception {
+		gravar("inicio/a.txt", "a");
+		gravar("inicio/b.txt", "b");
+		gravar("inicio/c.txt", "c");
+
+		MockHttpServletRequestBuilder lista = get("/s3/" + bucket).queryParam("list-type", "2")
+			.queryParam("prefix", "inicio/").queryParam("start-after", "inicio/b.txt");
+		assinar(lista, SECRET, shaVazio());
+		var resposta = mockMvc.perform(lista).andReturn().getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(200);
+		String corpo = resposta.getContentAsString();
+		assertThat(corpo).as("a chave de partida nao pode vir na listagem").doesNotContain("<Key>inicio/a.txt</Key>")
+			.doesNotContain("<Key>inicio/b.txt</Key>");
+		assertThat(corpo).contains("<Key>inicio/c.txt</Key>");
+		assertThat(corpo).contains("<KeyCount>1</KeyCount>");
+
+		// Com `continuation-token`, o token manda — e os dois valores são DIFERENTES, senão o teste
+		// não distingue "token venceu" de "start-after venceu": seria a mesma chave de partida.
+		MockHttpServletRequestBuilder comToken = get("/s3/" + bucket).queryParam("list-type", "2")
+			.queryParam("prefix", "inicio/").queryParam("start-after", "inicio/c.txt")
+			.queryParam("continuation-token", "inicio/a.txt");
+		assinar(comToken, SECRET, shaVazio());
+		var comTokenResposta = mockMvc.perform(comToken).andReturn().getResponse();
+		assertThat(comTokenResposta.getStatus()).isEqualTo(200);
+		String comTokenCorpo = comTokenResposta.getContentAsString();
+		assertThat(comTokenCorpo).as("o token tem de vencer o start-after").contains("<Key>inicio/b.txt</Key>")
+			.contains("<Key>inicio/c.txt</Key>").doesNotContain("<Key>inicio/a.txt</Key>");
+	}
+
+	/**
+	 * URL pré-assinada abre a chave com espaço e acento — o caminho assinado é o que a URL carrega.
+	 *
+	 * <p><b>Antes:</b> o emissor assinava {@code "/" + bucket + "/" + key} com a chave <b>crua</b> e
+	 * emitia a URL com cada segmento passado por {@code uriEncode}. Chave com espaço, acento, {@code +}
+	 * ou {@code %} fazia a assinatura do emissor não ser a da URL: o portador recebia
+	 * {@code 403 AccessDenied "expirou ou a assinatura nao confere"} numa URL recém-emitida. Nome de
+	 * arquivo com espaço é o caso comum, e o teste antigo só usava {@code fotos/url.jpg}.</p>
+	 *
+	 * <p><b>Agora:</b> o caminho assinado é o mesmo texto que a URL carrega (segmentos codificados),
+	 * e a URL emitida abre.</p>
+	 */
+	@Test
+	void url_pre_assinada_abre_chave_com_espaco_e_acento() throws Exception {
+		String chave = "fotos/meu arquivo ção.jpg";
+		var dono = new TestAuthHelper(mockMvc, objectMapper).authenticate("s3_presign_espaco");
+		String acesso = ACCESS_KEY_PREFIX + UUID.randomUUID().toString().replace("-", "").substring(0, 10)
+			.toUpperCase();
+		jdbc.update("""
+			insert into network_storage_s3_credentials (id, access_key, secret_hash, secret_encrypted, owner_user_id,
+				allowed_bucket, allowed_operations, created_at)
+			values (?, ?, ?, ?, ?, null, 'GET PUT LIST DELETE', ?)
+			""", "s3c_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12), acesso,
+			com.socialcoisa.rede.shared.security.Hashes.sha256Hex(SECRET), cipher.encrypt(SECRET),
+			dono.userId(), java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00Z")));
+		MockHttpServletRequestBuilder put = put("/s3/" + bucket + "/" + chave)
+			.content("com acento".getBytes(StandardCharsets.UTF_8)).contentType("image/jpeg");
+		assinar(put, SECRET, shaDe("com acento"), acesso);
+		mockMvc.perform(put).andExpect(status().isOk());
+
+		var emissao = mockMvc.perform(MockMvcRequestBuilders.post("/s3/" + bucket + "/presign")
+			.param("key", chave).param("method", "GET").param("expires", "600")
+			.header("X-Session-Token", dono.token())).andReturn().getResponse();
+		assertThat(emissao.getStatus()).as(emissao.getContentAsString()).isEqualTo(200);
+		String url = objectMapper.readTree(emissao.getContentAsString()).get("url").asText();
+
+		var leitura = MockMvcRequestBuilders.get(java.net.URI.create(url)).header("host", "localhost");
+		var resposta = mockMvc.perform(leitura).andReturn();
+		if (resposta.getRequest().isAsyncStarted()) {
+			resposta = mockMvc.perform(asyncDispatch(resposta)).andReturn();
+		}
+		assertThat(resposta.getResponse().getStatus()).as(resposta.getResponse().getContentAsString())
+			.isEqualTo(200);
+		assertThat(resposta.getResponse().getContentAsByteArray())
+			.isEqualTo("com acento".getBytes(StandardCharsets.UTF_8));
+	}
+
+
+	/**
+	 * `x-amz-expected-bucket-owner`: o cliente diz de quem ele acha que é o bucket.
+	 *
+	 * <p><b>Antes:</b> o cabeçalho era ignorado por todas as rotas. Ele existe justamente para o caso em
+	 * que duas contas têm bucket com o mesmo nome (comum em multi-tenant): o SDK manda o dono esperado
+	 * e o S3 responde {@code 403 AccessDenied} se o bucket pertencer a outra conta. Aqui o cliente
+	 * recebia `200` e — pior — <b>gravava na conta errada</b>, porque o PUT só confere a donagem quando o
+	 * bucket já tem objeto e um bucket novo nasce do primeiro objeto de quem chega primeiro. O
+	 * {@code --expected-bucket-owner} de {@code aws s3api} é o que impede o dado de outra empresa de
+	 * cair no namespace desta.</p>
+	 *
+	 * <p><b>Agora:</b> quando o cabeçalho vem, tem de ser o dono do bucket ({@code ownerUserId} da
+	 * credencial). Divergente → {@code 403 AccessDenied} <b>antes</b> de qualquer gravação; correto →
+	 * segue o fluxo normal. Sem o cabeçalho, nada muda.</p>
+	 */
+	@Test
+	void expected_bucket_owner_divergente_recusa_antes_de_gravar() throws Exception {
+		String donoDoBucket = jdbc.queryForObject(
+			"select owner_user_id from network_storage_s3_credentials where access_key = ?", String.class, accessKey);
+
+		// Gravação com o dono errado: 403 e nenhuma linha no catálogo.
+		MockHttpServletRequestBuilder putErrado = put("/s3/" + bucket + "/dono/errado.txt")
+			.content("nao devia entrar".getBytes(StandardCharsets.UTF_8)).contentType("text/plain")
+			.header("x-amz-expected-bucket-owner", "outra-conta-qualquer");
+		assinar(putErrado, SECRET, shaDe("nao devia entrar"));
+		var recusado = mockMvc.perform(putErrado).andReturn().getResponse();
+		assertThat(recusado.getStatus()).as(recusado.getContentAsString()).isEqualTo(403);
+		assertThat(recusado.getContentAsString()).contains("<Code>AccessDenied</Code>");
+		assertThat(jdbc.queryForObject("select count(*) from network_storage_objects where bucket = ?"
+			+ " and object_key = ?", Integer.class, bucket, "dono/errado.txt")).isZero();
+
+		// Listagem com o dono errado: 403, mesmo sem tocar em nada.
+		MockHttpServletRequestBuilder listErrado = get("/s3/" + bucket).queryParam("list-type", "2")
+			.header("x-amz-expected-bucket-owner", "outra-conta-qualquer");
+		assinar(listErrado, SECRET, shaVazio());
+		assertThat(mockMvc.perform(listErrado).andReturn().getResponse().getStatus()).isEqualTo(403);
+
+		// Com o dono certo, a mesma gravação entra, e a listagem responde 200.
+		MockHttpServletRequestBuilder putCerto = put("/s3/" + bucket + "/dono/certo.txt")
+			.content("entra".getBytes(StandardCharsets.UTF_8)).contentType("text/plain")
+			.header("x-amz-expected-bucket-owner", donoDoBucket);
+		assinar(putCerto, SECRET, shaDe("entra"));
+		mockMvc.perform(putCerto).andExpect(status().isOk());
+		assertThat(ler("dono/certo.txt")).isEqualTo("entra");
+
+		MockHttpServletRequestBuilder listCerto = get("/s3/" + bucket).queryParam("list-type", "2")
+			.header("x-amz-expected-bucket-owner", donoDoBucket);
+		assinar(listCerto, SECRET, shaVazio());
+		mockMvc.perform(listCerto).andExpect(status().isOk());
+	}
+
+	/**
+	 * `GetBucketLifecycleConfiguration` / `PutBucketLifecycleConfiguration` (`?lifecycle`).
+	 *
+	 * <p><b>Antes:</b> nenhuma das duas existia. O {@code GET} caía no {@code ListObjects} e
+	 * respondia {@code 200 <ListBucketResult>}; o {@code PUT} caía no {@code PutObject} e respondia
+	 * {@code 400 InvalidRequest}. É o pior tipo de furo: o Storage <b>expira objeto de verdade</b> pelo
+	 * {@code expire_after_days} da política (o varredor apaga), e o operador que manda
+	 * {@code put-bucket-lifecycle-configuration} com uma regra mais folgada recebia {@code 200} (ou um
+	 * erro de rota) e acreditava ter mudado o prazo — enquanto o varredor seguia apagando pelo prazo
+	 * antigo.</p>
+	 *
+	 * <p><b>Agora:</b> as duas rotas falam a <b>mesma</b> política que o varredor lê. No
+	 * {@code GET}, o {@code <Expiration>} vem do {@code expire_after_days} e o
+	 * {@code <NoncurrentVersionExpiration>} do {@code retain_superseded_days}; sem política, o
+	 * documento sai vazio ({@code <LifecycleConfiguration/>}). No {@code PUT}, as mesmas regras gravam
+	 * na política, preservando o versionamento. Regra que este gateway não sabe honrar
+	 * ({@code <Transition>}, {@code <AbortIncompleteMultipartUpload>}, data absoluta) é
+	 * {@code 400 InvalidRequest} — aceitar calado é o problema que este ciclo fecha.</p>
+	 */
+	@Test
+void lifecycle_do_bucket_le_e_grava_a_mesma_politica_do_varredor() throws Exception {
+		gravar("ciclo/a.txt", "a");
+
+		// Sem política: documento vazio, não ListBucketResult.
+		MockHttpServletRequestBuilder vazio = get("/s3/" + bucket + "?lifecycle");
+		assinar(vazio, SECRET, shaVazio());
+		var vazioResposta = mockMvc.perform(vazio).andReturn().getResponse();
+		assertThat(vazioResposta.getStatus()).as(vazioResposta.getContentAsString()).isEqualTo(200);
+		assertThat(vazioResposta.getContentAsString())
+			.startsWith("<?xml version=\"1.0\" encoding=\"UTF-8\"?><LifecycleConfiguration");
+
+		// Retenção de versão substituída só existe com versionamento ligado (regra do serviço, §4.35):
+		// aqui o bucket nasce sem versão, então a política entra direto na tabela.
+		jdbc.update("""
+			insert into network_storage_buckets (bucket, versioning, retain_superseded_days, expire_after_days,
+				updated_by, updated_at)
+			values (?, true, null, null, ?, current_timestamp(3))
+			on duplicate key update versioning = true
+			""", bucket, admin);
+
+		// Grava as duas regras que o varredor honra.
+		String regra = """
+			<LifecycleConfiguration><Rule><ID>padrao</ID><Status>Enabled</Status>
+			<Filter><Prefix></Prefix></Filter>
+			<Expiration><Days>30</Days></Expiration>
+			<NoncurrentVersionExpiration><NoncurrentDays>7</NoncurrentDays></NoncurrentVersionExpiration>
+			</Rule></LifecycleConfiguration>""";
+		MockHttpServletRequestBuilder grava = put("/s3/" + bucket + "?lifecycle")
+			.content(regra.getBytes(StandardCharsets.UTF_8));
+		assinar(grava, SECRET, shaDe(regra));
+		var gravado = mockMvc.perform(grava).andReturn().getResponse();
+		assertThat(gravado.getStatus()).as(gravado.getContentAsString()).isEqualTo(200);
+
+		// A política do banco — a que o varredor lê — mudou de verdade.
+		assertThat(jdbc.queryForObject("select expire_after_days from network_storage_buckets where bucket = ?",
+			Integer.class, bucket)).isEqualTo(30);
+		assertThat(jdbc.queryForObject(
+			"select retain_superseded_days from network_storage_buckets where bucket = ?",
+			Integer.class, bucket)).isEqualTo(7);
+
+		// A leitura devolve as mesmas regras.
+		MockHttpServletRequestBuilder le = get("/s3/" + bucket + "?lifecycle");
+		assinar(le, SECRET, shaVazio());
+		String corpo = mockMvc.perform(le).andReturn().getResponse().getContentAsString();
+		assertThat(corpo).contains("<Expiration><Days>30</Days></Expiration>");
+		assertThat(corpo).contains("<NoncurrentDays>7</NoncurrentDays>");
+
+		// Regra que o gateway não sabe honrar é recusada — e não muda nada.
+		String transicao = "<LifecycleConfiguration><Rule><ID>x</ID><Status>Enabled</Status>"
+			+ "<Filter><Prefix></Prefix></Filter><Transition><Days>1</Days>"
+			+ "<StorageClass>GLACIER</StorageClass></Transition></Rule></LifecycleConfiguration>";
+		MockHttpServletRequestBuilder naoHonrada = put("/s3/" + bucket + "?lifecycle")
+			.content(transicao.getBytes(StandardCharsets.UTF_8));
+		assinar(naoHonrada, SECRET, shaDe(transicao));
+		var recusa = mockMvc.perform(naoHonrada).andReturn().getResponse();
+		assertThat(recusa.getStatus()).as(recusa.getContentAsString()).isEqualTo(400);
+		assertThat(jdbc.queryForObject("select expire_after_days from network_storage_buckets where bucket = ?",
+			Integer.class, bucket)).isEqualTo(30);
+	}
+
+	/**
+	 * `<Expiration>` com `<Date>` (ou sem `<Days>`) é recusada em <b>qualquer</b> formatação.
+	 *
+	 * <p>A guarda comparava com o par `<Expiration><Date>` colado. Indentação de 6 espaços, `\t` ou
+	 * `\r\n` escapava, `diasDoXml` voltava `null` e o `UPSERT` gravava `null` por cima do prazo —
+	 * apagando a expiração em silêncio. Cada formatação abaixo é uma rodada contra o `400`, e o prazo
+	 * que já estava na política continua lá depois de todas.</p>
+	 */
+	@Test
+	void lifecycle_recusa_data_absoluta_em_qualquer_indentacao() throws Exception {
+		// A linha do bucket é do dono da credencial (é o `requireBucketDoDono` que o PUT exige), e o
+		// prazo que ele já tinha é o que uma regra recusada não pode apagar.
+		String donoDaCredencial = jdbc.queryForObject(
+			"select owner_user_id from network_storage_s3_credentials where access_key = ?", String.class, accessKey);
+		// `bucketsOf` nasce do primeiro objeto vivo da conta: é ele que faz o bucket ser do dono.
+		gravar("ciclo/prazo.txt", "x");
+		jdbc.update("""
+			insert into network_storage_buckets (bucket, versioning, retain_superseded_days, expire_after_days,
+				updated_by, updated_at)
+			values (?, false, null, 45, ?, current_timestamp(3))
+			on duplicate key update expire_after_days = 45
+			""", bucket, donoDaCredencial);
+
+		for (String expiracao : List.of(
+				"<Expiration>\n  <Date>2027-01-01T00:00:00Z</Date>\n</Expiration>",
+				"<Expiration>\n      <Date>2027-01-01T00:00:00Z</Date>\n</Expiration>",
+				"<Expiration>\r\n\t<Date>2027-01-01T00:00:00Z</Date>\r\n</Expiration>",
+				"<Expiration>\n\t<ExpiredObjectDeleteMarker>true</ExpiredObjectDeleteMarker>\n</Expiration>")) {
+			String xml = "<LifecycleConfiguration><Rule><ID>x</ID><Status>Enabled</Status>"
+				+ "<Filter><Prefix></Prefix></Filter>" + expiracao + "</Rule></LifecycleConfiguration>";
+			MockHttpServletRequestBuilder pedido = put("/s3/" + bucket + "?lifecycle")
+				.content(xml.getBytes(StandardCharsets.UTF_8));
+			assinar(pedido, SECRET, shaDe(xml));
+			var resposta = mockMvc.perform(pedido).andReturn().getResponse();
+			assertThat(resposta.getStatus()).as("expiracao: " + expiracao + " -> " + resposta.getContentAsString())
+				.isEqualTo(400);
+			assertThat(jdbc.queryForObject("select expire_after_days from network_storage_buckets where bucket = ?",
+				Integer.class, bucket)).as("o prazo foi apagado por uma regra recusada").isEqualTo(45);
+		}
 	}
 
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
@@ -875,6 +1962,42 @@ class S3GatewayTests {
 		MockHttpServletRequestBuilder put = put("/s3/" + bucket + "/" + key).content(bytes).contentType("text/plain");
 		assinar(put, SECRET, shaDe(conteudo), accessKeyDono);
 		mockMvc.perform(put).andExpect(status().isOk());
+	}
+
+	/** Executa um CopyObject de {@code origem} para {@code destino}, opcionalmente com REPLACE. */
+	private org.springframework.mock.web.MockHttpServletResponse copiar(String origem, String destino,
+			String diretiva, String... cabecalhos) throws Exception {
+		MockHttpServletRequestBuilder copia = put("/s3/" + bucket + "/" + destino)
+			.header("x-amz-copy-source", "/" + bucket + "/" + origem)
+			.content(new byte[0]);
+		if (diretiva != null) {
+			copia.header("x-amz-metadata-directive", diretiva);
+		}
+		for (int i = 0; i + 1 < cabecalhos.length; i += 2) {
+			copia.header(cabecalhos[i], cabecalhos[i + 1]);
+		}
+		assinar(copia, SECRET, shaVazio());
+		return mockMvc.perform(copia).andReturn().getResponse();
+	}
+
+	/** O corpo do objeto, com o {@code asyncDispatch} que o {@code StreamingResponseBody} exige. */
+	private String ler(String chave) throws Exception {
+		MockHttpServletRequestBuilder leitura = get("/s3/" + bucket + "/" + chave);
+		assinar(leitura, SECRET, shaVazio());
+		var resultado = mockMvc.perform(leitura).andReturn();
+		if (resultado.getRequest().isAsyncStarted()) {
+			resultado = mockMvc.perform(asyncDispatch(resultado)).andReturn();
+		}
+		assertThat(resultado.getResponse().getStatus())
+			.as("GET " + chave + ": " + resultado.getResponse().getContentAsString()).isEqualTo(200);
+		return resultado.getResponse().getContentAsString();
+	}
+
+	/** Os cabeçalhos e o status de um HEAD, sem corpo para drenar. */
+	private org.springframework.mock.web.MockHttpServletResponse cabecalhosDe(String chave) throws Exception {
+		MockHttpServletRequestBuilder requisicao = head("/s3/" + bucket + "/" + chave);
+		assinar(requisicao, SECRET, shaVazio());
+		return mockMvc.perform(requisicao).andReturn().getResponse();
 	}
 
 	private void gravar(String key, String conteudo) throws Exception {
@@ -963,4 +2086,5 @@ class S3GatewayTests {
 			throw new IllegalStateException(falha);
 		}
 	}
+
 }

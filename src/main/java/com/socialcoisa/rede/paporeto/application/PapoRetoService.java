@@ -41,9 +41,18 @@ import com.socialcoisa.rede.shared.blocks.BlockedUsersReader;
 @Component
 public class PapoRetoService {
 
-	/** O assunto pronto para a tela: subject, status de trajetória, pontuação e números. */
+	/**
+	/**
+	 * O assunto pronto para a tela: subject, status de trajetória, pontuação e números. O
+	 * crescimento é nulo quando o assunto não tem véspera comparável (novo em alta) — a tela
+	 * diz "novo", não inventa percentual. `amostragemMenor` diz que o assunto passou pelo chão da
+	 * base pequena — a lista existe e a amostra vai dita na tela, com o número de pessoas.
+	 * `janelaPublicacoes` é o tamanho da base (publicações distintas do escopo na janela): é ele
+	 * que a tela mostra como amostra.
+	 */
 	public record SubjectView(String subject, String status, double pontuacao, long falasPost,
-			long falasComentario, long pessoas, long falasUltimaHora, double crescimento) {
+			long falasComentario, long pessoas, long falasUltimaHora, Double crescimento, boolean amostragemMenor,
+			long janelaPublicacoes) {
 	}
 
 	/** O ponto da timeline: bucket de hora e quantas falas o assunto teve ali. */
@@ -117,10 +126,16 @@ public class PapoRetoService {
 		// e "como isso está se movendo") e por isso os dois números não se misturam.
 		record Classificado(PapoAssunto assunto, double pontuacao, double potencia, double potenciaAntes) {
 		}
+		List<PapoAssunto> doEscopo = repository.assuntosDoEscopo(escopo);
+		// O chão é adaptativo: só com massa de publicações no escopo ele exige cinco pessoas;
+		// numa rede do tamanho de hoje, dois já são conversa — e o assunto passa marcado como
+		// amostragem menor, com o número de pessoas visível na tela.
+		long publicacoesNaBase = doEscopo.stream().mapToLong(PapoAssunto::janelaPublicacoes).max().orElse(0);
+		int chao = PapoAssunto.chaoDePessoas(publicacoesNaBase);
+
 		List<Classificado> classificados = new ArrayList<>();
-		for (PapoAssunto assunto : repository.assuntosDoEscopo(escopo)) {
-			if (assunto.pessoas() < PapoAssunto.MINIMO_PESSOAS || assunto.onipresente()
-					|| !extractor.assuntoValido(assunto.subject())) {
+		for (PapoAssunto assunto : doEscopo) {
+			if (assunto.pessoas() < chao || assunto.onipresente() || !extractor.assuntoValido(assunto.subject())) {
 				continue;
 			}
 			// A linha do corte já traz a pontuação e a potência da véspera medidas pelo worker.
@@ -148,7 +163,8 @@ public class PapoRetoService {
 			ranking.add(new SubjectView(classificado.assunto().subject(), status.name(), classificado.pontuacao(),
 					classificado.assunto().falasPost(), classificado.assunto().falasComentario(),
 					classificado.assunto().pessoas(), classificado.assunto().falasUltimaHora(),
-					crescimento(classificado.potencia(), classificado.potenciaAntes())));
+					crescimento(classificado.assunto().falasDia(), classificado.assunto().falasDiaAnterior()),
+					classificado.assunto().amostragemMenor(), classificado.assunto().janelaPublicacoes()));
 		}
 		ranking.sort((a, b) -> Double.compare(b.pontuacao(), a.pontuacao()) != 0
 				? Double.compare(b.pontuacao(), a.pontuacao()) : a.subject().compareToIgnoreCase(b.subject()));
@@ -239,12 +255,16 @@ public class PapoRetoService {
 		return repository.falasTotais(agora.minus(Duration.ofDays(7)), agora);
 	}
 
-	/** O crescimento relativo: quanto a potência subiu desde a véspera (0 quando não subiu). */
-	private double crescimento(double agora, double antes) {
-		if (antes <= 0) {
-			return agora > 0 ? 100.0 : 0.0;
+	/**
+	 * O crescimento exibido é proporção de VOLUME real: as falas das últimas 24 horas contra as
+	 * da véspera (as duas com teto por autor, medidas no corte). Sem véspera comparável, é
+	 * nulo — o assunto é novo em alta, e não "+100%" inventado. Queda exibe estável (0).
+	 */
+	private Double crescimento(long dia, long diaAnterior) {
+		if (diaAnterior > 0) {
+			return Math.max(0.0, ((dia - diaAnterior) / (double) diaAnterior) * 100.0);
 		}
-		return Math.max(0, ((agora - antes) / antes) * 100.0);
+		return dia > 0 ? null : 0.0;
 	}
 
 	/**

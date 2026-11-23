@@ -177,9 +177,11 @@ class PapoRetoWorkerTests {
 		workerNo(T0.plusSeconds(300)).corte();
 
 		assertThat(repositorio.falas).isNotEmpty();
-		// A fala é o assunto do cluster: o bigrama cobre os seus unigramas na publicação.
+		// A fala é o assunto do cluster: o par é o contexto e as suas palavras não saem soltas.
+		// O par "inteligencia artificial" é a conversa; "mudou", "meu" e "trabalho" ficam soltos
+		// — só as palavras que não couberam em par nenhum viram fala.
 		assertThat(repositorio.falas.stream().map(PapoRetoRepository.Fala::expressao))
-			.contains("inteligencia artificial", "trabalho");
+			.containsExactlyInAnyOrder("inteligencia artificial", "trabalho", "mudou");
 		// Nenhuma fala guarda o texto original nem um pedaço dele.
 		assertThat(repositorio.falas.stream().map(PapoRetoRepository.Fala::expressao))
 			.noneMatch(expressao -> expressao.contains("mudou meu"));
@@ -212,12 +214,12 @@ class PapoRetoWorkerTests {
 	@Test
 	void umaSoPessoaNaoViraAlta() {
 		fonte.publicacoes = List.of(
-			new PapoPublicacaoReader.Publicacao("meetup com a galera", "autor_1", T0, null, "pub_1"),
-			new PapoPublicacaoReader.Publicacao("meetup com a galera", "autor_1", T0.plusSeconds(600), null, "pub_2"));
+			new PapoPublicacaoReader.Publicacao("meetup na sexta", "autor_1", T0, null, "pub_1"),
+			new PapoPublicacaoReader.Publicacao("meetup na sexta", "autor_1", T0.plusSeconds(600), null, "pub_2"));
 
 		workerNo(T0.plusSeconds(1200)).corte();
 
-		PapoAssunto meetup = repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "meetup").orElseThrow();
+		PapoAssunto meetup = repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "meetup na sexta").orElseThrow();
 		assertThat(meetup.pessoas()).isEqualTo(1);
 		assertThat(meetup.pessoas()).isLessThan(PapoAssunto.MINIMO_PESSOAS);
 	}
@@ -226,13 +228,13 @@ class PapoRetoWorkerTests {
 	void pessoasDistintasSaoContadasUmaVez() {
 		List<PapoPublicacaoReader.Publicacao> deSeisPessoas = new ArrayList<>();
 		for (int i = 1; i <= 6; i++) {
-			deSeisPessoas.add(new PapoPublicacaoReader.Publicacao("meetup com a galera", "autor_" + i, T0, null, "pub_" + i));
+			deSeisPessoas.add(new PapoPublicacaoReader.Publicacao("meetup na sexta", "autor_" + i, T0, null, "pub_" + i));
 		}
 		fonte.publicacoes = deSeisPessoas;
 
 		workerNo(T0.plusSeconds(300)).corte();
 
-		PapoAssunto meetup = repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "meetup").orElseThrow();
+		PapoAssunto meetup = repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "meetup na sexta").orElseThrow();
 		assertThat(meetup.pessoas()).isEqualTo(6);
 		assertThat(meetup.falasPost()).isGreaterThanOrEqualTo(6);
 	}
@@ -240,12 +242,12 @@ class PapoRetoWorkerTests {
 	@Test
 	void fonteQueReleNaoDuplicaFalaNemTimeline() {
 		fonte.ignoraFronteira = true;
-		fonte.publicacoes = List.of(new PapoPublicacaoReader.Publicacao("meetup com a galera", "autor_1", T0, null, "pub_1"));
+		fonte.publicacoes = List.of(new PapoPublicacaoReader.Publicacao("meetup na sexta", "autor_1", T0, null, "pub_1"));
 
 		workerNo(T0.plusSeconds(300)).corte();
 		int falasAposPrimeiroCorte = repositorio.falas.size();
 		long falasDoBucket = repositorio.intervalos.values().stream()
-			.filter(i -> i.subject().equals("meetup"))
+			.filter(i -> i.subject().equals("meetup na sexta"))
 			.mapToLong(PapoIntervalo::falas)
 			.sum();
 
@@ -255,7 +257,7 @@ class PapoRetoWorkerTests {
 
 		assertThat(repositorio.falas).hasSize(falasAposPrimeiroCorte);
 		long falasDoBucketDepois = repositorio.intervalos.values().stream()
-			.filter(i -> i.subject().equals("meetup"))
+			.filter(i -> i.subject().equals("meetup na sexta"))
 			.mapToLong(PapoIntervalo::falas)
 			.sum();
 		assertThat(falasDoBucketDepois).isEqualTo(falasDoBucket);
@@ -264,26 +266,26 @@ class PapoRetoWorkerTests {
 	@Test
 	void escopoDaComunidadeESeparadoDoGlobal() {
 		fonte.publicacoes = List.of(
-			new PapoPublicacaoReader.Publicacao("meetup com a galera", "autor_1", T0, "com_1", "pub_1"),
-			new PapoPublicacaoReader.Publicacao("meetup com a galera", "autor_2", T0, "com_1", "pub_2"),
-			new PapoPublicacaoReader.Publicacao("meetup com a galera", "autor_3", T0, "com_1", "pub_3"),
-			new PapoPublicacaoReader.Publicacao("meetup com a galera", "autor_4", T0, "com_1", "pub_4"),
-			new PapoPublicacaoReader.Publicacao("meetup com a galera", "autor_5", T0, "com_1", "pub_5"),
-			new PapoPublicacaoReader.Publicacao("aula de violao", "autor_6", T0, null, "pub_6"),
-			new PapoPublicacaoReader.Publicacao("aula de violao", "autor_7", T0, null, "pub_7"));
+			new PapoPublicacaoReader.Publicacao("meetup na sexta", "autor_1", T0, "com_1", "pub_1"),
+			new PapoPublicacaoReader.Publicacao("meetup na sexta", "autor_2", T0, "com_1", "pub_2"),
+			new PapoPublicacaoReader.Publicacao("meetup na sexta", "autor_3", T0, "com_1", "pub_3"),
+			new PapoPublicacaoReader.Publicacao("meetup na sexta", "autor_4", T0, "com_1", "pub_4"),
+			new PapoPublicacaoReader.Publicacao("meetup na sexta", "autor_5", T0, "com_1", "pub_5"),
+			new PapoPublicacaoReader.Publicacao("aula sobre violao", "autor_6", T0, null, "pub_6"),
+			new PapoPublicacaoReader.Publicacao("aula sobre violao", "autor_7", T0, null, "pub_7"));
 
 		workerNo(T0.plusSeconds(300)).corte();
 
 		// No global, o meetup tem 5 pessoas; na comunidade, o mesmo. O violão é só do feed
-		// geral: não existe no escopo da comunidade. "aula de violao" é UMA conversa — o "de"
-		// cola a expressão composta e os unigramas ficam cobertos por ela.
-		assertThat(repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "meetup").orElseThrow().pessoas())
+		// geral: não existe no escopo da comunidade. "aula sobre violao" e "meetup na sexta" são
+		// UMA conversa cada — o conector cola a expressão e as palavras não saem soltas.
+		assertThat(repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "meetup na sexta").orElseThrow().pessoas())
 			.isEqualTo(5);
-		assertThat(repositorio.assuntoDe("com_1", "meetup").orElseThrow().pessoas()).isEqualTo(5);
-		assertThat(repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "aula de violao").orElseThrow().pessoas())
+		assertThat(repositorio.assuntoDe("com_1", "meetup na sexta").orElseThrow().pessoas()).isEqualTo(5);
+		assertThat(repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "aula sobre violao").orElseThrow().pessoas())
 			.isEqualTo(2);
 		assertThat(repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "violao")).isEmpty();
-		assertThat(repositorio.assuntoDe("com_1", "aula de violao")).isEmpty();
+		assertThat(repositorio.assuntoDe("com_1", "aula sobre violao")).isEmpty();
 	}
 
 	@Test
@@ -292,18 +294,18 @@ class PapoRetoWorkerTests {
 		// a repetição dela não pode valer mais que a conversa de gente diferente.
 		List<PapoPublicacaoReader.Publicacao> publicacoes = new ArrayList<>();
 		for (int i = 1; i <= 20; i++) {
-			publicacoes.add(new PapoPublicacaoReader.Publicacao("meetup com a galera", "repetidor", T0, null,
+			publicacoes.add(new PapoPublicacaoReader.Publicacao("meetup na sexta", "repetidor", T0, null,
 					"pub_r" + i));
 		}
 		for (int i = 1; i <= 4; i++) {
-			publicacoes.add(new PapoPublicacaoReader.Publicacao("meetup com a galera", "autor_" + i, T0, null,
+			publicacoes.add(new PapoPublicacaoReader.Publicacao("meetup na sexta", "autor_" + i, T0, null,
 					"pub_" + i));
 		}
 		fonte.publicacoes = publicacoes;
 
 		workerNo(T0.plusSeconds(1)).corte();
 
-		PapoAssunto meetup = repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "meetup").orElseThrow();
+		PapoAssunto meetup = repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "meetup na sexta").orElseThrow();
 		// A contagem da tela continua honesta (24 falas de 5 pessoas), mas a potência conta 3 do
 		// repetidor + 1 de cada um dos outros quatro.
 		assertThat(meetup.falasPost()).isEqualTo(24);
@@ -322,15 +324,15 @@ class PapoRetoWorkerTests {
 		List<PapoPublicacaoReader.Publicacao> publicacoes = new ArrayList<>();
 		Instant anteontem = T0.minus(Duration.ofDays(2));
 		for (int i = 1; i <= 30; i++) {
-			publicacoes.add(new PapoPublicacaoReader.Publicacao("pangolim na horta", "autor_" + i, anteontem, null,
+			publicacoes.add(new PapoPublicacaoReader.Publicacao("pangolim da horta", "autor_" + i, anteontem, null,
 					"velha_" + i));
 		}
-		publicacoes.add(new PapoPublicacaoReader.Publicacao("pangolim na horta", "autor_novo", T0, null, "nova"));
+		publicacoes.add(new PapoPublicacaoReader.Publicacao("pangolim da horta", "autor_novo", T0, null, "nova"));
 		fonte.publicacoes = publicacoes;
 
 		workerNo(T0.plusSeconds(1)).corte();
 
-		PapoAssunto pangolim = repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "pangolim na horta").orElseThrow();
+		PapoAssunto pangolim = repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "pangolim da horta").orElseThrow();
 		assertThat(pangolim.falasPost()).isEqualTo(31);
 		// A fala de agora vale o peso cheio; cada uma das 30 de anteontem vale 1/4 (duas
 		// meias-vidas). A potência é 1 + 7,5 falas equivalentes, e não 31.
@@ -347,14 +349,14 @@ class PapoRetoWorkerTests {
 		// e é isso que faz o status EMERGENTE ser medido, não deduzido da fórmula.
 		List<PapoPublicacaoReader.Publicacao> publicacoes = new ArrayList<>();
 		for (int i = 1; i <= 6; i++) {
-			publicacoes.add(new PapoPublicacaoReader.Publicacao("pangolim na horta", "autor_" + i, T0, null,
+			publicacoes.add(new PapoPublicacaoReader.Publicacao("pangolim da horta", "autor_" + i, T0, null,
 					"pub_" + i));
 		}
 		fonte.publicacoes = publicacoes;
 
 		workerNo(T0.plusSeconds(1)).corte();
 
-		PapoAssunto pangolim = repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "pangolim na horta").orElseThrow();
+		PapoAssunto pangolim = repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "pangolim da horta").orElseThrow();
 		assertThat(pangolim.potenciaAntes()).isZero();
 		assertThat(PapoStatus.de(pangolim.potencia(), pangolim.potenciaAntes())).isEqualTo(PapoStatus.EMERGENTE);
 	}
@@ -365,7 +367,7 @@ class PapoRetoWorkerTests {
 		// três publicações sobre o assunto entre cem publicações do escopo.
 		List<PapoPublicacaoReader.Publicacao> publicacoes = new ArrayList<>();
 		for (int i = 1; i <= 3; i++) {
-			publicacoes.add(new PapoPublicacaoReader.Publicacao("pangolim na horta", "autor_" + i, T0, null,
+			publicacoes.add(new PapoPublicacaoReader.Publicacao("pangolim da horta", "autor_" + i, T0, null,
 					"pub_" + i));
 		}
 		for (int i = 4; i <= 100; i++) {
@@ -376,7 +378,7 @@ class PapoRetoWorkerTests {
 
 		workerNo(T0.plusSeconds(1)).corte();
 
-		PapoAssunto pangolim = repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "pangolim na horta").orElseThrow();
+		PapoAssunto pangolim = repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "pangolim da horta").orElseThrow();
 		assertThat(pangolim.publicacoes()).isEqualTo(3);
 		assertThat(pangolim.janelaPublicacoes()).isEqualTo(100);
 		assertThat(pangolim.onipresente()).isFalse();
@@ -390,7 +392,7 @@ class PapoRetoWorkerTests {
 			public List<PapoPublicacaoReader.Publicacao> desde(Instant de, Instant ate) {
 				List<PapoPublicacaoReader.Publicacao> publicacoes = new ArrayList<>();
 				for (int i = 1; i <= 6; i++) {
-					publicacoes.add(new PapoPublicacaoReader.Publicacao("meetup com a galera", "comentador_" + i, T0, null, "cmt_" + i));
+					publicacoes.add(new PapoPublicacaoReader.Publicacao("meetup na sexta", "comentador_" + i, T0, null, "cmt_" + i));
 				}
 				return publicacoes;
 			}
@@ -407,7 +409,7 @@ class PapoRetoWorkerTests {
 		};
 		List<PapoPublicacaoReader.Publicacao> deSeisPessoas = new ArrayList<>();
 		for (int i = 1; i <= 6; i++) {
-			deSeisPessoas.add(new PapoPublicacaoReader.Publicacao("meetup com a galera", "autor_" + i, T0, null, "pub_" + i));
+			deSeisPessoas.add(new PapoPublicacaoReader.Publicacao("meetup na sexta", "autor_" + i, T0, null, "pub_" + i));
 		}
 		fonte.publicacoes = deSeisPessoas;
 		PapoRetoWorker workerComComentarios = new PapoRetoWorker(List.of(fonte, comentarios), repositorio,
@@ -416,7 +418,7 @@ class PapoRetoWorkerTests {
 
 		workerComComentarios.corte();
 
-		PapoAssunto meetup = repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "meetup").orElseThrow();
+		PapoAssunto meetup = repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "meetup na sexta").orElseThrow();
 		assertThat(meetup.falasPost()).isGreaterThanOrEqualTo(6);
 		assertThat(meetup.falasComentario()).isGreaterThanOrEqualTo(6);
 		assertThat(meetup.pessoas()).isEqualTo(12);
@@ -426,14 +428,14 @@ class PapoRetoWorkerTests {
 	void timelineGuardaOBucketDaHora() {
 		List<PapoPublicacaoReader.Publicacao> publicacoes = new ArrayList<>();
 		for (int i = 1; i <= 6; i++) {
-			publicacoes.add(new PapoPublicacaoReader.Publicacao("meetup com a galera", "autor_" + i, T0.plusSeconds(i), null,
+			publicacoes.add(new PapoPublicacaoReader.Publicacao("meetup na sexta", "autor_" + i, T0.plusSeconds(i), null,
 					"pub_" + i));
 		}
 		fonte.publicacoes = publicacoes;
 
 		workerNo(T0.plusSeconds(3600)).corte();
 
-		List<PapoIntervalo> doMeetup = repositorio.intervalosDe(PapoRetoWorker.ESCOPO_GLOBAL, "meetup",
+		List<PapoIntervalo> doMeetup = repositorio.intervalosDe(PapoRetoWorker.ESCOPO_GLOBAL, "meetup na sexta",
 				T0.minusSeconds(60), T0.plusSeconds(3600));
 		assertThat(doMeetup).hasSize(1);
 		assertThat(doMeetup.get(0).hora()).isEqualTo(Instant.parse("2026-11-17T18:00:00Z"));
@@ -451,24 +453,24 @@ class PapoRetoWorkerTests {
 	void assuntoSemFalaNovaPerdePotenciaNoCorteSeguinte() {
 		List<PapoPublicacaoReader.Publicacao> publicacoes = new ArrayList<>();
 		for (int i = 1; i <= 6; i++) {
-			publicacoes.add(new PapoPublicacaoReader.Publicacao("pangolim na horta", "autor_" + i, T0, null,
+			publicacoes.add(new PapoPublicacaoReader.Publicacao("pangolim da horta", "autor_" + i, T0, null,
 					"pub_" + i));
 		}
 		fonte.publicacoes = publicacoes;
 
 		workerNo(T0.plusSeconds(1)).corte();
-		double noCorte = repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "pangolim na horta").orElseThrow()
+		double noCorte = repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "pangolim da horta").orElseThrow()
 			.potencia();
 
 		// Uma hora depois, sem fala nova: a mesma conversa vale menos — o assunto esmorece
 		// sozinho, sem remoção manual e sem perder o histórico.
 		fonte.publicacoes = List.of();
 		workerNo(T0.plusSeconds(3601)).corte();
-		double umaHoraDepois = repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "pangolim na horta").orElseThrow()
+		double umaHoraDepois = repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "pangolim da horta").orElseThrow()
 			.potencia();
 
 		assertThat(umaHoraDepois).isLessThan(noCorte);
-		assertThat(repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "pangolim na horta")).isPresent();
+		assertThat(repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "pangolim da horta")).isPresent();
 	}
 
 	@Test
@@ -481,6 +483,52 @@ class PapoRetoWorkerTests {
 		// Sustentou: o antes já era praticamente o tamanho de hoje.
 		assertThat(PapoStatus.de(100.0, 80.0)).isEqualTo(PapoStatus.PERSISTENTE);
 		assertThat(PapoStatus.de(100.0, 120.0)).isEqualTo(PapoStatus.PERSISTENTE);
+	}
+
+	@Test
+	void janelasDoCrescimentoContamVolumeRealDasDuasVesperas() {
+		// Quatro falas de quatro pessoas há meia hora e duas de duas pessoas há 25 horas: as
+		// janelas do crescimento medem cada véspera pela faixa que é dela — (agora−24h, agora]
+		// pega as quatro, e (agora−48h, agora−24h] pega as duas.
+		List<PapoPublicacaoReader.Publicacao> publicacoes = new ArrayList<>();
+		for (int i = 1; i <= 4; i++) {
+			// A fala no instante do corte: o bucket da hora cai em T0, dentro até da janela da
+			// última hora (o limite de trás é exclusivo).
+			publicacoes.add(new PapoPublicacaoReader.Publicacao("meetup com a galera", "autor_" + i, T0, null,
+					"pub_" + i));
+		}
+		for (int i = 1; i <= 2; i++) {
+			publicacoes.add(new PapoPublicacaoReader.Publicacao("meetup com a galera", "autor_velho_" + i,
+					T0.minus(Duration.ofHours(25)), null, "pub_velha_" + i));
+		}
+		fonte.publicacoes = publicacoes;
+
+		// O primeiro corte lê tudo; é o segundo (uma hora depois) que mede as duas vésperas com
+		// as falas já gravadas.
+		workerNo(T0.minus(Duration.ofHours(3))).corte();
+		workerNo(T0.plusSeconds(1)).corte();
+
+		PapoAssunto meetup = repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "meetup").orElseThrow();
+		assertThat(meetup.falasDia()).isEqualTo(4);
+		assertThat(meetup.falasDiaAnterior()).isEqualTo(2);
+		assertThat(meetup.falasUltimaHora()).isEqualTo(4);
+	}
+
+	@Test
+	void repeticaoNumaJanelaDoCrescimentoPassaPeloTetoPorAutor() {
+		// A mesma régua da potência vale para o crescimento: quem repete quatro vezes em 24 horas
+		// soma o teto (3), e não as quatro — a repetição não infla o percentual da tela.
+		List<PapoPublicacaoReader.Publicacao> publicacoes = new ArrayList<>();
+		for (int i = 1; i <= 4; i++) {
+			publicacoes.add(new PapoPublicacaoReader.Publicacao("meetup com a galera", "repetidor",
+					T0.minus(Duration.ofMinutes(30 * i)), null, "pub_" + i));
+		}
+		fonte.publicacoes = publicacoes;
+
+		workerNo(T0.plusSeconds(1)).corte();
+
+		assertThat(repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "meetup").orElseThrow().falasDia())
+			.isEqualTo(PapoAssunto.TETO_FALAS_POR_AUTOR);
 	}
 
 }
