@@ -95,6 +95,25 @@ public interface StorageCatalogRepository {
 	List<String> bucketsOf(String ownerUserId);
 
 	/**
+	 * O dono registrado do bucket, ou {@code null} se ninguém o registrou ainda.
+	 *
+	 * <p>O {@code CreateBucket} grava o criador em {@code network_storage_buckets.updated_by} — é o
+	 * que permite responder {@code 409 BucketAlreadyExists} antes de o bucket ter o primeiro objeto.
+	 * Para o bucket que nasceu do primeiro upload (sem linha de política), a resposta é o dono do
+	 * objeto mais antigo: a mesma régua do {@code bucketsOf}.</p>
+	 */
+	default java.util.Optional<String> ownerDoBucket(String bucket) {
+		// O dono é de quem já tem objeto vivo no bucket: a mesma régua do `bucketsOf`, que o
+		// CreateBucket usa quando o bucket nasce do primeiro upload.
+		return list(bucket, null, null, 1000).stream()
+			.filter(o -> !"DELETED".equals(o.state()))
+			.map(StorageObject::createdBy)
+			.filter(java.util.Objects::nonNull)
+			.findFirst();
+	}
+
+
+	/**
 	 * O bucket tem objeto no catálogo (vivo ou lápide) e <b>algum</b> é deste dono?
 	 *
 	 * <p>É a donagem do {@code DeleteBucket}: {@link #bucketsOf} conta só o vivo, e depois da última

@@ -1040,6 +1040,7 @@ certo → `409`; com outro → `412`). Mutações: sem a conferência; `If-None-
 asterisco; `If-Match` só olhando o asterisco — **3 de 3 derrubam** (a 2ª e a 3ª só depois de o teste
 distinguir o ETag certo do errado).
 
+
 ## 4.30 `x-amz-expected-bucket-owner` é conferido (ciclo 118)
 
 O cabeçalho era ignorado por todas as rotas. Ele existe para o caso em que duas contas têm bucket com
@@ -1089,6 +1090,32 @@ vazio antes; grava 30 dias e 7 dias não correntes e confere **as colunas do ban
 as mesmas regras; `<Transition>` → `400` sem mudar o prazo). Vermelho antes: `<ListBucketResult>`.
 Mutações: não gravar a política; não emitir `<Expiration>` na leitura; aceitar `<Transition>` —
 **3 de 3 derrubam**.
+
+## 4.32 `CreateBucket`, `HeadBucket` e `GetBucketLocation` (ciclo 121)
+
+As três chamadas que **todo cliente faz antes de subir o primeiro objeto** não existiam.
+
+| antes | agora |
+|---|---|
+| `PUT /{bucket}` caía no `PutObject` → `400 InvalidRequest "Informe o bucket e a chave"` | `200` e o bucket registrado para o dono |
+| `HEAD /{bucket}` sem handler | `200` para bucket do dono, `404` para o que ele não tem |
+| `GET /{bucket}?location` sem handler | `200` com `<LocationConstraint>enois-1</LocationConstraint>` |
+
+- Criar de novo o **mesmo** bucket do **mesmo** dono é `200` idempotente
+  (`BucketAlreadyOwnedByYou` é sucesso no S3).
+- Nome que já é de **outra conta** é `409 BucketAlreadyExists` e não muda o dono.
+- O Storage não tem tabela de donos de bucket: o `CreateBucket` grava o criador em
+  `network_storage_buckets.updated_by` (a linha de política, que já existia), e o dono sem
+  registro sai do primeiro objeto vivo (`StorageCatalogRepository.ownerDoBucket`, `default`).
+- `?location` aceita o criador registrado **antes** do primeiro objeto; depois disso vale
+  `requireBucketDoDono` como no resto do gateway.
+- O `HeadBucket` responde `404` (não `403`) ao bucket alheio: o S3 não revela existência.
+
+**Verificação:** `S3GatewayTests` **+2** (`create_head_e_location_do_bucket`: criar, recriar
+idempotente, `HEAD` do dono, `HEAD` alheio `404`, `?location`;
+`create_de_bucket_de_outra_conta_e_409`). Mutações: não registrar; aceitar sobrescrever o dono;
+`HEAD` aceitar qualquer bucket — **3 de 3 derrubam**.
+
 
 ## 4.37 `GetBucketAcl` e `GetBucketPolicy` dizem a verdade do gateway (ciclo 127)
 
