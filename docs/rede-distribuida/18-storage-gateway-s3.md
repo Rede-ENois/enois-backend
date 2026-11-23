@@ -1090,6 +1090,28 @@ as mesmas regras; `<Transition>` → `400` sem mudar o prazo). Vermelho antes: `
 Mutações: não gravar a política; não emitir `<Expiration>` na leitura; aceitar `<Transition>` —
 **3 de 3 derrubam**.
 
+## 4.37 `GetBucketAcl` e `GetBucketPolicy` dizem a verdade do gateway (ciclo 127)
+
+Os dois subrecursos de **leitura** do bucket não tinham rota e caíam no `ListObjects`:
+
+| antes | agora |
+|---|---|
+| `GET /{bucket}?acl` → `200 <ListBucketResult>` | `200 <AccessControlPolicy>` com `<Owner>` e um `<Grant>` `FULL_CONTROL` |
+| `GET /{bucket}?policy` → `200 <ListBucketResult>` | `404 NoSuchBucketPolicy` |
+| bucket de outra conta | `403 AccessDenied` nas duas |
+
+- O `<Owner><ID>` é a conta dona da credencial — o Storage tem **um** dono por bucket e nenhuma ACL
+  por usuário; expor isso é mais honesto que inventar `Grantee`.
+- `?policy` recusa por ausência declarada: o gateway não aceita política de recurso (quem manda é a
+  donagem). Devolver documento vazio/inventado faria o operador achar que há política.
+- `S3Xml` ganhou `attribute(prefix, namespace, name, value)`: o `<Grantee xsi:type="CanonicalUser">`
+  precisa do prefixo declarado no próprio elemento, senão o documento não é XML válido.
+
+**Verificação:** `S3GatewayTests` **+1** (`acl_e_policy_do_bucket`). Vermelho antes: `<ListBucketResult>`.
+Mutações **4/4** derrubam: não conferir donagem; `<Owner>` extra no fim; `?policy` responder `200`;
+`<DisplayName>` trocado por valor fixo. A 2ª **sobreviveu** à primeira versão da asserção (que só
+procurava `<Owner><ID>`), por isso ela passou a fixar ordem e fecho do documento.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:

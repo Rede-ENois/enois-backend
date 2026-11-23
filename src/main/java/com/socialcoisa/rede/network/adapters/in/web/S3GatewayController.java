@@ -254,6 +254,55 @@ class S3GatewayController {
 		return ResponseEntity.ok().build();
 	}
 
+	/**
+	 * GetBucketAcl: {@code GET /{bucket}?acl}.
+	 *
+	 * <p><b>Antes:</b> caía no {@code ListObjects} e respondia {@code 200 <ListBucketResult>}. O
+	 * {@code aws s3api get-bucket-acl} lia uma lista de arquivos como se fosse a ACL do bucket.</p>
+	 *
+	 * <p><b>Agora:</b> {@code <AccessControlPolicy>} com o dono da credencial e um grant
+	 * {@code FULL_CONTROL} para ele. É a verdade do Storage: um bucket tem <b>um</b> dono, sem ACL por
+	 * usuário — expor isso é mais honesto que inventar grantees.</p>
+	 */
+	@GetMapping(value = "/{bucket}", params = "acl")
+	ResponseEntity<String> getBucketAcl(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "LIST");
+		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
+		S3Xml xml = new S3Xml();
+		xml.root("AccessControlPolicy").open("Owner")
+			.element("ID", credential.ownerUserId())
+			.element("DisplayName", credential.ownerUserId())
+			.close("Owner")
+			.open("AccessControlList").open("Grant")
+			.open("Grantee").attribute("xsi", "http://www.w3.org/2001/XMLSchema-instance", "type", "CanonicalUser")
+			.element("ID", credential.ownerUserId())
+			.element("DisplayName", credential.ownerUserId())
+			.close("Grantee")
+			.element("Permission", "FULL_CONTROL")
+			.close("Grant").close("AccessControlList");
+		return xml(HttpStatus.OK).body(xml.toString());
+	}
+
+	/**
+	 * GetBucketPolicy: {@code GET /{bucket}?policy}.
+	 *
+	 * <p><b>Antes:</b> caía no {@code ListObjects} e respondia {@code 200 <ListBucketResult>} — o
+	 * {@code get-bucket-policy} lia objetos como política.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 404 NoSuchBucketPolicy}, o "não há política" do S3. O gateway não aceita
+	 * política de recurso: quem manda é a donagem (§4 do brief), e devolver um documento vazio ou
+	 * inventado seria pior que a ausência declarada.</p>
+	 */
+	@GetMapping(value = "/{bucket}", params = "policy")
+	ResponseEntity<Void> getBucketPolicy(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "LIST");
+		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
+		throw s3Error(404, "NoSuchBucketPolicy",
+			"Este bucket nao tem politica de recurso; o acesso e do dono da credencial.");
+	}
+
 	/** O inteiro de {@code <Bloco><Campo>N</Campo></Bloco>} no XML, ou {@code null} se ausente. */
 	private static Integer diasDoXml(String texto, String bloco, String campo) {
 		for (String trecho : trechosDe(texto, bloco)) {
