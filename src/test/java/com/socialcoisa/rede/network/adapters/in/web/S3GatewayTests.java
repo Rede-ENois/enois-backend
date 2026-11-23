@@ -2444,6 +2444,109 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		assertThat(do2.getContentAsString()).isEqualTo("abc");
 	}
 
+
+
+	/**
+	 * `DELETE` de objeto com subrecurso apaga a <b>chave</b>, não o subrecurso — e não é o que o
+	 * cliente pediu.
+	 *
+	 * <p><b>Antes:</b> o {@code DELETE} do objeto não olhava a consulta. {@code DELETE ?versionId=1},
+	 * {@code ?tagging} e {@code ?acl} respondiam {@code 204} e deixavam a chave <b>apagada</b>: o
+	 * cliente que pedia "apague a versão 1" ou "apague as tags" perdia o objeto inteiro. É o mesmo
+	 * defeito que o {@code DELETE} do <b>bucket</b> tinha com {@code ?cors} (§4.38) — e o {@code GET} e
+	 * o {@code HEAD} já recusavam esses nomes (§4.37, §4.41), então as metades discordavam.</p>
+	 *
+	 * <p><b>Agora:</b> os subrecursos que este gateway não endereça são {@code 501 NotImplemented} no
+	 * {@code DELETE} também, com o objeto intacto. {@code ?uploadId=} continua sendo o
+	 * {@code AbortMultipartUpload} (outra operação, não o {@code DeleteObject}) e segue respondendo o
+	 * que respondia.</p>
+	 */
+	@Test
+	void delete_de_objeto_com_subrecurso_nao_apaga_a_chave() throws Exception {
+		gravar("dsub/a.txt", "abc");
+
+		for (String sub : new String[] { "versionId=1", "tagging", "acl", "retention", "legal-hold",
+				"object-lock" }) {
+			MockHttpServletRequestBuilder d = MockMvcRequestBuilders.delete("/s3/" + bucket + "/dsub/a.txt?" + sub);
+			assinar(d, SECRET, shaVazio());
+			var resposta = mockMvc.perform(d).andReturn().getResponse();
+			assertThat(resposta.getStatus()).as("DELETE ?" + sub).isEqualTo(501);
+			assertThat(resposta.getContentAsString()).contains("<Code>NotImplemented</Code>");
+
+			MockHttpServletRequestBuilder g = get("/s3/" + bucket + "/dsub/a.txt");
+			assinar(g, SECRET, shaVazio());
+			var lido = mockMvc.perform(g).andReturn();
+			var objeto = lido.getRequest().isAsyncStarted()
+				? mockMvc.perform(asyncDispatch(lido)).andReturn().getResponse() : lido.getResponse();
+			assertThat(objeto.getStatus()).as("objeto apagado por DELETE ?" + sub).isEqualTo(200);
+			assertThat(objeto.getContentAsString()).isEqualTo("abc");
+		}
+
+		// O DELETE normal continua apagando: a recusa é do subrecurso, não da rota.
+		MockHttpServletRequestBuilder normal = MockMvcRequestBuilders.delete("/s3/" + bucket + "/dsub/a.txt");
+		assinar(normal, SECRET, shaVazio());
+		assertThat(mockMvc.perform(normal).andReturn().getResponse().getStatus()).isEqualTo(204);
+		MockHttpServletRequestBuilder depois = get("/s3/" + bucket + "/dsub/a.txt");
+		assinar(depois, SECRET, shaVazio());
+		var lidoDepois = mockMvc.perform(depois).andReturn();
+		var objetoDepois = lidoDepois.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lidoDepois)).andReturn().getResponse() : lidoDepois.getResponse();
+		assertThat(objetoDepois.getStatus()).isEqualTo(404);
+	}
+
+	/**
+	 * `max-keys` inválido é `400`, e `max-keys=0` é página vazia — mesmo com `delimiter`.
+	 *
+	 * <p><b>Antes:</b> {@code parsed <= 0} caía no padrão: {@code max-keys=0} e {@code max-keys=-1}
+	 * listavam 1000 objetos, e {@code max-keys=abc} também — o pedido errado virava sucesso. Com
+	 * {@code delimiter} era pior: a conta de "há mais" usava o tamanho pedido e com zero ela nunca
+	 * fechava, então {@code ?max-keys=0&delimiter=/} devolvia o bucket inteiro, {@code IsTruncated=false}
+	 * e todos os {@code CommonPrefixes}. O paginador que sonda com zero para conhecer o volume recebia
+	 * o conteúdo e concluía que o bucket tinha exatamente aquilo.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 0} devolve {@code KeyCount 0} sem {@code <Key>} nem
+	 * {@code <CommonPrefixes>}, com {@code IsTruncated=true} quando há conteúdo; {@code -1},
+	 * {@code 1.5} e {@code abc} são {@code 400 InvalidArgument}; acima de 1000 é cortado em 1000.</p>
+	 */
+	@Test
+	void max_keys_zero_e_pagina_vazia_e_invalido_e_400() throws Exception {
+		gravar("mk/a/1.txt", "1");
+		gravar("mk/b/2.txt", "2");
+		gravar("mk/raiz.txt", "r");
+		// Dois grupos bastam para o zero com `delimiter` sair errado no caminho antigo (§4.42).
+		for (String g : new String[] { "c", "d" }) {
+			gravar("mk/" + g + "/" + g + ".txt", g);
+		}
+
+		for (String q : new String[] { "delimiter=/&", "" }) {
+			MockHttpServletRequestBuilder zero = get("/s3/" + bucket + "?list-type=2&prefix=mk/&" + q + "max-keys=0");
+			assinar(zero, SECRET, shaVazio());
+			String corpo = mockMvc.perform(zero).andReturn().getResponse().getContentAsString();
+			// `KeyCount 0` sozinho não discrimina: o laço também para em zero. O que separa a página
+			// vazia do caminho antigo é o `IsTruncated`: o caminho antigo terminava com `false`, e o
+			// cliente achava que o prefixo tinha acabado.
+			assertThat(corpo).as("max-keys=0 com " + q).contains("<KeyCount>0</KeyCount>")
+				.contains("<IsTruncated>true</IsTruncated>")
+				.doesNotContain("<Key>")
+				.doesNotContain("<CommonPrefixes>");
+		}
+
+		for (String invalido : new String[] { "-1", "1.5", "abc" }) {
+			MockHttpServletRequestBuilder r = get("/s3/" + bucket + "?list-type=2&prefix=mk/&max-keys=" + invalido);
+			assinar(r, SECRET, shaVazio());
+			var resposta = mockMvc.perform(r).andReturn().getResponse();
+			assertThat(resposta.getStatus()).as("max-keys=" + invalido).isEqualTo(400);
+			assertThat(resposta.getContentAsString()).contains("<Code>InvalidArgument</Code>")
+				.doesNotContain("<Key>");
+		}
+
+		// Acima do teto é cortado em 1000, não recusado.
+		MockHttpServletRequestBuilder grande = get("/s3/" + bucket + "?list-type=2&prefix=mk/&max-keys=5000");
+		assinar(grande, SECRET, shaVazio());
+		String teto = mockMvc.perform(grande).andReturn().getResponse().getContentAsString();
+		assertThat(teto).contains("<MaxKeys>1000</MaxKeys>").contains("<Key>mk/raiz.txt</Key>");
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {

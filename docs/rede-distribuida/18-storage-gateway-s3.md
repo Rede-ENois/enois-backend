@@ -1350,6 +1350,62 @@ errado → `400 BadDigest` e o conteúdo **não** aparece no GET; base64 inváli
 anterior. Vermelho antes: `200`. Mutações **2/2**: sem a conferência do digest; sem a validação de 16
 bytes.
 
+## 4.42 `max-keys` inválido é `400`, e `max-keys=0` é página vazia (ciclo 132; `delimiter` no 135)
+
+`parseMaxKeys` tratava todo valor `<= 0` como "não veio":
+
+```
+GET /s3/<b>?max-keys=0    → 200 com 1000 objetos
+GET /s3/<b>?max-keys=-1   → 200 com 1000 objetos
+GET /s3/<b>?max-keys=abc  → 200 com 1000 objetos
+```
+
+O `S3` distingue os três: `0` é uma página vazia legítima (o cliente pede "só o total"), negativo e
+não numérico são erro do pedido. Com `delimiter` era pior: a conta de "há mais" usava o tamanho
+pedido e com zero nunca fechava — `?max-keys=0&delimiter=/` devolvia o bucket inteiro, com
+`IsTruncated=false` e todos os `CommonPrefixes`.
+
+### Agora
+
+| `max-keys` | antes | agora |
+|---|---|---|
+| ausente | `1000` | `1000` |
+| `0` | `1000` objetos | página vazia: `KeyCount 0`, sem `<Key>` nem `<CommonPrefixes>` |
+| `-1` / `1.5` / `abc` | `1000` objetos | `400 InvalidArgument` |
+| `> 1000` | `1000` | `1000` (corte, como no S3) |
+
+- Com `max-keys=0` sem `delimiter` a página não vem truncada: não há "próxima" a pedir, o cliente
+  queria só saber que lista vazia foi pedida.
+- Com `delimiter` junto do `0`, a resposta tem `IsTruncated=true` (há conteúdo depois) e **nenhum
+  marcador**: numa página vazia o último emitido é nulo, e o `S3Xml` só escreve o
+  `NextMarker`/`NextContinuationToken` quando há um. O cliente que pedir a próxima a partir do zero
+  recebe de novo a página vazia — declarado aqui para não parecer paginação completa.
+- O corpo do erro é o XML do S3 (`<Code>InvalidArgument</Code>`), não o JSON do Control Plane.
+
+**Verificação:** `S3GatewayTests` **+1** (`max_keys_zero_e_pagina_vazia_e_invalido_e_400`): `0` sem
+`delimiter` → `KeyCount 0`, `IsTruncated=false`, sem `<Key>`; `0` com `delimiter` → o mesmo e
+`IsTruncated=true`; `-1`, `1.5` e `abc` → `400 InvalidArgument` sem conteúdo; `5000` →
+`<MaxKeys>1000</MaxKeys>` e o objeto presente. Vermelho antes: `0` e `abc` listavam. Mutações
+**3/3** com o `parseMaxKeys` do ciclo 132 já na `qa`: `0` voltando ao padrão; sem a recusa de
+negativo; `1.5`/`abc` voltando ao padrão. A conta de `IsTruncated` com `delimiter` ficou **como
+estava**: a tentativa de mudá-la para "teto de linhas cheio" não é discriminada por nenhum cenário
+(o laço já marca truncado ao encontrar a entrada além do teto), então não virou código.
+
+## 4.45 `DELETE` de objeto com subrecurso não apaga a chave (ciclo 135)
+
+O `DELETE` do objeto não olhava a consulta:
+
+```
+DELETE /s3/<b>/a.txt?versionId=1   → 204   e a chave some
+DELETE /s3/<b>/a.txt?tagging       → 204   e a chave some
+DELETE /s3/<b>/a.txt?acl           → 204   e a chave some
+```
+
+Quem pedia "apague a versão 1" ou "apague as tags" perdia o objeto inteiro, com `204`. É o mesmo
+defeito que o `DELETE` do **bucket** tinha com `?cors` (§4.38) — e o `GET`/`HEAD` já recusavam esses
+nomes (§4.37/§4.41), então as metades discordavam.
+
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
