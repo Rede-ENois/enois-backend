@@ -132,18 +132,34 @@ public class PapoAssunto {
 	/** A potência medida 24 horas antes do corte — a trajetória de verdade, não a fórmula. */
 	private final double potenciaAntes;
 
+	/**
+	 * O volume real das últimas 24 horas (com o teto por autor) e o da véspera. É a matéria do
+	 * CRESCIMENTO EXIBIDO — proporção de volume, e não de potência (a potência soma gente e
+	 * decaimento; percentual sobre ela inventava número, o "+127%" da tela).
+	 */
+	private final long falasDia;
+
+	private final long falasDiaAnterior;
+
 	/** A linha foi gravada antes da régua nova e ainda não passou por um corte? */
 	private final boolean legado;
 
 	public PapoAssunto(String subject, long falasPost, long falasComentario, long pessoas, long falasUltimaHora,
 			Instant ultimaFala, long publicacoes, long janelaPublicacoes, double potencia, double potenciaAntes) {
 		this(subject, falasPost, falasComentario, pessoas, falasUltimaHora, ultimaFala, publicacoes, janelaPublicacoes,
-				potencia, potenciaAntes, false);
+				potencia, potenciaAntes, 0, 0, false);
+	}
+
+	public PapoAssunto(String subject, long falasPost, long falasComentario, long pessoas, long falasUltimaHora,
+			Instant ultimaFala, long publicacoes, long janelaPublicacoes, double potencia, double potenciaAntes,
+			long falasDia, long falasDiaAnterior) {
+		this(subject, falasPost, falasComentario, pessoas, falasUltimaHora, ultimaFala, publicacoes, janelaPublicacoes,
+				potencia, potenciaAntes, falasDia, falasDiaAnterior, false);
 	}
 
 	private PapoAssunto(String subject, long falasPost, long falasComentario, long pessoas, long falasUltimaHora,
 			Instant ultimaFala, long publicacoes, long janelaPublicacoes, double potencia, double potenciaAntes,
-			boolean legado) {
+			long falasDia, long falasDiaAnterior, boolean legado) {
 		this.subject = subject;
 		this.falasPost = falasPost;
 		this.falasComentario = falasComentario;
@@ -154,6 +170,8 @@ public class PapoAssunto {
 		this.janelaPublicacoes = janelaPublicacoes;
 		this.potencia = potencia;
 		this.potenciaAntes = potenciaAntes;
+		this.falasDia = falasDia;
+		this.falasDiaAnterior = falasDiaAnterior;
 		this.legado = legado;
 	}
 
@@ -197,6 +215,16 @@ public class PapoAssunto {
 	/** A potência de 24 horas atrás, medida nas falas que existiam então. */
 	public double potenciaAntes() {
 		return potenciaAntes;
+	}
+
+	/** As falas das últimas 24 horas, com o teto por autor — o numerador do crescimento. */
+	public long falasDia() {
+		return falasDia;
+	}
+
+	/** As falas da véspera (24 horas antes das últimas 24), com o teto por autor. */
+	public long falasDiaAnterior() {
+		return falasDiaAnterior;
 	}
 
 	/** A linha gravada antes da régua nova, que ainda não passou por um corte. */
@@ -294,7 +322,8 @@ public class PapoAssunto {
 		return "{\"falasPost\":" + falasPost + ",\"falasComentario\":" + falasComentario + ",\"pessoas\":" + pessoas
 				+ ",\"falasUltimaHora\":" + falasUltimaHora + ",\"ultimaFalaEpoch\":" + ultimaFala.getEpochSecond()
 				+ ",\"publicacoes\":" + publicacoes + ",\"janelaPublicacoes\":" + janelaPublicacoes
-				+ ",\"potencia\":" + formatar(potencia) + ",\"potenciaAntes\":" + formatar(potenciaAntes) + "}";
+				+ ",\"potencia\":" + formatar(potencia) + ",\"potenciaAntes\":" + formatar(potenciaAntes)
+				+ ",\"falasDia\":" + falasDia + ",\"falasDiaAnterior\":" + falasDiaAnterior + "}";
 	}
 
 	/**
@@ -317,7 +346,7 @@ public class PapoAssunto {
 		return new PapoAssunto(subject, numero(campos, "falasPost"), numero(campos, "falasComentario"),
 				numero(campos, "pessoas"), numero(campos, "falasUltimaHora"), ultimaFala, numero(campos, "publicacoes"),
 				numero(campos, "janelaPublicacoes"), decimal(campos, "potencia"), decimal(campos, "potenciaAntes"),
-				legado);
+				numero(campos, "falasDia"), numero(campos, "falasDiaAnterior"), legado);
 	}
 
 	private static long numero(Map<String, String> campos, String chave) {

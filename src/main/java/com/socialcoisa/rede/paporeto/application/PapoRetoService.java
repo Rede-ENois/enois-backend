@@ -42,13 +42,16 @@ import com.socialcoisa.rede.shared.blocks.BlockedUsersReader;
 public class PapoRetoService {
 
 	/**
-	 * O assunto pronto para a tela: subject, status de trajetória, pontuação e números.
-	 * `amostragemMenor` diz que o assunto passou pelo chão da base pequena — a lista existe e a
-	 * amostra vai dita na tela, com o número de pessoas. `janelaPublicacoes` é o tamanho da base
-	 * (publicações distintas do escopo na janela): é ele que a tela mostra como amostra.
+	/**
+	 * O assunto pronto para a tela: subject, status de trajetória, pontuação e números. O
+	 * crescimento é nulo quando o assunto não tem véspera comparável (novo em alta) — a tela
+	 * diz "novo", não inventa percentual. `amostragemMenor` diz que o assunto passou pelo chão da
+	 * base pequena — a lista existe e a amostra vai dita na tela, com o número de pessoas.
+	 * `janelaPublicacoes` é o tamanho da base (publicações distintas do escopo na janela): é ele
+	 * que a tela mostra como amostra.
 	 */
 	public record SubjectView(String subject, String status, double pontuacao, long falasPost,
-			long falasComentario, long pessoas, long falasUltimaHora, double crescimento, boolean amostragemMenor,
+			long falasComentario, long pessoas, long falasUltimaHora, Double crescimento, boolean amostragemMenor,
 			long janelaPublicacoes) {
 	}
 
@@ -160,7 +163,7 @@ public class PapoRetoService {
 			ranking.add(new SubjectView(classificado.assunto().subject(), status.name(), classificado.pontuacao(),
 					classificado.assunto().falasPost(), classificado.assunto().falasComentario(),
 					classificado.assunto().pessoas(), classificado.assunto().falasUltimaHora(),
-					crescimento(classificado.potencia(), classificado.potenciaAntes()),
+					crescimento(classificado.assunto().falasDia(), classificado.assunto().falasDiaAnterior()),
 					classificado.assunto().amostragemMenor(), classificado.assunto().janelaPublicacoes()));
 		}
 		ranking.sort((a, b) -> Double.compare(b.pontuacao(), a.pontuacao()) != 0
@@ -252,12 +255,16 @@ public class PapoRetoService {
 		return repository.falasTotais(agora.minus(Duration.ofDays(7)), agora);
 	}
 
-	/** O crescimento relativo: quanto a potência subiu desde a véspera (0 quando não subiu). */
-	private double crescimento(double agora, double antes) {
-		if (antes <= 0) {
-			return agora > 0 ? 100.0 : 0.0;
+	/**
+	 * O crescimento exibido é proporção de VOLUME real: as falas das últimas 24 horas contra as
+	 * da véspera (as duas com teto por autor, medidas no corte). Sem véspera comparável, é
+	 * nulo — o assunto é novo em alta, e não "+100%" inventado. Queda exibe estável (0).
+	 */
+	private Double crescimento(long dia, long diaAnterior) {
+		if (diaAnterior > 0) {
+			return Math.max(0.0, ((dia - diaAnterior) / (double) diaAnterior) * 100.0);
 		}
-		return Math.max(0, ((agora - antes) / antes) * 100.0);
+		return dia > 0 ? null : 0.0;
 	}
 
 	/**

@@ -25,7 +25,9 @@ import org.springframework.stereotype.Component;
  *   de verbo de ligação, "muito", "tô") e tokens pequenos (menos de 3 letras) não viram assunto
  *   — é o "que", "de", "pra" saindo; riso ("kkkk", "hahaha"), número puro ("2026") e letra
  *   repetida ("assssss") também não; a lista fecha as falas da rede que não nomeiam conversa
- *   nenhuma ("gente", "tipo", "coisa", "sei", "tenho") — foi o bug do "gente" em alta;
+	 *   nenhuma ("gente", "tipo", "coisa", "sei", "tenho") — foi o bug do "gente" em alta; e
+	 *   verbo no gerúndio ("fazendo", "dando", "trabalhando") é ação em curso, não assunto —
+	 *   a terminação fixa da língua decide, sem lista de conjugações;
  * - o extrator usa UNIGRAMAS e EXPRESSÕES com CONTEXTO: o par é de palavras vizinhas
  *   ("inteligencia artificial", "carro quebrou") ou de palavras separadas por um conector —
  *   preposição de tema, posse ou lugar ("mercado de trabalho", "meetup na sexta", "aula de
@@ -130,6 +132,14 @@ public class PapoAssuntoExtractor {
 	private static final Pattern RUISO = Pattern.compile(
 			"(?u)^(?:k{2,}|(?:ha){2,}h?|(?:rs){2,}|(?:hu){2,}h?|(?:kkj)+k?|(.)\\1{2,})$");
 
+	/**
+	 * Verbo no gerúndio: a terminação é fixa na língua ("fazendo", "dando", "trabalhando",
+	 * "crescendo"), então a regra é estrutural e cobre a conjugação inteira sem lista — foi o
+	 * bug do "fazendo" em alta. A palavra pode colar num assunto real ("crescendo a rede" perde
+	 * o verbo e fica com "rede"); verbo solto não nomeia conversa nenhuma.
+	 */
+	private static final Pattern GERUNDIO = Pattern.compile("(?u)^(?:.+)?(?:ando|endo|indo)$");
+
 	/** A fala extraída: a expressão dobrada e a fonte de onde ela veio (POST ou COMMENT). */
 	public record Fala(String expressao, String fonte) {
 	}
@@ -177,6 +187,9 @@ public class PapoAssuntoExtractor {
 				"negocios", "bagulho", "bora", "sla", "pdc", "pdp", "vlw", "flw", "obg", "blz", "eita", "vish",
 				"poxa", "caramba", "putz", "puts", "opa", "rsrs", "risos", "hahaha", "realmente", "basicamente",
 				"literalmente", "sinceramente", "certamente", "praticamente",
+				// Palavra genérica demais para nomear assunto (foi o bug do "cara" e do "dar"
+				// em alta na produção).
+				"cara", "dar", "pessoa", "pessoas", "vez", "vezes",
 				// O comentário da publicação e o tempo relativo: "promocao do meu curso de ingles"
 				// fala de "curso de ingles" (o assunto) e de "promocao" (o tom) — e "mutirao HOJE"
 				// fala do mutirao. Fica na lista a dedo porque o par descolou a palavra do contexto
@@ -397,6 +410,9 @@ public class PapoAssuntoExtractor {
 			return false;
 		}
 		if (PALAVRAS_VAZIAS.contains(palavra)) {
+			return false;
+		}
+		if (GERUNDIO.matcher(palavra).matches()) {
 			return false;
 		}
 		if (palavra.chars().allMatch(Character::isDigit)) {
