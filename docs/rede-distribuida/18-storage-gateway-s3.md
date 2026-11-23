@@ -858,8 +858,11 @@ gravação (é a gravação que dá dono ao bucket) e, quando recusa, desfaz. A 
 ### Agora
 
 - A devolução usa o **retrato da linha antes do `saveClientHeaders`**: estado, conteúdo, digest, tipo,
-  metadado, `Cache-Control`, `Content-Disposition` e prazo. Um objeto que tinha corpo volta a `STORED`
-  e é servido de novo com o `ETag` de antes; uma linha sem corpo volta a `PENDING`. A linha é apagada
+  metadado, `Cache-Control`, `Content-Disposition` e prazo, **e os bytes**: o `finishUpload` guarda o
+  corpo que estava na chave antes de substituí-lo, e a devolução o move de volta ao lugar. Sem isso, o
+  `HEAD` reportava o retrato do dono (12 bytes, `ETag` antigo) e o `GET` servia o corpo da gravação
+  recusada — o objeto voltava pela metade. O backup só é descartado quando a resposta é `200`. Um
+  objeto que tinha corpo volta a `STORED`; uma linha sem corpo volta a `PENDING`. A linha é apagada
   só quando não tinha corpo — a chave nova de outra conta, que não deve ficar (é ela que daria o
   bucket ao intruso).
 - A lápide é uma **tomada de posse da chave**: escrever numa chave apagada por outra conta é
@@ -871,8 +874,10 @@ gravação (é a gravação que dá dono ao bucket) e, quando recusa, desfaz. A 
 - `put_recusado_por_donagem_devolve_o_objeto_que_ja_estava_na_chave` — linha `STORED` do dono
   estacionada como `PENDING`, outra conta no bucket, o dono regrava: `403 AccessDenied` e o `HEAD`
   devolve `200` com o tamanho, o `ETag`, o tipo, o metadado, o `Cache-Control` e o nome de anexo de
-  antes. Mutações que a derrubam (todas verificadas): estado devolvido sempre `PENDING`; corpo zerado
-  na devolução (`409 ObjectAlreadyStored` no reenvio); cabeçalhos de antes não devolvidos.
+  antes **e o `GET` devolve exatamente `"meu conteudo"`** — o `HEAD` prova os cabeçalhos, o `GET` prova
+  os bytes. Mutações que a derrubam (todas verificadas): estado devolvido sempre `PENDING`; corpo
+  zerado na devolução (`409 ObjectAlreadyStored` no reenvio); cabeçalhos de antes não devolvidos; sem a
+  guarda do corpo, o `GET` devolve `"conteudo novo"` (o da gravação recusada).
 - `chave_apagada_por_um_dono_nao_aceita_escrita_de_outra_conta` — o dono do bucket apaga a chave,
   outra conta grava a própria chave nele e tenta a chave apagada: `403 AccessDenied`, e a lápide fica
   com o autor, o digest, o tipo e o metadado de antes, sem o nome de anexo de quem tentou. Mutação que
