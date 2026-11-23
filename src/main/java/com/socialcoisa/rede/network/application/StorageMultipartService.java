@@ -394,9 +394,22 @@ public class StorageMultipartService {
 	 * Os dois têm de bater.</p>
 	 */
 	public Completed complete(Upload upload, List<Integer> pedidas) {
+		return complete(upload, pedidas, java.util.Map.of());
+	}
+
+	/**
+	 * A conclusão com o ETag que o cliente declarou para cada parte.
+	 *
+	 * <p>O S3 exige que o {@code <ETag>} de cada {@code <Part>} seja o da parte enviada; um ETag
+	 * diferente é {@code InvalidPart} e o upload continua aberto. Antes o ETag era <b>descartado</b> e
+	 * a conclusão respondia {@code 200} com as partes que estavam no disco — se o cliente trocou os
+	 * valores no XML, ele recebia um objeto que não conferiu, em silêncio. Sem ETag declarado para uma
+	 * parte, o número basta: é o que mandam os clientes que não conferem.</p>
+	 */
+	public Completed complete(Upload upload, List<Integer> pedidas, java.util.Map<Integer, String> etags) {
 		long inicio = System.nanoTime();
 		try {
-			Completed pronto = doComplete(upload, pedidas);
+			Completed pronto = doComplete(upload, pedidas, etags);
 			// A gravação do objeto já contou `PUT` no catálogo; contar aqui de novo faria todo upload
 			// grande valer dois. A conclusão conta só quando falha — é ela que o painel precisa ver.
 			return pronto;
@@ -407,7 +420,7 @@ public class StorageMultipartService {
 		}
 	}
 
-	private Completed doComplete(Upload upload, List<Integer> pedidas) {
+	private Completed doComplete(Upload upload, List<Integer> pedidas, java.util.Map<Integer, String> etags) {
 		Instant now = clock.instant();
 		if (now.isAfter(upload.expiresAt())) {
 			discard(upload.uploadId());
@@ -435,6 +448,14 @@ public class StorageMultipartService {
 			if (part == null) {
 				throw new ApiException(400, "InvalidPart",
 					"A parte " + pedidas.get(i) + " nao chegou; reenvie-a antes de concluir.");
+			}
+			String etagDeclarado = etags.get(pedidas.get(i));
+			if (etagDeclarado != null && !etagDeclarado.isEmpty() && !etagDeclarado.equals(part.sha256())) {
+				// O ETag da parte é o digest do que ela tem; diferente é o cliente conferindo outro
+				// conteúdo. Montar assim gravaria bytes que ele não aprovou.
+				throw new ApiException(400, "InvalidPart",
+					"O ETag declarado para a parte " + part.number() + " nao e o da parte que chegou;"
+						+ " reenvie-a ou corrija a lista.");
 			}
 			boolean ultima = i == pedidas.size() - 1;
 			if (!ultima && part.bytes() < MIN_PART_BYTES) {

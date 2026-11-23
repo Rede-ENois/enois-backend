@@ -572,6 +572,51 @@ class S3MultipartTests {
 		assertThat(cheia).as("pagina cheia e ultima nao tem marcador").doesNotContain("<NextPartNumberMarker>");
 	}
 
+
+	/**
+	 * ETag de parte que não é o do que chegou: `InvalidPart`, e nada é gravado.
+	 *
+	 * <p><b>Antes:</b> o `partesDoXml` só lia `<PartNumber>` e <b>descartava o `<ETag>`</b>. O S3
+	 * exige que o ETag de cada `<Part>` seja o da parte enviada; um cliente que montou o XML com o ETag
+	 * de outra parte (ou de um reenvio que ele não fez) recebia `200` e um objeto montado com bytes que
+	 * ele não conferiu. Numa conclusão em que o cliente acha que está estendendo o arquivo, isso
+	 * grava o conteúdo errado em silêncio — o pior modo de falha de um upload.</p>
+	 *
+	 * <p><b>Agora:</b> o par `(número, ETag)` é lido; o ETag é o digest entre aspas e é comparado com
+	 * o da parte gravada. Diferente → `400 InvalidPart`, e o upload continua aberto para o cliente
+	 * reenviar. Sem ETag no XML, o número basta — é o que os clientes que não conferem mandam.</p>
+	 */
+	@Test
+	void conclusao_com_etag_de_parte_que_nao_bate_e_recusada_sem_gravar() throws Exception {
+		String chave = "etag/%s.bin".formatted(sufixo());
+		String uploadId = abrir(chave);
+		enviarParte(chave, uploadId, 1, bytes('a', 6 * 1024 * 1024));
+		enviarParte(chave, uploadId, 2, bytes('b', 1));
+
+		// O ETag declarado é o da parte 2, e a lista nomeia a parte 1: o cliente trocou os valores.
+		String xml = "<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>\""
+			+ shaOfBytes(bytes('b', 1)) + "\"</ETag></Part><Part><PartNumber>2</PartNumber><ETag>\""
+			+ shaOfBytes(bytes('b', 1)) + "\"</ETag></Part></CompleteMultipartUpload>";
+		String sha = shaOfBytes(xml.getBytes(StandardCharsets.UTF_8));
+		var recusa = mockMvc.perform(assinar(post("/s3/" + bucket + "/" + chave).param("uploadId", uploadId)
+			.contentType("application/xml").content(xml), sha)).andReturn();
+		assertThat(recusa.getResponse().getStatus()).as(recusa.getResponse().getContentAsString())
+			.isEqualTo(400);
+		assertThat(recusa.getResponse().getContentAsString()).contains("InvalidPart");
+		assertThat(jdbc.queryForObject("select count(*) from network_storage_objects where bucket = ?"
+			+ " and object_key = ?", Integer.class, bucket, chave)).as("nada foi gravado").isZero();
+
+		// Com os ETags certos — o que o SDK manda — a conclusão passa.
+		String certo = "<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>\""
+			+ shaOfBytes(bytes('a', 6 * 1024 * 1024)) + "\"</ETag></Part><Part><PartNumber>2</PartNumber><ETag>\""
+			+ shaOfBytes(bytes('b', 1)) + "\"</ETag></Part></CompleteMultipartUpload>";
+		var ok = mockMvc.perform(assinar(post("/s3/" + bucket + "/" + chave).param("uploadId", uploadId)
+			.contentType("application/xml").content(certo), shaOfBytes(certo.getBytes(StandardCharsets.UTF_8))))
+			.andReturn();
+		assertThat(ok.getResponse().getStatus()).as(ok.getResponse().getContentAsString()).isEqualTo(200);
+		assertThat(jdbc.queryForObject("select bytes from network_storage_objects where bucket = ?"
+			+ " and object_key = ?", Long.class, bucket, chave)).isEqualTo(6L * 1024 * 1024 + 1);
+	}
 	private String listarPartes(String chave, String uploadId, String query) throws Exception {
 		var resposta = mockMvc.perform(assinar(get("/s3/" + bucket + "/" + chave + "?uploadId=" + uploadId + query),
 			shaVazio())).andReturn();

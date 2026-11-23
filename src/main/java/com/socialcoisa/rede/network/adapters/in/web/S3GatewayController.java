@@ -931,8 +931,10 @@ class S3GatewayController {
 		S3Credential credential = authenticate(request, "PUT");
 		requireBucket(credential, bucket);
 		var upload = uploadDaChave(credential, bucket, request);
-		java.util.List<Integer> pedidas = partesDoXml(body(request));
-		var concluido = multipart.complete(upload, pedidas);
+		java.util.List<Parte> pedidas = partesDoXml(body(request));
+		var concluido = multipart.complete(upload, pedidas.stream().map(Parte::numero).toList(),
+			pedidas.stream().collect(java.util.stream.Collectors.toMap(Parte::numero,
+				p -> p.etag() == null ? "" : p.etag(), (a, b) -> a)));
 		S3Xml xml = new S3Xml();
 		xml.root("CompleteMultipartUploadResult").element("Location", bucket + "/" + concluido.key())
 			.element("Bucket", bucket).element("Key", concluido.key()).element("ETag", "\"" + concluido.etag() + "\"");
@@ -1008,19 +1010,32 @@ class S3GatewayController {
 		return xml(HttpStatus.OK).body(xml.toString());
 	}
 
-	/** A lista de {@code <PartNumber>} do CompleteMultipartUpload, na ordem em que o cliente mandou. */
-	private static java.util.List<Integer> partesDoXml(java.io.InputStream body) throws java.io.IOException {
+	/** Uma {@code <Part>} do CompleteMultipartUpload: o número e o ETag que o cliente conferiu. */
+	record Parte(int numero, String etag) {
+	}
+
+	/**
+	 * A lista de partes do CompleteMultipartUpload, na ordem em que o cliente mandou.
+	 *
+	 * <p>O {@code <ETag>} de cada {@code <Part>} é lido junto do número. O S3 exige que ele seja o da
+	 * parte que chegou; antes era descartado, e um cliente que montava o XML com o ETag de outra parte
+	 * recebia {@code 200} com bytes que ele não conferiu. Sem {@code <ETag>}, o número basta — é o que
+	 * mandam os clientes que não conferem.</p>
+	 */
+	private static java.util.List<Parte> partesDoXml(java.io.InputStream body) throws java.io.IOException {
 		String texto = new String(body.readAllBytes(), StandardCharsets.UTF_8);
-		java.util.List<Integer> numeros = new java.util.ArrayList<>();
-		java.util.regex.Matcher m = java.util.regex.Pattern.compile("<PartNumber>\\s*(\\d+)\\s*</PartNumber>")
-			.matcher(texto);
+		java.util.List<Parte> partes = new java.util.ArrayList<>();
+		java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+			"<Part>\\s*<PartNumber>\\s*(\\d+)\\s*</PartNumber>(?:\\s*<ETag>\\s*([^<]*?)\\s*</ETag>)?",
+			java.util.regex.Pattern.DOTALL).matcher(texto);
 		while (m.find()) {
-			numeros.add(Integer.parseInt(m.group(1)));
+			String etag = m.group(2) == null ? null : m.group(2).replace("\"", "").trim();
+			partes.add(new Parte(Integer.parseInt(m.group(1)), etag));
 		}
-		if (numeros.isEmpty()) {
+		if (partes.isEmpty()) {
 			throw s3Error(400, "MalformedXML", "CompleteMultipartUpload sem partes.");
 		}
-		return numeros;
+		return partes;
 	}
 
 	/**
