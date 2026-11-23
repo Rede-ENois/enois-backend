@@ -229,6 +229,37 @@ class S3GatewayController {
 	}
 
 	/**
+	 * ListMultipartUploads: {@code GET /{bucket}?uploads} — o que ficou aberto no bucket.
+	 *
+	 * <p><b>Antes:</b> a rota caía no {@code ListObjects}, que ignora o subrecurso e responde um
+	 * {@code <ListBucketResult>} com os objetos. O cliente que pede os multiparts recebia uma lista de
+	 * objetos <b>silenciosamente errada</b> — `aws s3api list-multipart-uploads` e o `rclone` que
+	 * procuram upload órfão não achavam nada, e as partes abandonadas seguiam ocupando disco até a
+	 * varredura de lixo.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 200} com {@code <Upload><Key>…</Key><UploadId>…</UploadId><Initiated>…}
+	 * por upload em aberto <b>do dono da credencial</b>; {@code prefix} filtra. Upload de outra conta
+	 * não aparece — é omitido, não vira erro.</p>
+	 */
+	@GetMapping(value = "/{bucket}", params = "uploads")
+	ResponseEntity<String> listMultipartUploads(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "LIST");
+		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
+		S3Xml xml = new S3Xml();
+		xml.root("ListMultipartUploadsResult").element("Bucket", bucket)
+			.element("IsTruncated", "false");
+		for (var upload : multipart.abertos(bucket, credential.ownerUserId(), query(request).get("prefix"))) {
+			xml.open("Upload")
+				.element("Key", upload.key())
+				.element("UploadId", upload.uploadId())
+				.element("Initiated", S3_INSTANT.format(upload.createdAt()))
+				.close("Upload");
+		}
+		return xml(HttpStatus.OK).body(xml.toString());
+	}
+
+	/**
 	 * PutBucketLifecycleConfiguration: {@code PUT /{bucket}?lifecycle}.
 	 *
 	 * <p><b>Antes:</b> caía no {@code PutObject} e respondia

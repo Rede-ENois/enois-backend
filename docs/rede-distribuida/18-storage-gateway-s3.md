@@ -1066,6 +1066,28 @@ assinou.
 `PUT` e listagem com o dono certo → `200`, objeto legível). Mutações: sem a guarda; aceitar qualquer
 valor — **2 de 2 derrubam**.
 
+## 4.33 `ListMultipartUploads`: `?uploads` mostra o que ficou aberto (ciclo 122)
+
+`GET /{bucket}?uploads` caía no `ListObjects`, que ignora o subrecurso e responde um
+`<ListBucketResult>` com os objetos — o cliente que pede os multiparts recebia uma lista
+**silenciosamente errada**, e as partes órfãs (processo que morreu, rede que caiu) seguiam ocupando
+disco até a varredura de lixo, sem rota para o operador vê-las.
+
+### Agora
+
+| pedido | resposta |
+|---|---|
+| `GET /{bucket}?uploads` | `200` `<ListMultipartUploadsResult>` com `<Upload><Key/><UploadId/><Initiated/>` por upload aberto **do dono** |
+| `?uploads&prefix=p` | só as chaves que começam com `p` (`%` e `_` escapados no SQL) |
+| upload de outra conta | omitido (não vira erro) |
+
+`StorageMultipartService.abertos(bucket, ownerUserId, prefix)`; ordem `created_at asc, upload_id asc`.
+
+**Verificação:** `S3GatewayTests` **+1** (`listar_uploads_abertos_do_dono`: abre um upload, ele
+aparece com chave e id, `prefix` que não casa não o traz). Vermelho antes: `ListBucketResult` com
+os objetos, sem o `<UploadId>` — o cliente não via upload nenhum. Mutações: tirar o filtro por dono;
+ignorar o `prefix` — **2 de 2 derrubam**.
+
 ## 4.36 `?lifecycle` fala a mesma política que o varredor (ciclo 125)
 
 O Storage **expira objeto de verdade** pelo `expire_after_days` da política (o varredor apaga) e
