@@ -1001,6 +1001,40 @@ texto que o `canonicalUri` do verificador produz ao recodificar o caminho recebi
 emite para `fotos/meu arquivo ção.jpg`, confere `%20`/`%C3%A7` na URL e abre → `200` com o corpo).
 Mutação: voltar a assinar a chave crua — **derruba**.
 
+## 4.29 O PUT avalia `If-Match` e `If-None-Match` (ciclo 117)
+
+O PUT ignorava as duas condições. O cliente que pedia `If-None-Match: *` — o jeito do S3 de
+**criar sem sobrescrever** (`aws s3api put-object --if-none-match '*'`, `.ifNoneMatch("*")` do SDK) —
+recebia, numa chave já ocupada,
+
+```
+PUT /s3/<bucket>/<key>   If-None-Match: *
+409 ObjectAlreadyStored
+```
+
+`409` é a confissão de que o gateway não sobrescreve; a resposta do pedido condicional é
+`412 PreconditionFailed`. Um fluxo com duas fontes escrevendo o mesmo nome não consegue distinguir
+"perdi a corrida" de "a condição recusou". `If-Match` era igualmente ignorado.
+
+### Agora
+
+A condição é avaliada contra o objeto que está na chave **antes** de abrir upload:
+
+| pedido | chave ocupada | chave livre |
+|---|---|---|
+| `If-None-Match: *` ou com o ETag do objeto | `412 PreconditionFailed` | grava |
+| `If-None-Match` com ETag de outra versão | segue o fluxo normal (`409` do gateway) | grava |
+| `If-Match` com o ETag do objeto | segue o fluxo normal (`409`) | `412` (não há versão para casar) |
+| `If-Match` com outro ETag / `*` | `412` | `412` |
+| `If-Modified-Since` / `If-Unmodified-Since` | `501 NotImplemented`, como na cópia | idem |
+
+**Verificação:** `S3GatewayTests` **+1** (`put_com_if_none_match_nao_sobrescreve_chave_ocupada`:
+chave ocupada + `If-None-Match: *` → `412` e o conteúdo antigo intacto; chave livre + `*` → grava;
+`If-None-Match` com ETag de outra versão → `409`; com o ETag certo → `412`; `If-Match` com o ETag
+certo → `409`; com outro → `412`). Mutações: sem a conferência; `If-None-Match` só olhando o
+asterisco; `If-Match` só olhando o asterisco — **3 de 3 derrubam** (a 2ª e a 3ª só depois de o teste
+distinguir o ETag certo do errado).
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
