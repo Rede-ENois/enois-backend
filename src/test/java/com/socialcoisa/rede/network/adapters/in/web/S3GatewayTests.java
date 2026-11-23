@@ -2324,6 +2324,53 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 			.contains("<Key>mk/a.txt</Key>");
 	}
 
+	/**
+	 * `x-amz-copy-source-range` no `CopyObject` é recusado, não ignorado.
+	 *
+	 * <p><b>Antes:</b> o cabeçalho só era lido no {@code UploadPartCopy}; no {@code CopyObject} caía no
+	 * vazio e a cópia gravava a origem <b>inteira</b> com {@code 200 CopyObjectResult}. O S3 não
+	 * aceita esse cabeçalho nessa operação — quem manda {@code bytes=0-4} esperando 5 bytes recebia os
+	 * 10, com sucesso, e o destino ficava com o conteúdo errado e cara de certo.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 400 InvalidArgument} nomeando o cabeçalho e dizendo qual operação o
+	 * aceita; o destino não é criado. No {@code UploadPartCopy} ele continua valendo (§4.20).</p>
+	 */
+	@Test
+	void copy_object_recusa_o_cabecalho_de_faixa_do_upload_part_copy() throws Exception {
+		gravar("cpr/o.txt", "0123456789");
+
+		MockHttpServletRequestBuilder r = put("/s3/" + bucket + "/cpr/d.txt")
+			.header("x-amz-copy-source", "/" + bucket + "/cpr/o.txt")
+			.header("x-amz-copy-source-range", "bytes=0-4");
+		assinar(r, SECRET, shaVazio());
+		var resposta = mockMvc.perform(r).andReturn().getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(400);
+		assertThat(resposta.getContentAsString())
+			.contains("<Code>InvalidArgument</Code>")
+			.contains("x-amz-copy-source-range")
+			.doesNotContain("<CopyObjectResult");
+
+		// O destino não foi criado pela cópia recusada.
+		MockHttpServletRequestBuilder g = get("/s3/" + bucket + "/cpr/d.txt");
+		assinar(g, SECRET, shaVazio());
+		var lido = mockMvc.perform(g).andReturn();
+		var doLido = lido.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lido)).andReturn().getResponse() : lido.getResponse();
+		assertThat(doLido.getStatus()).isEqualTo(404);
+
+		// Sem o cabeçalho, a cópia continua copiando a origem inteira.
+		MockHttpServletRequestBuilder ok = put("/s3/" + bucket + "/cpr/d.txt")
+			.header("x-amz-copy-source", "/" + bucket + "/cpr/o.txt");
+		assinar(ok, SECRET, shaVazio());
+		assertThat(mockMvc.perform(ok).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder g2 = get("/s3/" + bucket + "/cpr/d.txt");
+		assinar(g2, SECRET, shaVazio());
+		var l2 = mockMvc.perform(g2).andReturn();
+		var do2 = l2.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(l2)).andReturn().getResponse() : l2.getResponse();
+		assertThat(do2.getContentAsString()).isEqualTo("0123456789");
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {
