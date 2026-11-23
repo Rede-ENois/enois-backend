@@ -2193,6 +2193,79 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 
 	}
 
+	/**
+	 * {@code Content-MD5} é conferido: MD5 que não bate é {@code 400 BadDigest} e nada é gravado.
+	 *
+	 * <p><b>Antes:</b> o cabeçalho era ignorado por completo. {@code PUT} com o MD5 de <b>outro</b>
+	 * corpo respondia {@code 200} e gravava o objeto, e um valor que nem é base64 também passava. O
+	 * cliente que manda o MD5 para detectar corrupção no caminho — transferência de rede, proxy,
+	 * retentativa — recebia "gravado com sucesso" para um corpo que ele não mandou, e o erro só
+	 * aparecia depois, no consumidor.</p>
+	 *
+	 * <p><b>Agora:</b> o MD5 declarado é conferido contra os bytes recebidos e contra a origem, no
+	 * {@code CopyObject}: bater é {@code 200}; não bater é {@code 400 BadDigest}; o que não é base64
+	 * com 16 bytes é {@code 400 InvalidDigest}. Em nenhuma das recusas o objeto é criado nem
+	 * substituído.</p>
+	 */
+	@Test
+	void content_md5_que_nao_bate_e_bad_digest_e_nao_grava() throws Exception {
+		String md5DoAbc = java.util.Base64.getEncoder().encodeToString(
+			java.security.MessageDigest.getInstance("MD5").digest("abc".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+		String md5DeOutro = java.util.Base64.getEncoder().encodeToString(
+			java.security.MessageDigest.getInstance("MD5").digest("outra".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+
+		// Não bate: recusa e o objeto não existe.
+		MockHttpServletRequestBuilder ruim = put("/s3/" + bucket + "/cmd/ruim.txt").content("abc".getBytes())
+			.header("Content-MD5", md5DeOutro);
+		assinar(ruim, SECRET, shaDe("abc"));
+		var resposta = mockMvc.perform(ruim).andReturn().getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(400);
+		assertThat(resposta.getContentAsString()).contains("<Code>BadDigest</Code>");
+		MockHttpServletRequestBuilder gRuim = get("/s3/" + bucket + "/cmd/ruim.txt");
+		assinar(gRuim, SECRET, shaVazio());
+		var lidoRuim = mockMvc.perform(gRuim).andReturn();
+		var doRuim = lidoRuim.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lidoRuim)).andReturn().getResponse() : lidoRuim.getResponse();
+		// Recusado = não gravado. `403` aqui é o bucket ainda sem dono (o primeiro objeto é o que o dita,
+		// e ele não nasceu); o que importa é que não veio `200` com conteúdo.
+		assertThat(doRuim.getStatus()).as("objeto gravado apesar do MD5 errado").isNotEqualTo(200);
+		assertThat(doRuim.getContentAsString()).doesNotContain("abc");
+
+		// Não é base64 de 16 bytes: InvalidDigest, também sem gravar.
+		for (String lixo : new String[] { "nao-e-base64!!", "YWJj" }) {
+			MockHttpServletRequestBuilder invalido = put("/s3/" + bucket + "/cmd/lixo.txt")
+				.content("abc".getBytes()).header("Content-MD5", lixo);
+			assinar(invalido, SECRET, shaDe("abc"));
+			var doInvalido = mockMvc.perform(invalido).andReturn().getResponse();
+			assertThat(doInvalido.getStatus()).as("Content-MD5=" + lixo).isEqualTo(400);
+			assertThat(doInvalido.getContentAsString()).contains("<Code>InvalidDigest</Code>");
+		}
+
+		// Bate: grava.
+		MockHttpServletRequestBuilder bom = put("/s3/" + bucket + "/cmd/bom.txt").content("abc".getBytes())
+			.header("Content-MD5", md5DoAbc);
+		assinar(bom, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(bom).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder gBom = get("/s3/" + bucket + "/cmd/bom.txt");
+		assinar(gBom, SECRET, shaVazio());
+		var lidoBom = mockMvc.perform(gBom).andReturn();
+		var doBom = lidoBom.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lidoBom)).andReturn().getResponse() : lidoBom.getResponse();
+		assertThat(doBom.getContentAsString()).isEqualTo("abc");
+
+		// Substituição com MD5 errado não troca o conteúdo que já está lá.
+		MockHttpServletRequestBuilder troca = put("/s3/" + bucket + "/cmd/bom.txt").content("xyz".getBytes())
+			.header("Content-MD5", md5DeOutro);
+		assinar(troca, SECRET, shaDe("xyz"));
+		assertThat(mockMvc.perform(troca).andReturn().getResponse().getStatus()).isEqualTo(400);
+		MockHttpServletRequestBuilder gBom2 = get("/s3/" + bucket + "/cmd/bom.txt");
+		assinar(gBom2, SECRET, shaVazio());
+		var lido2 = mockMvc.perform(gBom2).andReturn();
+		var do2 = lido2.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lido2)).andReturn().getResponse() : lido2.getResponse();
+		assertThat(do2.getContentAsString()).isEqualTo("abc");
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {

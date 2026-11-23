@@ -1290,6 +1290,39 @@ dos 8 subrecursos, o `GET` responde `501` e o `HEAD` responde o mesmo, sem vazar
 Mutações: sem a recusa dos subrecursos que gravariam (`a`) e sem a de leitura (`c`) derrubam; trocar a
 ordem das duas (`b`) **não** derruba — é equivalência real, cada uma é idempotente e independente.
 
+## 4.44 `Content-MD5` é conferido: MD5 errado é `400 BadDigest` (ciclo 134)
+
+O cabeçalho de integridade do S3 era **ignorado** por completo:
+
+```
+PUT /s3/<b>/x.txt   Content-MD5: <MD5 de OUTRO corpo>   corpo "abc"   → 200, objeto gravado
+PUT /s3/<b>/x.txt   Content-MD5: nao-e-base64           corpo "abc"   → 200, objeto gravado
+```
+
+O cliente que manda o MD5 para pegar corrupção no caminho — rede, proxy, retentativa — recebia
+"gravado com sucesso" para um corpo que ele não mandou, e o erro só aparecia depois, no consumidor.
+
+### Agora
+
+| pedido | antes | agora |
+|---|---|---|
+| `Content-MD5` que bate | `200` | `200` |
+| `Content-MD5` de outro corpo | `200`, objeto gravado | `400 BadDigest`, nada gravado |
+| `Content-MD5` que não é base64 de 16 bytes | `200` | `400 InvalidDigest` |
+
+- O valor é validado e o corpo conferido **antes** de abrir upload: a recusa não deixa linha aberta
+  nem objeto `PENDING` atrás, e um `PUT` sobre chave existente com MD5 errado **não** substitui o
+  conteúdo que já estava lá.
+- O cliente que pede a conferência paga por ela: com o cabeçalho, o corpo é lido para memória antes
+  da gravação. Sem o cabeçalho, o caminho é o de sempre (fluxo direto para o disco).
+- O `CopyObject` não é afetado: lá não há corpo do cliente para conferir.
+
+**Verificação:** `S3GatewayTests` **+1** (`content_md5_que_nao_bate_e_bad_digest_e_nao_grava`): MD5
+errado → `400 BadDigest` e o conteúdo **não** aparece no GET; base64 inválido e base64 curto →
+`400 InvalidDigest`; MD5 certo grava e o corpo confere; substituição com MD5 errado mantém o conteúdo
+anterior. Vermelho antes: `200`. Mutações **2/2**: sem a conferência do digest; sem a validação de 16
+bytes.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:

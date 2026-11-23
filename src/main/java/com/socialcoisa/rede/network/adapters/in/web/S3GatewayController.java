@@ -815,6 +815,20 @@ class S3GatewayController {
 		// Um `PENDING` é gravação em curso, não versão publicada: o `sha256` dele é nulo, e comparar
 		// com ele faria `If-Match` do ETag confirmado anterior falhar só por haver upload na vez.
 		exigirPrecondicoesDoPut(request, antes != null && antes.state() == StorageObjectState.PENDING ? null : antes);
+		// `Content-MD5`: conferido ANTES de abrir upload (§4.44). Um digest que não bate recusa aqui,
+		// sem deixar linha aberta nem objeto PENDING atrás — por isso o corpo é lido para memória
+		// quando o cabeçalho veio (o cliente que pede conferência já aceita o custo dela).
+		byte[] md5Declarado = md5Declarado(request);
+		byte[] corpoConferido = null;
+		if (md5Declarado != null) {
+			try {
+				corpoConferido = body(request).readAllBytes();
+			}
+			catch (java.io.IOException falha) {
+				throw s3Error(400, "InvalidRequest", "Nao foi possivel ler o corpo.");
+			}
+			exigirMd5Conferido(corpoConferido, md5Declarado);
+		}
 		// O retrato do que a linha declarava, lido antes de `saveClientHeaders` trocá-lo (§4.22).
 		StorageCatalogService.ClientHeaders antesDeclarados = StorageCatalogService.ClientHeaders.NONE;
 		// Metadado e cabeçalhos declarados junto do corpo (V367): lidos ANTES da gravação, porque cabeçalho
@@ -855,7 +869,9 @@ class S3GatewayController {
 		try {
 			// Corpo vazio é objeto válido no S3 (marcador de "pasta" do `aws s3 cp --recursive`):
 			// o caminho do cliente aceita 0 byte, o do nó continua recusando.
-			stored = storage.finishUploadPermitindoVazio(pending.id(), body(request), credential.ownerUserId());
+			stored = storage.finishUploadPermitindoVazio(pending.id(),
+				corpoConferido != null ? new java.io.ByteArrayInputStream(corpoConferido) : body(request),
+				credential.ownerUserId());
 		}
 		catch (ApiException recusado) {
 			throw noVocabularioDoS3(recusado);
@@ -2046,6 +2062,56 @@ class S3GatewayController {
 	static String lastModified(StorageObject object) {
 		Instant quando = object.updatedAt() != null ? object.updatedAt() : object.createdAt();
 		return S3_INSTANT.format(quando);
+	}
+
+	/**
+	 * O {@code Content-MD5} da requisição, já decodificado — ou {@code null} se não veio.
+	 *
+	 * <p>É o cabeçalho clássico de integridade do S3: o cliente diz o MD5 do corpo e o servidor
+	 * confere. Um valor que não é base64 de 16 bytes é {@code 400 InvalidDigest} <b>aqui</b>, antes de
+	 * abrir upload — nada é criado. Ver {@code exigirMd5Conferido} para a conferência do conteúdo.</p>
+	 */
+	private static byte[] md5Declarado(HttpServletRequest request) {
+		String declarado = request.getHeader("Content-MD5");
+		if (declarado == null || declarado.isBlank()) {
+			return null;
+		}
+		byte[] bytes;
+		try {
+			bytes = java.util.Base64.getDecoder().decode(declarado.trim());
+		}
+		catch (IllegalArgumentException naoEDigest) {
+			throw s3Error(400, "InvalidDigest", "O Content-MD5 nao e base64 valido.");
+		}
+		if (bytes.length != 16) {
+			throw s3Error(400, "InvalidDigest", "O Content-MD5 precisa ter 16 bytes (MD5 em base64).");
+		}
+		return bytes;
+	}
+
+	/**
+	 * Confere o {@code Content-MD5} contra os bytes recebidos.
+	 *
+	 * <p><b>Antes:</b> o cabeçalho era ignorado. Um {@code PUT} com o MD5 de outro corpo respondia
+	 * {@code 200} e gravava o objeto, e o cliente que usa o MD5 para pegar corrupção no caminho
+	 * (rede, proxy, retentativa) recebia "gravado" para um conteúdo que ele não mandou.</p>
+	 *
+	 * <p><b>Agora:</b> MD5 que não bate é {@code 400 BadDigest} <b>antes</b> da abertura — nada é
+	 * criado nem substituído. O cliente que pede a conferência paga por ela: o corpo vai para memória
+	 * nesta operação.</p>
+	 */
+	private static void exigirMd5Conferido(byte[] corpo, byte[] esperado) {
+		byte[] calculado;
+		try {
+			calculado = java.security.MessageDigest.getInstance("MD5").digest(corpo);
+		}
+		catch (java.security.NoSuchAlgorithmException semMd5) {
+			throw s3Error(500, "InternalError", "MD5 nao disponivel para conferir o Content-MD5.");
+		}
+		if (!java.util.Arrays.equals(esperado, calculado)) {
+			throw s3Error(400, "BadDigest",
+				"O Content-MD5 declarado nao confere com o corpo recebido; o objeto nao foi gravado.");
+		}
 	}
 
 	/** Parâmetro numérico de consulta; ausente ou inválido vale o padrão. */
