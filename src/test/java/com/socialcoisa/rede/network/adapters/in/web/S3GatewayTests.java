@@ -1930,6 +1930,74 @@ void lifecycle_do_bucket_le_e_grava_a_mesma_politica_do_varredor() throws Except
 		assertThat(corpoNormal.getContentAsString()).isEqualTo("corrente");
 	}
 
+
+	/**
+	 * `DeleteObjects` (POST `/{bucket}?delete`) apaga em lote e devolve o `Deleted` de cada chave.
+	 *
+	 * <p><b>Antes:</b> a rota não existia. `aws s3 rm --recursive` e o `rclone delete` mandam um único
+	 * POST com até 1000 chaves no corpo e esperam `200` com um {@code <Deleted>} por chave; aqui o
+	 * cliente recebia um erro de rota/método e a limpeza em massa falhava — ou, pior, o cliente
+	 * entendia que nada foi apagado e repetia para sempre.</p>
+	 *
+	 * <p><b>Agora:</b> cada {@code <Object><Key>} do XML vira uma lápide pelo mesmo {@code delete} do
+	 * {@code DELETE}; {@code <Quiet>true</Quiet>} omite os {@code <Deleted>}; chave que não existe sai
+	 * em {@code <Deleted>} (o S3 é idempotente: apagar o que não há é sucesso); chave de outra conta
+	 * sai em {@code <Error>} com {@code AccessDenied} e <b>não</b> é apagada. Mais de 1000 chaves →
+	 * {@code 400 MalformedXML}, como no S3; XML sem {@code <Object>} também.</p>
+	 */
+	@Test
+void delete_objects_apaga_em_lote_e_reporta_cada_chave() throws Exception {
+		gravar("lote/a.txt", "a");
+		gravar("lote/b.txt", "b");
+		gravar("lote/fica.txt", "fica");
+
+		String xml = "<Delete><Object><Key>lote/a.txt</Key></Object>"
+			+ "<Object><Key>lote/b.txt</Key></Object>"
+			+ "<Object><Key>lote/nao-existe.txt</Key></Object></Delete>";
+		MockHttpServletRequestBuilder lote = MockMvcRequestBuilders.post("/s3/" + bucket + "?delete")
+			.content(xml.getBytes(StandardCharsets.UTF_8)).contentType("application/xml");
+		assinar(lote, SECRET, shaDe(xml));
+		var resposta = mockMvc.perform(lote).andReturn().getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(200);
+		String corpo = resposta.getContentAsString();
+		assertThat(corpo).contains("<Deleted><Key>lote/a.txt</Key>");
+		assertThat(corpo).contains("<Deleted><Key>lote/b.txt</Key>");
+		assertThat(corpo).contains("<Deleted><Key>lote/nao-existe.txt</Key>");
+
+		// As duas sumiram (lápide) e a que não estava no lote continua legível. A busca pela chave
+		// apagada pode dar 403: se era a última do bucket, o bucket deixa de existir para o dono
+		// (a mesma régua do DELETE de uma chave, doc §4.23).
+		MockHttpServletRequestBuilder buscaA = get("/s3/" + bucket + "/lote/a.txt");
+		assinar(buscaA, SECRET, shaVazio());
+		assertThat(mockMvc.perform(buscaA).andReturn().getResponse().getStatus()).isIn(403, 404);
+		assertThat(ler("lote/fica.txt")).isEqualTo("fica");
+
+		// Quiet: omite os <Deleted>, mas apaga.
+		String quiet = "<Delete><Quiet>true</Quiet><Object><Key>lote/fica.txt</Key></Object></Delete>";
+		MockHttpServletRequestBuilder silencioso = MockMvcRequestBuilders.post("/s3/" + bucket + "?delete")
+			.content(quiet.getBytes(StandardCharsets.UTF_8))
+			.contentType("application/xml");
+		assinar(silencioso, SECRET, shaDe(quiet));
+		String corpoQuiet = mockMvc.perform(silencioso).andReturn().getResponse().getContentAsString();
+		assertThat(corpoQuiet).doesNotContain("<Deleted>");
+		MockHttpServletRequestBuilder buscaFica = get("/s3/" + bucket + "/lote/fica.txt");
+		assinar(buscaFica, SECRET, shaVazio());
+		assertThat(mockMvc.perform(buscaFica).andReturn().getResponse().getStatus()).isIn(403, 404);
+	}
+
+
+	/** `DeleteObjects` sem nenhuma chave é `MalformedXML`, como o S3 — não um `200` vazio. */
+	@Test
+void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
+		String xml = "<Delete></Delete>";
+		MockHttpServletRequestBuilder vazio = MockMvcRequestBuilders.post("/s3/" + bucket + "?delete")
+			.content(xml.getBytes(StandardCharsets.UTF_8)).contentType("application/xml");
+		assinar(vazio, SECRET, shaDe(xml));
+		var resposta = mockMvc.perform(vazio).andReturn().getResponse();
+		assertThat(resposta.getStatus()).isEqualTo(400);
+		assertThat(resposta.getContentAsString()).contains("<Code>MalformedXML</Code>");
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {

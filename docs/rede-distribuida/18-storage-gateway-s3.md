@@ -1065,6 +1065,28 @@ assinou.
 `PUT` e listagem com o dono certo → `200`, objeto legível). Mutações: sem a guarda; aceitar qualquer
 valor — **2 de 2 derrubam**.
 
+## 4.31 `DeleteObjects` apaga em lote (ciclo 120)
+
+A rota `POST /{bucket}?delete` não existia. `aws s3 rm --recursive` e o `rclone delete` mandam **um**
+POST com até 1000 chaves no corpo e esperam `200` com um `<Deleted>` por chave; o gateway respondia
+`500 INTERNAL_ERROR` (nenhum handler para o verbo naquele caminho). Pagar uma requisição por chave num
+bucket grande é justamente o que o protocolo evita.
+
+### Agora
+
+| corpo | resposta |
+|---|---|
+| `<Delete><Object><Key>k</Key></Object>…` | `200` com `<Deleted><Key>k</Key></Deleted>` por chave |
+| chave que não existe | `<Deleted>` (apagar o que não há é sucesso no S3) |
+| chave de outra conta | `<Error><Code>AccessDenied</Code>` e a chave **não** é tocada |
+| `<Quiet>true</Quiet>` | apaga e omite os `<Deleted>` |
+| sem `<Object>`, ou mais de 1000 | `400 MalformedXML` |
+
+**Verificação:** `S3GatewayTests` **+2** (`delete_objects_apaga_em_lote_e_reporta_cada_chave`: lote de
+três chaves, duas apagadas e a terceira legível, e o mesmo com `Quiet`;
+`delete_objects_sem_objetos_e_malformed_xml`). Mutações: não apagar; responder `200` ao corpo vazio —
+**2 de 2 derrubam**.
+
 ## 4.36 `?lifecycle` fala a mesma política que o varredor (ciclo 125)
 
 O Storage **expira objeto de verdade** pelo `expire_after_days` da política (o varredor apaga) e
