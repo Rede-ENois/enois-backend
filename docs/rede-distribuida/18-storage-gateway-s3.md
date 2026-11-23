@@ -1317,6 +1317,29 @@ dos 8 subrecursos, o `GET` responde `501` e o `HEAD` responde o mesmo, sem vazar
 Mutações: sem a recusa dos subrecursos que gravariam (`a`) e sem a de leitura (`c`) derrubam; trocar a
 ordem das duas (`b`) **não** derruba — é equivalência real, cada uma é idempotente e independente.
 
+## 4.42 `max-keys` inválido é `400`, e `max-keys=0` é página vazia (ciclo 132)
+
+`parseMaxKeys` trocava **qualquer** entrada por 1000, em silêncio:
+
+| pedido | antes | agora |
+|---|---|---|
+| `?max-keys=abc` / `-1` / `1.5` | `200`, três objetos, `<MaxKeys>1000</MaxKeys>` | `400 InvalidArgument` em XML |
+| `?max-keys=0` | `200`, os objetos | `200`, `<KeyCount>0</KeyCount>`, sem `<Key>` |
+| `?max-keys=` (vazio) / ausente | `1000` | `1000` |
+| `?max-keys=1001` | `1000` | `1000` |
+
+- O `0` é a página vazia que o paginador usa para sondar o total; servi-lo com objetos fazia o cliente
+  contar uma página inteira.
+- Quem digitava errado no `aws s3 ls --max-items` recebia `200` e acreditava que a listagem tinha
+  funcionado — o erro do cliente virava um resultado.
+- O teto de 1000 continua valendo para cima; `max-keys` repetido vale o primeiro, como os outros
+  parâmetros (o contrato do `query()`).
+
+**Verificação:** `S3GatewayTests` **+1** (`max_keys_invalido_e_recusado_e_zero_e_pagina_vazia`):
+`abc`/`-1`/`1.5` → `400 InvalidArgument` sem vazar chave; `0` → `KeyCount 0`; `1001` → `200` com
+`MaxKeys 1000`; sem o parâmetro, lista. Vermelho antes: `max-keys=abc` → `200`. Mutações **3/3**:
+sem a recusa do não numérico; `0` voltando ao padrão; sem o teto.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:

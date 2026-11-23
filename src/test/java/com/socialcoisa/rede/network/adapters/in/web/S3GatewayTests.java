@@ -2277,6 +2277,53 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 
 	}
 
+
+	/**
+	 * `max-keys` inválido é recusado, e `max-keys=0` é uma página vazia — não "1000".
+	 *
+	 * <p><b>Antes:</b> {@code parseMaxKeys} trocava qualquer entrada por 1000: {@code max-keys=abc}
+	 * respondia {@code 200} com três objetos e {@code <MaxKeys>1000</MaxKeys>} (o S3 responde
+	 * {@code 400 InvalidArgument}), e {@code max-keys=0} — a página vazia que o paginador usa para
+	 * sondar o total — respondia os três objetos. O cliente que pedia zero recebia dados e, pior,
+	 * quem digitava errado no {@code aws s3 ls --max-items} achava que a listagem tinha funcionado.</p>
+	 *
+	 * <p><b>Agora:</b> vazio continua o padrão de 1000; {@code 0} é aceito (lista vazia,
+	 * {@code KeyCount 0}); negativo e não numérico são {@code 400 InvalidArgument} em XML. O teto de
+	 * 1000 é mantido para cima.</p>
+	 */
+	@Test
+	void max_keys_invalido_e_recusado_e_zero_e_pagina_vazia() throws Exception {
+		gravar("mk/a.txt", "a");
+		gravar("mk/b.txt", "b");
+
+		for (String ruim : new String[] { "abc", "-1", "1.5" }) {
+			MockHttpServletRequestBuilder r = get("/s3/" + bucket + "?prefix=mk/&max-keys=" + ruim);
+			assinar(r, SECRET, shaVazio());
+			var resposta = mockMvc.perform(r).andReturn().getResponse();
+			assertThat(resposta.getStatus()).as("max-keys=" + ruim).isEqualTo(400);
+			assertThat(resposta.getContentAsString()).contains("<Code>InvalidArgument</Code>")
+				.doesNotContain("<Key>mk/a.txt</Key>");
+		}
+
+		MockHttpServletRequestBuilder zero = get("/s3/" + bucket + "?prefix=mk/&max-keys=0");
+		assinar(zero, SECRET, shaVazio());
+		String corpoZero = mockMvc.perform(zero).andReturn().getResponse().getContentAsString();
+		assertThat(corpoZero).contains("<KeyCount>0</KeyCount>").doesNotContain("<Key>mk/a.txt</Key>");
+
+		// O teto continua: pedir mais que 1000 lista o que cabe, sem virar erro.
+		MockHttpServletRequestBuilder grande = get("/s3/" + bucket + "?prefix=mk/&max-keys=1001");
+		assinar(grande, SECRET, shaVazio());
+		var doGrande = mockMvc.perform(grande).andReturn().getResponse();
+		assertThat(doGrande.getStatus()).isEqualTo(200);
+		assertThat(doGrande.getContentAsString()).contains("<MaxKeys>1000</MaxKeys>");
+
+		// E o padrão (sem o parâmetro) segue listando.
+		MockHttpServletRequestBuilder sem = get("/s3/" + bucket + "?prefix=mk/");
+		assinar(sem, SECRET, shaVazio());
+		assertThat(mockMvc.perform(sem).andReturn().getResponse().getContentAsString())
+			.contains("<Key>mk/a.txt</Key>");
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {
