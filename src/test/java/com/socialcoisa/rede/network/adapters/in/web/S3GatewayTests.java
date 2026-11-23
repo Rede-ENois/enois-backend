@@ -1956,6 +1956,47 @@ void lifecycle_do_bucket_le_e_grava_a_mesma_politica_do_varredor() throws Except
 		assertThat(resposta.getContentAsString()).contains("<Code>BucketAlreadyExists</Code>");
 	}
 
+	/**
+	 * Toda resposta traz {@code x-amz-request-id} e o erro carrega o mesmo id em {@code <RequestId>}.
+	 *
+	 * <p><b>Antes:</b> nenhuma resposta tinha o cabeçalho, e o XML de erro do gateway
+	 * ({@link S3ApiException#toXml}) saía sem {@code <RequestId>} — o {@code errorXml} do controller,
+	 * que preenchia, não era o caminho usado. Todo SDK mostra esse id na mensagem de erro
+	 * ({@code An error occurred (AccessDenied) when calling ... (Request ID: ...)}) e é por ele que o
+	 * suporte acha a requisição no log; sem id no cabeçalho, nem o corpo e o cabeçalho da
+	 * <b>mesma</b> resposta concordam.</p>
+	 *
+	 * <p><b>Agora:</b> o id é sorteado uma vez por requisição e sai nos dois lugares: cabeçalho
+	 * {@code x-amz-request-id} em sucesso e erro, {@code <RequestId>} no corpo do erro. Nunca o
+	 * {@code null} que o SDK não sabe interpretar.</p>
+	 */
+	@Test
+	void request_id_no_cabecalho_e_no_corpo_do_erro() throws Exception {
+		gravar("rid/a.txt", "abc");
+
+		MockHttpServletRequestBuilder ok = get("/s3/" + bucket + "/rid/a.txt");
+		assinar(ok, SECRET, shaVazio());
+		var r = mockMvc.perform(ok).andReturn();
+		var sucesso = r.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(r)).andReturn().getResponse() : r.getResponse();
+		String idDoSucesso = sucesso.getHeader("x-amz-request-id");
+		assertThat(sucesso.getStatus()).isEqualTo(200);
+		assertThat(idDoSucesso).as("200 sem x-amz-request-id").isNotNull().isNotBlank();
+
+		MockHttpServletRequestBuilder erro = get("/s3/" + bucket + "/rid/nao-existe");
+		assinar(erro, SECRET, shaVazio());
+		var resposta = mockMvc.perform(erro).andReturn().getResponse();
+		String idDoErro = resposta.getHeader("x-amz-request-id");
+		assertThat(resposta.getStatus()).isEqualTo(404);
+		assertThat(idDoErro).as("404 sem x-amz-request-id").isNotNull().isNotBlank();
+		// O mesmo id nos dois lugares: é o que permite achar a requisição pelo que o cliente reporta.
+		assertThat(resposta.getContentAsString())
+			.contains("<Code>NoSuchKey</Code>")
+			.contains("<RequestId>" + idDoErro + "</RequestId>");
+
+		// Ids de requisições diferentes são diferentes: um valor fixo não correlaciona nada.
+		assertThat(idDoErro).isNotEqualTo(idDoSucesso);	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {
