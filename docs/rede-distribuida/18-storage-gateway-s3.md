@@ -1065,6 +1065,31 @@ assinou.
 `PUT` e listagem com o dono certo → `200`, objeto legível). Mutações: sem a guarda; aceitar qualquer
 valor — **2 de 2 derrubam**.
 
+## 4.36 `?lifecycle` fala a mesma política que o varredor (ciclo 125)
+
+O Storage **expira objeto de verdade** pelo `expire_after_days` da política (o varredor apaga) e
+**libera versão substituída** pelo `retain_superseded_days`. Nenhum dos dois era alcançável pelo
+protocolo S3:
+
+| antes | agora |
+|---|---|
+| `GET /{bucket}?lifecycle` → `200 <ListBucketResult>` (lista de objetos) | `200 <LifecycleConfiguration>` com `<Expiration><Days>` e `<NoncurrentVersionExpiration><NoncurrentDays>` |
+| `PUT /{bucket}?lifecycle` → `400 InvalidRequest` | `200`, grava nas colunas que o varredor lê |
+
+- Sem política, o `GET` sai com `<LifecycleConfiguration/>` vazio.
+- O `PUT` preserva o **versionamento** e grava `expire_after_days` / `retain_superseded_days`.
+- Regra que o gateway **não honra** é `400 InvalidRequest` e não muda nada: `<Transition>`,
+  `<AbortIncompleteMultipartUpload>`, `<NoncurrentVersionTransition>`, `<Expiration><Date>`.
+- **Retenção exige versionamento** (a mesma regra do serviço): `NoncurrentVersionExpiration` num
+  bucket sem versionamento é `400 STORAGE_POLICY_INVALID`. O S3 real aceita e a regra nunca age;
+  aqui a recusa é explícita, porque uma regra parada é pior que um erro que o operador vê.
+
+**Verificação:** `S3GatewayTests` **+1** (`lifecycle_do_bucket_le_e_grava_a_mesma_politica_do_varredor`:
+vazio antes; grava 30 dias e 7 dias não correntes e confere **as colunas do banco**; a leitura devolve
+as mesmas regras; `<Transition>` → `400` sem mudar o prazo). Vermelho antes: `<ListBucketResult>`.
+Mutações: não gravar a política; não emitir `<Expiration>` na leitura; aceitar `<Transition>` —
+**3 de 3 derrubam**.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
