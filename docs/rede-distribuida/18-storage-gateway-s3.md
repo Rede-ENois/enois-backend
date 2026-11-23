@@ -960,17 +960,22 @@ errado e ninguém percebe.
 |---|---|
 | `<Part>` com o ETag da parte que chegou | `200` (como antes) |
 | `<Part>` com ETag de outro conteúdo | **`400 InvalidPart`**, upload continua aberto |
-| `<Part>` sem `<ETag>` | `200` — o número basta |
+| `<Part>` sem `<ETag>` | `200` — o número basta (**divergência** do S3: a AWS responde `MalformedXML`) |
 
 `StorageMultipartService.complete(upload, pedidas, etags)` recebe o mapa `partNumber → ETag`; a
 comparação é contra o `sha256` gravado da parte (o ETag do Storage **é** o digest). A assinatura de
 duas posições continua existindo para quem conclui pelo caminho do control plane, e delega com mapa
 vazio.
 
-**Verificação:** `S3MultipartTests` **+1** (`conclusao_com_etag_de_parte_que_nao_bate_e_recusada_sem_gravar`:
-duas partes, o XML declara o ETag da 2 na 1 → `400 InvalidPart`, nenhuma linha no catálogo; com os
-ETags certos, `200` e 6 MiB + 1 byte). Mutações: desligar a comparação; descartar o ETag na leitura —
-**2 de 2 derrubam**.
+A leitura do XML é uma **varredura linear** (`indexOf` sobre um trecho por `<Part>`), não uma
+expressão regular: a versão anterior recortava o documento inteiro com `\\s*` guloso ao lado de
+`[^<]*?`, e o CodeQL marcou o retrocesso sobre entrada do chamador como alerta alto.
+
+**Verificação:** `S3MultipartTests` **+2**: `conclusao_com_etag_de_parte_que_nao_bate_e_recusada_sem_gravar`
+(duas partes, o XML declara o ETag da 2 na 1 → `400 InvalidPart`, nenhuma linha no catálogo; com os
+ETags certos, `200` e 6 MiB + 1 byte) e `conclusao_sem_etag_declado_aceita_o_numero_da_parte` (fixa a
+tolerância, a divergência declarada acima). Mutações: desligar a comparação; descartar o ETag na
+leitura; recusar o `Part` sem `ETag` — **3 de 3 derrubam**.
 
 ## 4.28 A URL pré-assinada assina o caminho que ela carrega (ciclo 116)
 

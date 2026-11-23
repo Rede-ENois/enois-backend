@@ -617,6 +617,33 @@ class S3MultipartTests {
 		assertThat(jdbc.queryForObject("select bytes from network_storage_objects where bucket = ?"
 			+ " and object_key = ?", Long.class, bucket, chave)).isEqualTo(6L * 1024 * 1024 + 1);
 	}
+
+	/**
+	 * Sem {@code <ETag>} no XML, o número basta — tolerância deliberada, divergente do S3.
+	 *
+	 * <p>A AWS responde {@code MalformedXML} quando um {@code <Part>} não traz o {@code <ETag>}. Aqui
+	 * a conclusão passa, porque o cliente que não confere manda só o número, e recusá-lo quebraria o
+	 * que já funcionava. O teste fixa a escolha: se um dia mudar para o comportamento da AWS, este é
+	 * o teste que muda primeiro.</p>
+	 */
+	@Test
+	void conclusao_sem_etag_declado_aceita_o_numero_da_parte() throws Exception {
+		String chave = "sem-etag/%s.bin".formatted(sufixo());
+		String uploadId = abrir(chave);
+		enviarParte(chave, uploadId, 1, bytes('c', 6 * 1024 * 1024));
+		enviarParte(chave, uploadId, 2, bytes('d', 3));
+
+		String xml = "<CompleteMultipartUpload><Part><PartNumber>1</PartNumber></Part>"
+			+ "<Part><PartNumber>2</PartNumber></Part></CompleteMultipartUpload>";
+		var resposta = mockMvc.perform(assinar(post("/s3/" + bucket + "/" + chave).param("uploadId", uploadId)
+			.contentType("application/xml").content(xml),
+			shaOfBytes(xml.getBytes(StandardCharsets.UTF_8)))).andReturn();
+		assertThat(resposta.getResponse().getStatus()).as(resposta.getResponse().getContentAsString())
+			.isEqualTo(200);
+		assertThat(jdbc.queryForObject("select bytes from network_storage_objects where bucket = ?"
+			+ " and object_key = ?", Long.class, bucket, chave)).isEqualTo(6L * 1024 * 1024 + 3);
+	}
+
 	private String listarPartes(String chave, String uploadId, String query) throws Exception {
 		var resposta = mockMvc.perform(assinar(get("/s3/" + bucket + "/" + chave + "?uploadId=" + uploadId + query),
 			shaVazio())).andReturn();
