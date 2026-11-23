@@ -1886,6 +1886,50 @@ void lifecycle_do_bucket_le_e_grava_a_mesma_politica_do_varredor() throws Except
 		}
 	}
 
+	/**
+	 * "Ler uma versão" não é "baixar o arquivo": `GET ?versionId=` responde `501`, não um `200` com o
+	 * conteúdo errado.
+	 *
+	 * <p><b>Antes:</b> o {@code GET} do objeto passava pela rota sem olhar a consulta e servia o corpo
+	 * para {@code ?versionId=}, {@code ?torrent} e {@code ?partNumber=1}. O gateway endereça só a versão
+	 * corrente, então quem pedia uma versão específica — o SDK depois de um {@code list-object-versions}
+	 * — recebia <b>outra</b> cópia, com {@code 200}; o cliente lia isso como sucesso e processava o
+	 * conteúdo errado. Pior: a URL pré-assinada de {@code ?torrent} baixava o arquivo.</p>
+	 *
+	 * <p><b>Agora:</b> os três são {@code 501 NotImplemented} sem corpo, no {@code GET} e no
+	 * {@code HEAD}, e o objeto continua intacto. {@code ?response-content-disposition} continua
+	 * aceito: entra na assinatura da URL pré-assinada.</p>
+	 */
+	@Test
+	void get_de_subrecurso_nao_serve_o_objeto() throws Exception {
+		gravar("versoes/a.txt", "corrente");
+
+		for (String sub : new String[] { "versionId=abc", "torrent", "partNumber=1" }) {
+			MockHttpServletRequestBuilder leitura = get("/s3/" + bucket + "/versoes/a.txt?" + sub);
+			assinar(leitura, SECRET, shaVazio());
+			var resposta = mockMvc.perform(leitura).andReturn().getResponse();
+			assertThat(resposta.getStatus()).as(sub + ": " + resposta.getContentAsString()).isEqualTo(501);
+			assertThat(resposta.getContentAsString()).contains("<Code>NotImplemented</Code>");
+			assertThat(resposta.getContentAsString()).doesNotContain("corrente");
+
+			// O HEAD é o GET sem corpo: mesma pergunta, mesma recusa.
+			MockHttpServletRequestBuilder cabecalho = MockMvcRequestBuilders
+				.head("/s3/" + bucket + "/versoes/a.txt?" + sub);
+			assinar(cabecalho, SECRET, shaVazio());
+			assertThat(mockMvc.perform(cabecalho).andReturn().getResponse().getStatus())
+				.as("HEAD " + sub).isEqualTo(501);
+		}
+
+		// O `GET` normal continua servindo o objeto: a recusa é do subrecurso, não da rota.
+		MockHttpServletRequestBuilder normal = get("/s3/" + bucket + "/versoes/a.txt");
+		assinar(normal, SECRET, shaVazio());
+		var lido = mockMvc.perform(normal).andReturn();
+		var corpoNormal = lido.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lido)).andReturn().getResponse() : lido.getResponse();
+		assertThat(corpoNormal.getStatus()).isEqualTo(200);
+		assertThat(corpoNormal.getContentAsString()).isEqualTo("corrente");
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {
