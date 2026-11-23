@@ -36,6 +36,7 @@ import com.socialcoisa.rede.network.application.port.out.S3CredentialRepository;
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
 import com.socialcoisa.rede.network.domain.ObjectMetadata;
 import com.socialcoisa.rede.network.domain.S3Credential;
+import com.socialcoisa.rede.network.domain.StorageBucketPolicy;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.network.domain.StorageObjectState;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
@@ -165,6 +166,93 @@ class S3GatewayController {
 	}
 
 	// ---------------------------------------------------------------- bucket: listagem e remoção
+
+	/**
+	 * GetBucketLifecycleConfiguration: {@code GET /{bucket}?lifecycle}.
+	 *
+	 * <p><b>Antes:</b> caía no {@code ListObjects} e respondia {@code 200 <ListBucketResult>} — o
+	 * cliente perguntava o ciclo de vida e recebia a lista de objetos.</p>
+	 *
+	 * <p><b>Agora:</b> devolve as <b>mesmas</b> regras que o varredor aplica: {@code <Expiration>} vem
+	 * do {@code expire_after_days} e {@code <NoncurrentVersionExpiration>} do
+	 * {@code retain_superseded_days} da política (V352). Sem política, {@code
+	 * <LifecycleConfiguration/>}.</p>
+	 */
+	@GetMapping(value = "/{bucket}", params = "lifecycle")
+	ResponseEntity<String> getBucketLifecycle(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "LIST");
+		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
+		StorageBucketPolicy politica = storage.bucketPolicy(bucket);
+		S3Xml xml = new S3Xml();
+		xml.root("LifecycleConfiguration");
+		if (politica.expireAfterDays() != null || politica.retainSupersededDays() != null) {
+			xml.open("Rule").element("ID", "enois-padrao").element("Status", "Enabled")
+				.open("Filter").element("Prefix", "").close("Filter");
+			if (politica.expireAfterDays() != null) {
+				xml.open("Expiration").element("Days", String.valueOf(politica.expireAfterDays()))
+					.close("Expiration");
+			}
+			if (politica.retainSupersededDays() != null) {
+				xml.open("NoncurrentVersionExpiration")
+					.element("NoncurrentDays", String.valueOf(politica.retainSupersededDays()))
+					.close("NoncurrentVersionExpiration");
+			}
+			xml.close("Rule");
+		}
+		return xml(HttpStatus.OK).body(xml.toString());
+	}
+
+	/**
+	 * PutBucketLifecycleConfiguration: {@code PUT /{bucket}?lifecycle}.
+	 *
+	 * <p><b>Antes:</b> caía no {@code PutObject} e respondia
+	 * {@code 400 InvalidRequest "Informe o bucket e a chave"}. O operador que tentava ajustar o prazo
+	 * de expiração pelo protocolo S3 <b>não conseguia</b> — e se tivesse uma rota que respondesse
+	 * sucesso, acreditaria ter mudado um prazo que o varredor segue aplicando do jeito antigo.</p>
+	 *
+	 * <p><b>Agora:</b> {@code <Expiration><Days>} grava em {@code expire_after_days} e
+	 * {@code <NoncurrentVersionExpiration><NoncurrentDays>} em {@code retain_superseded_days} — a
+	 * mesma linha que o varredor lê. O versionamento é preservado. Regra que este gateway não honra
+	 * ({@code <Transition>}, {@code <AbortIncompleteMultipartUpload>}, {@code <Date>}) é
+	 * {@code 400 InvalidRequest}: aceitar calado é o defeito que este ciclo fecha.</p>
+	 */
+	@RequestMapping(value = "/{bucket}", method = RequestMethod.PUT, params = "lifecycle")
+	ResponseEntity<Void> putBucketLifecycle(@PathVariable String bucket, HttpServletRequest request)
+			throws IOException {
+		S3Credential credential = authenticate(request, "PUT");
+		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
+		String texto = new String(body(request).readAllBytes(), StandardCharsets.UTF_8);
+		for (String naoHonrada : List.of("Transition", "AbortIncompleteMultipartUpload", "NoncurrentVersionTransition")) {
+			if (texto.contains("<" + naoHonrada + ">")) {
+				throw s3Error(400, "InvalidRequest",
+					"Este gateway nao aplica <" + naoHonrada + ">; a politica nao foi alterada.");
+			}
+		}
+		if (texto.contains("<Expiration><Date>") || texto.contains("<Expiration>\n  <Date>")) {
+			throw s3Error(400, "InvalidRequest",
+				"Prazo por data absoluta nao e suportado; use <Expiration><Days>.");
+		}
+		Integer dias = diasDoXml(texto, "Expiration", "Days");
+		Integer diasNaoCorrente = diasDoXml(texto, "NoncurrentVersionExpiration", "NoncurrentDays");
+		if (dias == null && diasNaoCorrente == null && !texto.contains("<Rule>")) {
+			throw s3Error(400, "MalformedXML", "LifecycleConfiguration sem <Rule>.");
+		}
+		StorageBucketPolicy atual = storage.bucketPolicy(bucket);
+		storage.putBucketPolicy(credential.ownerUserId(), bucket, atual.versioning(),
+			diasNaoCorrente, dias);
+		return ResponseEntity.ok().build();
+	}
+
+	/** O inteiro de {@code <Bloco><Campo>N</Campo></Bloco>} no XML, ou {@code null} se ausente. */
+	private static Integer diasDoXml(String texto, String bloco, String campo) {
+		java.util.regex.Matcher m = java.util.regex.Pattern
+			.compile("<" + bloco + ">.*?<" + campo + ">\\s*(\\d+)\\s*</" + campo + ">.*?</" + bloco + ">",
+				java.util.regex.Pattern.DOTALL)
+			.matcher(texto);
+		return m.find() ? Integer.parseInt(m.group(1)) : null;
+	}
 
 	/** ListObjectsV2 ({@code ?list-type=2}) e ListObjects v1. */
 	@GetMapping("/{bucket}")

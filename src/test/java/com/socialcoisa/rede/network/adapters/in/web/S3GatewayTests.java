@@ -1759,6 +1759,84 @@ void put_com_if_none_match_nao_sobrescreve_chave_ocupada() throws Exception {
 			.header("x-amz-expected-bucket-owner", donoDoBucket);
 		assinar(listCerto, SECRET, shaVazio());
 		mockMvc.perform(listCerto).andExpect(status().isOk());
+
+	 * `GetBucketLifecycleConfiguration` / `PutBucketLifecycleConfiguration` (`?lifecycle`).
+	 *
+	 * <p><b>Antes:</b> nenhuma das duas existia. O {@code GET} caía no {@code ListObjects} e
+	 * respondia {@code 200 <ListBucketResult>}; o {@code PUT} caía no {@code PutObject} e respondia
+	 * {@code 400 InvalidRequest}. É o pior tipo de furo: o Storage <b>expira objeto de verdade</b> pelo
+	 * {@code expire_after_days} da política (o varredor apaga), e o operador que manda
+	 * {@code put-bucket-lifecycle-configuration} com uma regra mais folgada recebia {@code 200} (ou um
+	 * erro de rota) e acreditava ter mudado o prazo — enquanto o varredor seguia apagando pelo prazo
+	 * antigo.</p>
+	 *
+	 * <p><b>Agora:</b> as duas rotas falam a <b>mesma</b> política que o varredor lê. No
+	 * {@code GET}, o {@code <Expiration>} vem do {@code expire_after_days} e o
+	 * {@code <NoncurrentVersionExpiration>} do {@code retain_superseded_days}; sem política, o
+	 * documento sai vazio ({@code <LifecycleConfiguration/>}). No {@code PUT}, as mesmas regras gravam
+	 * na política, preservando o versionamento. Regra que este gateway não sabe honrar
+	 * ({@code <Transition>}, {@code <AbortIncompleteMultipartUpload>}, data absoluta) é
+	 * {@code 400 InvalidRequest} — aceitar calado é o problema que este ciclo fecha.</p>
+	 */
+	@Test
+void lifecycle_do_bucket_le_e_grava_a_mesma_politica_do_varredor() throws Exception {
+		gravar("ciclo/a.txt", "a");
+
+		// Sem política: documento vazio, não ListBucketResult.
+		MockHttpServletRequestBuilder vazio = get("/s3/" + bucket + "?lifecycle");
+		assinar(vazio, SECRET, shaVazio());
+		var vazioResposta = mockMvc.perform(vazio).andReturn().getResponse();
+		assertThat(vazioResposta.getStatus()).as(vazioResposta.getContentAsString()).isEqualTo(200);
+		assertThat(vazioResposta.getContentAsString())
+			.startsWith("<?xml version=\"1.0\" encoding=\"UTF-8\"?><LifecycleConfiguration");
+
+		// Retenção de versão substituída só existe com versionamento ligado (regra do serviço, §4.35):
+		// aqui o bucket nasce sem versão, então a política entra direto na tabela.
+		jdbc.update("""
+			insert into network_storage_buckets (bucket, versioning, retain_superseded_days, expire_after_days,
+				updated_by, updated_at)
+			values (?, true, null, null, ?, current_timestamp(3))
+			on duplicate key update versioning = true
+			""", bucket, admin);
+
+		// Grava as duas regras que o varredor honra.
+		String regra = """
+			<LifecycleConfiguration><Rule><ID>padrao</ID><Status>Enabled</Status>
+			<Filter><Prefix></Prefix></Filter>
+			<Expiration><Days>30</Days></Expiration>
+			<NoncurrentVersionExpiration><NoncurrentDays>7</NoncurrentDays></NoncurrentVersionExpiration>
+			</Rule></LifecycleConfiguration>""";
+		MockHttpServletRequestBuilder grava = put("/s3/" + bucket + "?lifecycle")
+			.content(regra.getBytes(StandardCharsets.UTF_8));
+		assinar(grava, SECRET, shaDe(regra));
+		var gravado = mockMvc.perform(grava).andReturn().getResponse();
+		assertThat(gravado.getStatus()).as(gravado.getContentAsString()).isEqualTo(200);
+
+		// A política do banco — a que o varredor lê — mudou de verdade.
+		assertThat(jdbc.queryForObject("select expire_after_days from network_storage_buckets where bucket = ?",
+			Integer.class, bucket)).isEqualTo(30);
+		assertThat(jdbc.queryForObject(
+			"select retain_superseded_days from network_storage_buckets where bucket = ?",
+			Integer.class, bucket)).isEqualTo(7);
+
+		// A leitura devolve as mesmas regras.
+		MockHttpServletRequestBuilder le = get("/s3/" + bucket + "?lifecycle");
+		assinar(le, SECRET, shaVazio());
+		String corpo = mockMvc.perform(le).andReturn().getResponse().getContentAsString();
+		assertThat(corpo).contains("<Expiration><Days>30</Days></Expiration>");
+		assertThat(corpo).contains("<NoncurrentDays>7</NoncurrentDays>");
+
+		// Regra que o gateway não sabe honrar é recusada — e não muda nada.
+		String transicao = "<LifecycleConfiguration><Rule><ID>x</ID><Status>Enabled</Status>"
+			+ "<Filter><Prefix></Prefix></Filter><Transition><Days>1</Days>"
+			+ "<StorageClass>GLACIER</StorageClass></Transition></Rule></LifecycleConfiguration>";
+		MockHttpServletRequestBuilder naoHonrada = put("/s3/" + bucket + "?lifecycle")
+			.content(transicao.getBytes(StandardCharsets.UTF_8));
+		assinar(naoHonrada, SECRET, shaDe(transicao));
+		var recusa = mockMvc.perform(naoHonrada).andReturn().getResponse();
+		assertThat(recusa.getStatus()).as(recusa.getContentAsString()).isEqualTo(400);
+		assertThat(jdbc.queryForObject("select expire_after_days from network_storage_buckets where bucket = ?",
+			Integer.class, bucket)).isEqualTo(30);
 	}
 
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
