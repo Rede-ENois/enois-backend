@@ -208,6 +208,36 @@ public class StorageMultipartService {
 		metrics.record(operacao, resultado, Math.max(0, (System.nanoTime() - inicioNanos) / 1_000_000));
 	}
 
+	/**
+	 * Os uploads em aberto do dono num bucket — o {@code ListMultipartUploads} do gateway S3.
+	 *
+	 * <p><b>Antes:</b> não havia como ver o que ficou aberto. Um multipart abandonado (processo que
+	 * morreu, rede que caiu) mantém as partes no disco até a varredura de lixo, e não existia rota
+	 * para o operador saber que ele existe e mandar abortar.</p>
+	 *
+	 * <p>Por dono: um upload incompleto é do dono da credencial que o abriu, e a listagem de outro não
+	 * é assunto dele. {@code prefix} filtra a chave, como no S3; vazio é "todos".</p>
+	 */
+	public List<Upload> abertos(String bucket, String ownerUserId, String prefix) {
+		String filtro = prefix == null || prefix.isEmpty() ? "" : " and `key` like ?";
+		java.util.List<Object> args = new java.util.ArrayList<>();
+		args.add(bucket);
+		args.add(ownerUserId);
+		if (!filtro.isEmpty()) {
+			// `like` do SQL: `%` e `_` do nome precisam de escape, ou um prefixo com eles casaria
+			// chave de outro nome.
+			args.add(prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%");
+		}
+		return jdbc.query("""
+			select upload_id, bucket, `key`, content_type, owner_user_id, credential_id, created_at, expires_at
+			from network_storage_multipart_uploads
+			where bucket = ? and owner_user_id = ?""" + filtro + """
+			order by created_at asc, upload_id asc
+			""", (rs, i) -> new Upload(rs.getString("upload_id"), rs.getString("bucket"), rs.getString("key"),
+			rs.getString("content_type"), rs.getString("owner_user_id"), rs.getString("credential_id"),
+			rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("expires_at").toInstant()), args.toArray());
+	}
+
 	public Optional<Upload> find(String uploadId) {
 		return jdbc.query("""
 			select upload_id, bucket, `key`, content_type, owner_user_id, credential_id, created_at, expires_at
