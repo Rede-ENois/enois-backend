@@ -110,12 +110,11 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 			throw new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado.");
 		}
 		agendarMigracaoDeMidia(profile);
+		// Por fora do cache: a tag de aniversariante depende do DIA e é aplicada
+		// pelo controller via comAniversario(view) para não vazar no TTL do perfil.
 		return comSelo(UserProfileView.from(profile))
 			.withAvatarUrl(media.localize(profile.avatar()))
-			.withBioHtml(profile.bioHtml()).withBannerHtml(profile.bannerHtml())
-			// Por fora do cache: a tag depende do DIA, e a entrada do cache pode ter sido montada
-			// ontem (TTL curto, mas virada de meia-noite nao e impossivel). A data ja esta no perfil.
-			.withBirthdayToday(aniversarios.fazAniversarioHoje(profile.id()));
+			.withBioHtml(profile.bioHtml()).withBannerHtml(profile.bannerHtml());
 	}
 
 	/**
@@ -161,10 +160,11 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 			.filter(found -> !sanctionGate.banned(found.id()))
 			.map(this::populateCounts)
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
+		// Por fora do cache: a tag de aniversariante depende do DIA e é aplicada
+		// pelo controller via comAniversario(view) para não vazar no TTL do perfil.
 		return comSelo(UserProfileView.from(profile))
 			.withAvatarUrl(media.localize(profile.avatar()))
-			.withBioHtml(profile.bioHtml()).withBannerHtml(profile.bannerHtml())
-			.withBirthdayToday(aniversarios.fazAniversarioHoje(profile.id()));
+			.withBioHtml(profile.bioHtml()).withBannerHtml(profile.bannerHtml());
 	}
 
 	/**
@@ -173,6 +173,16 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 	 */
 	private UserProfileView comSelo(UserProfileView view) {
 		return view.withHumanityVerified(identityVerifications.isVerified(view.id()));
+	}
+
+	/**
+	 * Por fora do cache: a tag depende do DIA (Brasília) e a entrada do perfil
+	 * pode ter sido cacheada ontem. O cálculo é feito na entrega da requisição.
+	 */
+	public UserProfileView comAniversario(UserProfileView view) {
+		if (view == null) return null;
+		
+		return view.withBirthdayToday(aniversarios.fazAniversarioHoje(view.id()));
 	}
 
 	/**

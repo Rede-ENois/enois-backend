@@ -353,6 +353,75 @@ class S3GatewayController {
 	}
 
 	/**
+	 * GetBucketVersioning: {@code GET /{bucket}?versioning}.
+	 *
+	 * <p><b>Antes:</b> caía no {@code ListObjects} e respondia um {@code 200 <ListBucketResult>} com
+	 * os objetos — documento do tipo errado para quem perguntou o versionamento.</p>
+	 *
+	 * <p><b>Agora:</b> {@code <VersioningConfiguration>} com {@code <Status>Enabled</Status>} ou
+	 * {@code <Status>Suspended</Status>}; bucket nunca configurado sai com o elemento vazio, que é o
+	 * "nunca ligado" do S3. {@code Suspended} não apaga o histórico: as versões antigas seguem
+	 * listáveis e restauráveis.</p>
+	 */
+	@GetMapping(value = "/{bucket}", params = "versioning")
+	ResponseEntity<String> getBucketVersioning(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "LIST");
+		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
+		StorageBucketPolicy politica = storage.bucketPolicy(bucket);
+		S3Xml xml = new S3Xml();
+		xml.root("VersioningConfiguration");
+		// `updatedBy` nulo é "nunca houve política": o S3 responde o elemento vazio, não Suspended.
+		if (politica.updatedBy() != null) {
+			xml.element("Status", politica.versioning() ? "Enabled" : "Suspended");
+		}
+		return xml(HttpStatus.OK).body(xml.toString());
+	}
+
+	/**
+	 * PutBucketVersioning: {@code PUT /{bucket}?versioning}.
+	 *
+	 * <p><b>Antes:</b> caía no {@code PutObject} e respondia
+	 * {@code 400 InvalidRequest "Informe o bucket e a chave"} — não havia jeito de ligar o
+	 * versionamento pelo protocolo S3, embora o Storage o tenha desde o V352.</p>
+	 *
+	 * <p><b>Agora:</b> {@code Enabled} liga e {@code Suspended} desliga; as outras regras da política
+	 * (retenção de versão substituída, expiração) são <b>preservadas</b> — este chamado só mexe no
+	 * versionamento. Valor que não é nenhum dos dois é {@code 400 MalformedXML}.</p>
+	 */
+	@RequestMapping(value = "/{bucket}", method = RequestMethod.PUT, params = "versioning")
+	ResponseEntity<Void> putBucketVersioning(@PathVariable String bucket, HttpServletRequest request)
+			throws IOException {
+		S3Credential credential = authenticate(request, "PUT");
+		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
+		String texto = new String(body(request).readAllBytes(), StandardCharsets.UTF_8);
+		// Recorte linear do <VersioningConfiguration>, não regex sobre o corpo: `.*` casava o ÚLTIMO
+		// <Status> do documento (um `<Rule><Status>` depois da configuração), e a regex sobre o corpo
+		// do chamador é o ReDoS que o CodeQL marca. A abertura pode carregar `xmlns`.
+		int abreConfig = texto.indexOf("<VersioningConfiguration");
+		String configuracao = null;
+		if (abreConfig >= 0) {
+			int fimConfig = texto.indexOf("</VersioningConfiguration>", abreConfig);
+			if (fimConfig >= 0) {
+				configuracao = texto.substring(texto.indexOf(">", abreConfig) + 1, fimConfig);
+			}
+		}
+		String status = configuracao == null ? null : entre(configuracao, "<Status>", "</Status>");
+		if (!"Enabled".equals(status) && !"Suspended".equals(status)) {
+			throw s3Error(400, "MalformedXML",
+				"O <Status> do versionamento tem de ser Enabled ou Suspended.");
+		}
+		StorageBucketPolicy atual = storage.bucketPolicy(bucket);
+		boolean ligado = "Enabled".equals(status);
+		// A retenção de versão substituída só vale com o versionamento ligado (regra do serviço).
+		// Ele já recusa a combinação inconsistente; aqui a retenção é zerada ao suspender.
+		storage.putBucketPolicy(credential.ownerUserId(), bucket, ligado,
+			ligado ? atual.retainSupersededDays() : null, atual.expireAfterDays());
+		return ResponseEntity.ok().build();
+	}
+
+	/**
 	 * GetBucketAcl: {@code GET /{bucket}?acl}.
 	 *
 	 * <p><b>Antes:</b> caía no {@code ListObjects} e respondia {@code 200 <ListBucketResult>}. O
@@ -2067,17 +2136,34 @@ class S3GatewayController {
 		}
 	}
 
+	/**
+	 * {@code max-keys}: ausente é o padrão de 1000, {@code 0} é a página vazia, e o que não é um
+	 * inteiro de zero para cima é {@code 400 InvalidArgument}.
+	 *
+	 * <p><b>Antes:</b> qualquer entrada inválida — {@code abc}, {@code -1}, {@code 1.5} — virava
+	 * 1000 em silêncio, e {@code max-keys=0} também. O cliente recebia dados que não pediu e lia
+	 * {@code 200}: {@code aws s3 ls --max-items} com valor errado "funcionava".</p>
+	 *
+	 * <p><b>Agora:</b> só o vazio é padrão; o resto ou é um inteiro válido (limitado ao teto de
+	 * {@value #MAX_KEYS}) ou é recusa — inclusive o zero aceito, que é o que o paginador usa para
+	 * sondar.</p>
+	 */
 	private static int parseMaxKeys(String value) {
 		if (value == null || value.isBlank()) {
 			return MAX_KEYS;
 		}
+		int parsed;
 		try {
-			int parsed = Integer.parseInt(value.trim());
-			return parsed <= 0 ? MAX_KEYS : Math.min(parsed, MAX_KEYS);
+			parsed = Integer.parseInt(value.trim());
 		}
 		catch (NumberFormatException invalido) {
-			return MAX_KEYS;
+			throw s3Error(400, "InvalidArgument",
+				"max-keys precisa ser um inteiro de 0 em diante; veio \'" + value + "\'.");
 		}
+		if (parsed < 0) {
+			throw s3Error(400, "InvalidArgument", "max-keys nao pode ser negativo; veio " + parsed + ".");
+		}
+		return Math.min(parsed, MAX_KEYS);
 	}
 
 	private static ResponseEntity.BodyBuilder xml(HttpStatus status) {
