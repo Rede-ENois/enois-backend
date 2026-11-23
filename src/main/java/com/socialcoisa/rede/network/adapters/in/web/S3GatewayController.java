@@ -356,6 +356,28 @@ class S3GatewayController {
 		}
 	}
 
+	/**
+	 * A chave apagada por <b>outra conta</b> ainda está resolvida pela lápide dela.
+	 *
+	 * <p><b>Antes:</b> a recusa por donagem conferia o bucket pelo que estava visível — a lápide do
+	 * dono e o objeto do intruso apareciam juntos, e a gravação do intruso passava. Na pior ordem de
+	 * eventos, um {@code PUT} numa chave vizinha depois do {@code DELETE} do dono deixava a chave
+	 * <b>inteira</b> com o objeto do intruso (tipo, metadado e nome de anexo dele) e respondia
+	 * {@code 200}: o {@code DELETE} do dono não entregava o nome da chave.</p>
+	 *
+	 * <p><b>Agora:</b> a lápide é uma tomada de posse — a chave só volta a aceitar escrita de quem
+	 * a apagou. É a regra do bucket aplicada à chave, e a resposta continua no vocabulário do S3
+	 * ({@code 403 AccessDenied}).</p>
+	 */
+	private void recusarChaveDeOutraConta(S3Credential credential, String bucket, String key) {
+		catalog.find(bucket, key).ifPresent(atual -> {
+			if (atual.state() == StorageObjectState.DELETED && !credential.ownerUserId().equals(atual.createdBy())) {
+				throw s3Error(403, "AccessDenied", "A chave foi removida por outra conta.");
+			}
+		});
+	}
+
+
 	// ---------------------------------------------------------------- objeto
 
 	/**
@@ -382,16 +404,16 @@ class S3GatewayController {
 		// Subrecurso que este gateway não implementa NÃO é PutObject: recusa antes de tocar no
 		// catálogo e antes do desvio para a cópia. Ver `recusarSubrecurso`.
 		recusarSubrecurso(request, "/" + bucket + "/" + key);
+		// A chave apagada por outra conta é recusa antes de abrir: a lápide é tomada de posse (§4.22).
+		recusarChaveDeOutraConta(credential, bucket, key);
 		String origemDaCopia = request.getHeader(COPY_SOURCE);
 		if (origemDaCopia != null && !origemDaCopia.isBlank()) {
 			return copiarObjeto(credential, bucket, key, origemDaCopia, request);
 		}
 		// O tipo é o que o SDK manda; sem ele, o mesmo padrão do resto do módulo.
 		String contentType = request.getContentType();
-		// Refazer um PUT na mesma chave é o caso normal do S3: `beginUpload` devolve o objeto que já
-		// existe, que pode estar STORED. Guardar o estado de antes é o que permite devolvê-lo intacto
-		// se a gravação for recusada por donagem.
-		StorageObject antes = catalog.find(bucket, key).orElse(null);
+		StorageObject antes;
+		StorageCatalogService.ClientHeaders antesDeclarados = StorageCatalogService.ClientHeaders.NONE;
 		// Metadado e cabeçalhos declarados junto do corpo (V367): lidos ANTES da gravação, porque cabeçalho
 		// recusado não pode deixar objeto criado — nem um PENDING decorado com o que não foi aceito.
 		StorageCatalogService.ClientHeaders declarados = clientHeaders(request);
@@ -405,8 +427,20 @@ class S3GatewayController {
 			// do Control Plane. A abertura traduzia pelo `catch` da gravação, que ela nunca alcança.
 			throw noVocabularioDoS3(recusado);
 		}
+		// O retrato de antes é a linha que o `finishUpload` vai gravar, lida <b>depois</b> da abertura e
+		// <b>antes</b> do `saveClientHeaders`: `beginUpload` devolve a linha da chave — a mesma, se ela
+		// ainda está viva, ou a nova que substitui a aposentada — com o conteúdo e o metadado que ela
+		// tem. Se a gravação for recusada, é isto que volta.
+		antes = pending;
+		// O `saveClientHeaders` troca o que a linha declarava pelos desta requisição — e um `PUT` sem
+		// `x-amz-meta-*` apagaria o metadado do dono. O que a linha já tinha é lido ANTES e volta na
+		// recusa, junto do resto do retrato.
+		antesDeclarados = storage.declaredHeaders(antes);
 		storage.saveClientHeaders(pending, declarados);
-		boolean iaCriar = antes == null || !antes.id().equals(pending.id());
+		// "Criar" é a linha ainda sem corpo: a chave nova e a que uma linha anterior deixou sem conteúdo.
+		// Reescrever um objeto confirmado é 409, o mesmo contrato de antes desta mudança. Numa chave nova
+		// de outra conta, a recusa por donagem apaga esta linha — sem conteúdo, nada a devolver.
+		boolean iaCriar = antes.bytes() == null;
 		if (!iaCriar && antes.state() != StorageObjectState.PENDING) {
 			throw s3Error(409, "ObjectAlreadyStored", "A chave ja tem copia confirmada; use outro nome de chave.");
 		}
@@ -424,7 +458,7 @@ class S3GatewayController {
 			throw noVocabularioDoS3(recusado);
 		}
 		if (!bucketSemDono(bucket, credential.ownerUserId())) {
-			desfazer(stored, antes);
+			desfazer(stored, antes, antesDeclarados);
 			throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
 		}
 		return ResponseEntity.ok()
@@ -501,6 +535,8 @@ class S3GatewayController {
 			throw s3Error(409, "ObjectAlreadyStored",
 				"A chave ja tem copia confirmada; use outro nome de chave.");
 		}
+		StorageCatalogService.ClientHeaders cabecalhosDeAntes = pending.id().equals(antes == null ? null : antes.id())
+			? storage.declaredHeaders(antes) : StorageCatalogService.ClientHeaders.NONE;
 		storage.saveClientHeaders(pending, cabecalhos);
 		StorageObject stored;
 		try (InputStream corpoDaOrigem = storage.readBody(fonte.id())) {
@@ -514,7 +550,7 @@ class S3GatewayController {
 		}
 		if (!bucketSemDono(bucket, credential.ownerUserId())) {
 			// Corrida: o bucket passou a ter objeto de outra conta entre a conferência e a gravação.
-			desfazer(stored, antes);
+			desfazer(stored, antes, cabecalhosDeAntes);
 			throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
 		}
 		S3Xml xml = new S3Xml();
@@ -655,15 +691,23 @@ class S3GatewayController {
 	 *
 	 * <p>O que conta é <b>a linha desta gravação</b>, não {@code stored.id()}: quando a chave já existia,
 	 * {@code finishUpload} devolve o <i>mesmo</i> id, e apagar a linha seria apagar o objeto do dono — o
-	 * oposto do que a recusa quer. Por isso só o objeto <b>novo</b> ({@code iaCriar}) é removido; o que
-	 * existia antes é devolvido ao estado anterior (o corpo já gravado deixa o catálogo e volta a ser
-	 * PENDING, que é o estado de espera que ele realmente tem).</p>
+	 * oposto do que a recusa quer. Por isso só a linha que ainda não tinha corpo é removida; o que
+	 * existia antes volta inteiro — estado, conteúdo, tipo, metadado e prazo —, e o corpo já gravado
+	 * pelo {@code finishUpload} é trocado pelos bytes de antes.</p>
 	 */
-	private void desfazer(StorageObject stored, StorageObject antes) {
-		if (antes != null && antes.id().equals(stored.id())) {
-			catalog.restorePending(stored.id());
+	private void desfazer(StorageObject stored, StorageObject antes,
+			StorageCatalogService.ClientHeaders antesDeclarados) {
+		if (antes.bytes() != null || antes.state() != StorageObjectState.PENDING) {
+			// A chave já tinha objeto: o que a recusa devolve é o retrato de antes — estado, conteúdo,
+			// tipo, metadado e prazo —, porque o `finishUpload` deixou ali o da gravação recusada.
+			// Apagar a linha seria apagar o objeto do dono.
+			catalog.restorePending(stored.id(), antes.contentType(), antes.bytes(), antes.sha256(),
+				antesDeclarados.metadata(), antesDeclarados.cacheControl(), antesDeclarados.contentDisposition(),
+				antes.expiresAt());
 			return;
 		}
+		// A linha era desta gravação — sem conteúdo e sem estado. Apagá-la é o que impede o objeto
+		// recusado de dar o bucket ao intruso.
 		catalog.discardPending(stored.id());
 	}
 
@@ -941,12 +985,24 @@ class S3GatewayController {
 		S3Credential credential = authenticate(request, "LIST");
 		requireBucket(credential, bucket);
 		var upload = uploadDaChave(credential, bucket, request);
+		Map<String, String> query = query(request);
+		// `part-number-marker` é EXCLUSIVO no S3: a próxima página começa depois dele. Sem isso o
+		// cliente que pagina recebia a mesma parte na primeira e na segunda página, e a lista sem
+		// `IsTruncated` fazia ele parar convencido de que tinha visto tudo.
+		int depoisDe = inteiroOu(query.get("part-number-marker"), 0);
+		int maxParts = inteiroOu(query.get("max-parts"), 1000);
+		var pagina = multipart.paginaDePartes(upload.uploadId(), depoisDe, maxParts);
 		S3Xml xml = new S3Xml();
 		xml.root("ListPartsResult").element("Bucket", bucket).element("Key", upload.key())
-			.element("UploadId", upload.uploadId());
-		for (var part : multipart.parts(upload.uploadId())) {
+			.element("UploadId", upload.uploadId())
+			.element("PartNumberMarker", depoisDe).element("MaxParts", Math.max(1, Math.min(maxParts, 1000)))
+			.element("IsTruncated", pagina.truncada());
+		for (var part : pagina.partes()) {
 			xml.open("Part").element("PartNumber", part.number()).element("ETag", "\"" + part.sha256() + "\"")
 				.element("Size", part.bytes()).close("Part");
+		}
+		if (pagina.truncada() && !pagina.partes().isEmpty()) {
+			xml.element("NextPartNumberMarker", pagina.partes().get(pagina.partes().size() - 1).number());
 		}
 		xml.close("ListPartsResult");
 		return xml(HttpStatus.OK).body(xml.toString());
@@ -1321,17 +1377,18 @@ class S3GatewayController {
 	 * <p>O Storage não tem tabela de buckets: o nome nasce no primeiro upload, então "bucket do dono" é
 	 * "o dono já gravou algo nele". <b>Ordem:</b> no {@code PUT} a conferência vem DEPOIS da gravação —
 	 * é a gravação que cria o bucket do dono. Nos demais verbos, antes, com o dado já no catálogo.</p>
-	 */
-	/**
-	 * O bucket pertence ao dono da credencial.
 	 *
-	 * <p>{@code allowedBucket} nulo significa "todos os buckets <b>do dono</b>", nunca "todos os buckets
-	 * da rede". Sem esta conferência, uma credencial de escopo nulo — o padrão — lia, gravava e apagava
-	 * em bucket de qualquer outra conta cuja chave conhecesse. O catálogo sempre soube o dono; o gateway
-	 * é que não perguntava.</p>
+	 * <p><b>A lápide conta.</b> A régua é o bucket do dono ({@code bucketsOf}, só vivo) <b>ou</b> o
+	 * bucket em que ele tem linha no catálogo, vivo ou lápide ({@code bucketHasObjectsOf}) — a mesma do
+	 * {@code DeleteBucket} (§4.15). Só pelos vivos, o dono que apagava a última chave do bucket perdia o
+	 * bucket para a própria leitura: o {@code GET} e o {@code HEAD} da lápide respondiam
+	 * {@code 403 AccessDenied} ("não é do dono"), em vez do {@code 404 NoSuchKey} que a chave apagada
+	 * merece (§4.23). Quem nunca gravou nada num bucket alheio continua barrado: a lápide é de quem a
+	 * criou.</p>
 	 */
 	private void requireBucketDoDono(S3Credential credential, String bucket) {
-		if (!catalog.bucketsOf(credential.ownerUserId()).contains(bucket)) {
+		if (!catalog.bucketsOf(credential.ownerUserId()).contains(bucket)
+				&& !catalog.bucketHasObjectsOf(bucket, credential.ownerUserId())) {
 			throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
 		}
 	}
@@ -1460,6 +1517,19 @@ class S3GatewayController {
 	static String lastModified(StorageObject object) {
 		Instant quando = object.updatedAt() != null ? object.updatedAt() : object.createdAt();
 		return S3_INSTANT.format(quando);
+	}
+
+	/** Parâmetro numérico de consulta; ausente ou inválido vale o padrão. */
+	private static int inteiroOu(String valor, int padrao) {
+		if (valor == null || valor.isBlank()) {
+			return padrao;
+		}
+		try {
+			return Integer.parseInt(valor.trim());
+		}
+		catch (NumberFormatException invalido) {
+			return padrao;
+		}
 	}
 
 	private static int parseMaxKeys(String value) {

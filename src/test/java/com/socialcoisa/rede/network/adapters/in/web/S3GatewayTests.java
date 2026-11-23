@@ -833,6 +833,161 @@ class S3GatewayTests {
 		assertThat(ler("copias/ocupada.png")).isEqualTo("original");
 	}
 
+	/**
+	/**
+	/**
+	 * Recusa por donagem devolve o objeto da chave ao estado de antes — inteiro, não só o estado.
+	 *
+	 * <p><b>Antes:</b> a volta era só {@code STORED → PENDING} com {@code bytes} e {@code sha256}
+	 * apagados: o objeto do dono saía da listagem (só {@code STORED} aparece), respondia {@code 404} no
+	 * {@code HEAD} e no {@code GET}, e o {@code PENDING} que sobrava na linha não era reescrevível — a
+	 * próxima gravação devolvia {@code 409 ObjectAlreadyStored}. O dono perdia o objeto que já tinha.</p>
+	 *
+	 * <p><b>Agora:</b> o retrato lido antes da gravação volta inteiro — o {@code STORED} com o corpo e
+	 * o digest de antes, o tipo, o metadado, o {@code Cache-Control}, o {@code Content-Disposition} e o
+	 * prazo. Quem chega na gravação tem de ser o dono (a lápide de outra conta é recusada antes), então
+	 * o caminho é uma linha {@code STORED} do dono ESTACIONADA como {@code PENDING} — o que a expiração
+	 * deixa — e o {@code PUT} dele mesmo.</p>
+	 */
+	@Test
+	void put_recusado_por_donagem_devolve_o_objeto_que_ja_estava_na_chave() throws Exception {
+		String chave = "donagem/meu.png";
+		String shaOriginal = shaDe("meu conteudo");
+		MockHttpServletRequestBuilder meu = put("/s3/" + bucket + "/" + chave)
+			.content("meu conteudo".getBytes(StandardCharsets.UTF_8)).contentType("image/png")
+			.header("x-amz-meta-dono", "original").header(HttpHeaders.CACHE_CONTROL, "max-age=60")
+			.header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=eu.png");
+		assinar(meu, SECRET, shaOriginal);
+		mockMvc.perform(meu).andExpect(status().isOk());
+
+		// O que fica depois de uma expiração sem coleta: a linha do dono em PENDING com o corpo e o
+		// prazo de antes. É o estado que o reenvio dele encontra.
+		jdbc.update("""
+			update network_storage_objects set state = 'PENDING'
+			where bucket = ? and object_key = ? and superseded_by is null
+			""", bucket, chave);
+
+		// Outra conta entra no bucket (a chave dela é aceita): a partir daí a gravação do dono é recusada
+		// DEPOIS de acontecer — é o caminho da devolução.
+		var intruso = new TestAuthHelper(mockMvc, objectMapper).authenticate("s3_donagem_intruso");
+		String acesso = ACCESS_KEY_PREFIX + UUID.randomUUID().toString().replace("-", "")
+			.substring(0, 10).toUpperCase();
+		jdbc.update("""
+			insert into network_storage_s3_credentials (id, access_key, secret_hash, secret_encrypted, owner_user_id,
+				allowed_bucket, allowed_operations, created_at)
+			values (?, ?, ?, ?, ?, null, 'GET PUT LIST DELETE', ?)
+			""", "s3c_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12), acesso,
+			com.socialcoisa.rede.shared.security.Hashes.sha256Hex(SECRET), cipher.encrypt(SECRET),
+			intruso.userId(), java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00Z")));
+		MockHttpServletRequestBuilder dele = put("/s3/" + bucket + "/donagem/do-intruso.txt")
+			.content("alheio".getBytes(StandardCharsets.UTF_8)).contentType("text/plain");
+		assinar(dele, SECRET, shaDe("alheio"), acesso);
+		mockMvc.perform(dele).andExpect(status().isOk());
+
+		// O dono regrava — com outro conteúdo e sem declarar nada.
+		MockHttpServletRequestBuilder regrava = put("/s3/" + bucket + "/" + chave)
+			.content("conteudo novo".getBytes(StandardCharsets.UTF_8)).contentType("text/plain");
+		assinar(regrava, SECRET, shaDe("conteudo novo"));
+		var resposta = mockMvc.perform(regrava).andReturn().getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(403);
+		assertThat(resposta.getContentAsString()).contains("<Code>AccessDenied</Code>");
+
+		// O objeto do dono volta a ser <b>servível</b>: o HEAD responde o tamanho, o digest e o metadado
+		// dele — não os do corpo recusado.
+		var cabecalhos = cabecalhosDe(chave);
+		assertThat(cabecalhos.getStatus()).as("o objeto do dono nao voltou a ser servivel").isEqualTo(200);
+		assertThat(cabecalhos.getContentLengthLong()).as("o objeto do dono perdeu o tamanho na recusa")
+			.isEqualTo(12L);
+		assertThat(cabecalhos.getHeader(HttpHeaders.ETAG)).as("o objeto do dono perdeu o digest na recusa")
+			.isEqualTo("\"" + shaOriginal + "\"");
+		assertThat(cabecalhos.getContentType()).as("o tipo da gravacao recusada vazou").isEqualTo("image/png");
+		assertThat(cabecalhos.getHeader("x-amz-meta-dono")).as("o metadado da gravacao recusada vazou")
+			.isEqualTo("original");
+		assertThat(cabecalhos.getHeader(HttpHeaders.CACHE_CONTROL)).as("o Cache-Control do dono se perdeu")
+			.isEqualTo("max-age=60");
+		assertThat(cabecalhos.getHeader(HttpHeaders.CONTENT_DISPOSITION)).as("o nome de anexo do dono se perdeu")
+			.isEqualTo("inline; filename=eu.png");
+	}
+
+	/**
+	 * A chave que uma conta apagou não aceita a escrita de outra.
+	 *
+	 * <p><b>Antes:</b> o {@code PUT} recusava pelo bucket inteiro — e o bucket é do intruso quando a
+	 * chave apagada é a <b>única</b> linha dele, porque a lápide não conta como objeto vivo. O intruso
+	 * gravava na chave apagada pela outra conta: a chave ficava <b>inteira</b> com o objeto dele (tipo,
+	 * metadado e nome de anexo) e a resposta era {@code 200}. O {@code DELETE} não entregava o nome da
+	 * chave.</p>
+	 *
+	 * <p><b>Agora:</b> a lápide é tomada de posse — {@code 403 AccessDenied} conferido antes de abrir a
+	 * chave, e nada é gravado. A guarda é da escrita: a leitura da lápide continua {@code 404}.</p>
+	 */
+	@Test
+	void chave_apagada_por_um_dono_nao_aceita_escrita_de_outra_conta() throws Exception {
+		// Bucket do intruso: a conta dele grava a própria chave, e o bucket nasce dele.
+		var intruso = new TestAuthHelper(mockMvc, objectMapper).authenticate("s3_lapide_intruso");
+		String acesso = ACCESS_KEY_PREFIX + UUID.randomUUID().toString().replace("-", "")
+			.substring(0, 10).toUpperCase();
+		jdbc.update("""
+			insert into network_storage_s3_credentials (id, access_key, secret_hash, secret_encrypted, owner_user_id,
+				allowed_bucket, allowed_operations, created_at)
+			values (?, ?, ?, ?, ?, null, 'GET PUT LIST DELETE', ?)
+			""", "s3c_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12), acesso,
+			com.socialcoisa.rede.shared.security.Hashes.sha256Hex(SECRET), cipher.encrypt(SECRET),
+			intruso.userId(), java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00Z")));
+		String chave = "lapide/minha.png";
+		String shaOriginal = shaDe("da dona");
+		MockHttpServletRequestBuilder doIntruso = put("/s3/" + bucket + "/" + chave)
+			.content("da dona".getBytes(StandardCharsets.UTF_8)).contentType("image/png")
+			.header("x-amz-meta-dono", "original");
+		assinar(doIntruso, SECRET, shaOriginal, acesso);
+		mockMvc.perform(doIntruso).andExpect(status().isOk());
+
+		// O dono do bucket apaga a chave dele, e ela fica como lápide.
+		MockHttpServletRequestBuilder remover = MockMvcRequestBuilders.delete("/s3/" + bucket + "/" + chave);
+		assinar(remover, SECRET, shaVazio(), acesso);
+		mockMvc.perform(remover).andExpect(status().isNoContent());
+
+		// A outra conta (a desta sessão) grava a própria chave no bucket: o bucket passa a ter objeto
+		// dela, e a lápide é do intruso.
+		MockHttpServletRequestBuilder minha = put("/s3/" + bucket + "/lapide/da-outra.txt")
+			.content("minha".getBytes(StandardCharsets.UTF_8)).contentType("text/plain");
+		assinar(minha, SECRET, shaDe("minha"));
+		mockMvc.perform(minha).andExpect(status().isOk());
+
+		// E tenta a chave apagada por outra conta.
+		MockHttpServletRequestBuilder plantado = put("/s3/" + bucket + "/" + chave)
+			.content("plantado".getBytes(StandardCharsets.UTF_8)).contentType("text/plain")
+			.header("x-amz-meta-dono", "invasor")
+			.header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=invasor.txt");
+		assinar(plantado, SECRET, shaDe("plantado"));
+		var resposta = mockMvc.perform(plantado).andReturn().getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(403);
+		assertThat(resposta.getContentAsString()).contains("<Code>AccessDenied</Code>");
+
+		// A lápide fica como estava: nem corpo, nem tipo, nem metadado do que tentou gravar.
+		var linha = jdbc.queryForList("select created_by, state, sha256, content_type, metadata_json,"
+			+ " content_disposition from network_storage_objects where bucket = ? and object_key = ?"
+			+ " and superseded_by is null", bucket, chave);
+		assertThat(linha).hasSize(1);
+		assertThat(linha.get(0).get("CREATED_BY")).as("a chave ficou com o objeto de outra conta")
+			.isEqualTo(intruso.userId());
+		assertThat(linha.get(0).get("STATE")).isEqualTo("DELETED");
+		assertThat(linha.get(0).get("SHA256")).isEqualTo(shaOriginal);
+		assertThat(linha.get(0).get("CONTENT_TYPE")).as("o tipo da gravacao recusada vazou").isEqualTo("image/png");
+		assertThat(linha.get(0).get("METADATA_JSON")).as("o metadado da gravacao recusada vazou")
+			.isEqualTo("{\"dono\":\"original\"}");
+		assertThat(linha.get(0).get("CONTENT_DISPOSITION")).as("o nome de anexo da gravacao recusada vazou").isNull();
+
+		// A guarda é da escrita: o {@code GET} de uma lápide é {@code 404 NoSuchKey}, como era antes — o
+		// que ela não pode mais é <b>gravar</b> na chave apagada.
+		MockHttpServletRequestBuilder leitura = get("/s3/" + bucket + "/" + chave);
+		assinar(leitura, SECRET, shaVazio());
+		var lida = mockMvc.perform(leitura).andReturn().getResponse();
+		assertThat(lida.getStatus()).as(lida.getContentAsString()).isEqualTo(404);
+		assertThat(lida.getContentAsString()).contains("NoSuchKey");
+		assertThat(lida.getContentAsString()).doesNotContain("removida por outra conta");
+	}
+
 	/** O caminho completo: PUT grava, GET devolve o corpo com o ETag, HEAD responde o tamanho. */
 	@Test
 	void put_get_e_head_de_um_objeto() throws Exception {
@@ -1323,11 +1478,56 @@ class S3GatewayTests {
 
 		MockHttpServletRequestBuilder getObject = get("/s3/" + bucket + "/apagar.txt");
 		assinar(getObject, SECRET, shaVazio());
-		// A lápide é a última linha do dono naquele bucket: `bucketsOf` filtra `state <> 'DELETED'` e o
-		// bucket deixa de "existir" para ele. A recusa é 403 ("não é do dono"), não 404 — a ordem
-		// donagem-antes-de-existência está documentada no `getObject`.
+		// A lápide é a última linha do dono naquele bucket. A leitura prova a donagem por
+		// `bucketHasObjectsOf` (vivo ou lápide): o objeto não existe mais, então 404 NoSuchKey — não
+		// 403 "bucket de outra conta".
 		var depoisDaLapide = mockMvc.perform(getObject).andReturn();
-		assertThat(depoisDaLapide.getResponse().getStatus()).isIn(403, 404);
+		assertThat(depoisDaLapide.getResponse().getStatus()).as(depoisDaLapide.getResponse().getContentAsString())
+			.isEqualTo(404);
+	}
+
+	/**
+	 * Ler a lápide própria é {@code 404 NoSuchKey}, não {@code 403 AccessDenied}.
+	 *
+	 * <p><b>Antes:</b> o {@code GET} e o {@code HEAD} provavam a donagem pelo {@code bucketsOf}, que
+	 * filtra {@code state <> 'DELETED'}. Depois que o dono apagava a <b>última</b> chave do bucket, a
+	 * lápide não contava como viva, o bucket deixava de "ser dele" na leitura, e o dono recebia
+	 * {@code 403 AccessDenied} ao pedir o objeto que era seu — a resposta dizia que o bucket era de
+	 * <b>outra conta</b>. O {@code DeleteBucket} (ciclo 100) já usa a régua certa
+	 * ({@code bucketHasObjectsOf}, vivo ou lápide); a leitura não usava.</p>
+	 *
+	 * <p><b>Agora:</b> vale o bucket do dono <b>ou</b> o bucket em que ele tem linha no catálogo —
+	 * vivo ou lápide. A leitura da lápide é {@code 404 NoSuchKey}, e o dono continua podendo regravar
+	 * a chave. Quem nunca gravou nada num bucket alheio continua barrado.</p>
+	 */
+	@Test
+	void lapide_propria_le_404_e_nao_403() throws Exception {
+		gravar("so/uma.txt", "x");
+		MockHttpServletRequestBuilder del = MockMvcRequestBuilders.delete("/s3/" + bucket + "/so/uma.txt");
+		assinar(del, SECRET, shaVazio());
+		mockMvc.perform(del).andExpect(status().isNoContent());
+
+		// A última chave viva do bucket virou lápide: o dono ainda tem o bucket.
+		MockHttpServletRequestBuilder getLapide = get("/s3/" + bucket + "/so/uma.txt");
+		assinar(getLapide, SECRET, shaVazio());
+		var lida = mockMvc.perform(getLapide).andReturn().getResponse();
+		assertThat(lida.getStatus()).as(lida.getContentAsString()).isEqualTo(404);
+		assertThat(lida.getContentAsString()).contains("<Code>NoSuchKey</Code>");
+		assertThat(lida.getContentAsString()).as("a leitura acusou bucket de outra conta").doesNotContain("nao e do dono");
+
+		MockHttpServletRequestBuilder headLapide = MockMvcRequestBuilders.head("/s3/" + bucket + "/so/uma.txt");
+		assinar(headLapide, SECRET, shaVazio());
+		assertThat(mockMvc.perform(headLapide).andReturn().getResponse().getStatus()).isEqualTo(404);
+
+		// E o dono não perdeu o bucket: a listagem continua respondendo 200 e mostrando zero chaves.
+		MockHttpServletRequestBuilder listagem = get("/s3/" + bucket).queryParam("list-type", "2");
+		assinar(listagem, SECRET, shaVazio());
+		var lista = mockMvc.perform(listagem).andReturn().getResponse();
+		assertThat(lista.getStatus()).as(lista.getContentAsString()).isEqualTo(200);
+		assertThat(lista.getContentAsString()).contains("<KeyCount>0</KeyCount>");
+
+		// Regravar a própria chave continua funcionando.
+		gravar("so/uma.txt", "de novo");
 	}
 
 	/**

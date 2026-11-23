@@ -533,6 +533,53 @@ class S3MultipartTests {
 	}
 
 	/**
+	 * `ListParts` pagina com `max-parts` e `part-number-marker`, como o S3.
+	 *
+	 * <p><b>Antes:</b> a rota devolvia <b>todas</b> as partes, ignorava `max-parts` e
+	 * `part-number-marker` e não mandava `IsTruncated` nem `NextPartNumberMarker`. O SDK, que pagina
+	 * para descobrir o que já chegou num upload interrompido, recebia um documento sem
+	 * `IsTruncated` e tratava como `false`: com mais partes do que o pedido, ele parava na primeira
+	 * página e concluía que as demais não existiam — e reenviava tudo, ou pior, concluía o upload
+	 * pelos números que não viu.</p>
+	 *
+	 * <p><b>Agora:</b> `max-parts` (padrão e teto 1000) e `part-number-marker` (<b>exclusivo</b>, como
+	 * no S3) recortam a lista; `IsTruncated=true` e `NextPartNumberMarker` dizem onde continuar. Uma
+	 * página cheia mas última sai `IsTruncated=false` — "página cheia" não é "há mais".</p>
+	 */
+	@Test
+	void listar_partes_pagina_com_marcador_e_diz_se_ha_mais() throws Exception {
+		String chave = "pagina/%s.bin".formatted(sufixo());
+		String uploadId = abrir(chave);
+		for (int n = 1; n <= 3; n++) {
+			enviarParte(chave, uploadId, n, bytes((char) ('a' + n), 1024));
+		}
+
+		var primeira = listarPartes(chave, uploadId, "&max-parts=2");
+		assertThat(primeira).contains("<IsTruncated>true</IsTruncated>");
+		assertThat(primeira).contains("<NextPartNumberMarker>2</NextPartNumberMarker>");
+		assertThat(primeira).as("a primeira pagina levou a parte 3").doesNotContain("<PartNumber>3</PartNumber>");
+
+		var segunda = listarPartes(chave, uploadId, "&max-parts=2&part-number-marker=2");
+		assertThat(segunda).contains("<IsTruncated>false</IsTruncated>");
+		assertThat(segunda).contains("<PartNumber>3</PartNumber>");
+		assertThat(segunda).as("o marcador e exclusivo: a parte 2 ja foi").doesNotContain("<PartNumber>2</PartNumber>");
+
+		// Página cheia e última: não é truncada, e não manda o cliente pedir uma página vazia.
+		var cheia = listarPartes(chave, uploadId, "&max-parts=3");
+		assertThat(cheia).contains("<IsTruncated>false</IsTruncated>");
+		assertThat(cheia).as("a pagina cheia levou as tres partes").contains("<PartNumber>1</PartNumber>")
+			.contains("<PartNumber>2</PartNumber>").contains("<PartNumber>3</PartNumber>");
+		assertThat(cheia).as("pagina cheia e ultima nao tem marcador").doesNotContain("<NextPartNumberMarker>");
+	}
+
+	private String listarPartes(String chave, String uploadId, String query) throws Exception {
+		var resposta = mockMvc.perform(assinar(get("/s3/" + bucket + "/" + chave + "?uploadId=" + uploadId + query),
+			shaVazio())).andReturn();
+		assertThat(resposta.getResponse().getStatus()).as(resposta.getResponse().getContentAsString()).isEqualTo(200);
+		return resposta.getResponse().getContentAsString();
+	}
+
+	/**
 	 * UploadPartCopy: a parte é o <b>intervalo</b> pedido da origem, sem o cliente enviar os bytes.
 	 *
 	 * <p><b>Antes:</b> a parte com {@code x-amz-copy-source} respondia {@code 501} — o cliente que
