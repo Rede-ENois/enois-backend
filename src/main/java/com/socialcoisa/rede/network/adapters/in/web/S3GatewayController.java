@@ -1239,7 +1239,10 @@ class S3GatewayController {
 		// chave com espaço ou acento emitir uma URL cuja assinatura não era a dela — e o portador
 		// recebia 403 numa URL recém-emitida.
 		StringBuilder pathCodificado = new StringBuilder("/").append(SigV4Verifier.uriEncode(bucket));
-		for (String segment : key.split("/")) {
+		// `split("/", -1)` preserva o segmento vazio de uma chave que termina em `/` (prefixo com
+		// `--recursive`): sem o limite, o separador final some do caminho assinado e a URL emitida
+		// tem assinatura de outro caminho.
+		for (String segment : key.split("/", -1)) {
 			pathCodificado.append('/').append(SigV4Verifier.uriEncode(segment));
 		}
 		String path = pathCodificado.toString();
@@ -1260,7 +1263,7 @@ class S3GatewayController {
 
 		StringBuilder url = new StringBuilder(request.getScheme()).append("://").append(hostBase).append(PREFIX)
 			.append('/').append(SigV4Verifier.uriEncode(bucket).replace("%2F", "/"));
-		for (String segment : key.split("/")) {
+		for (String segment : key.split("/", -1)) {
 			url.append('/').append(SigV4Verifier.uriEncode(segment));
 		}
 		url.append("?X-Amz-Algorithm=AWS4-HMAC-SHA256")

@@ -1621,6 +1621,48 @@ class S3GatewayTests {
 			.isEqualTo("com acento".getBytes(StandardCharsets.UTF_8));
 	}
 
+	/**
+	 * Chave que termina em `/` (prefixo que o `--recursive` gera) assina o caminho que a URL carrega.
+	 *
+	 * <p>`split("/")` descartava o segmento vazio final: a URL saía com a barra e a assinatura era
+	 * de um caminho sem ela, então o portador recebia `403` numa URL recém-emitida.</p>
+	 */
+	@Test
+	void url_pre_assinada_abre_chave_que_termina_em_barra() throws Exception {
+		String chave = "pasta/vazia/";
+		var dono = new TestAuthHelper(mockMvc, objectMapper).authenticate("s3_presign_barra");
+		String acesso = ACCESS_KEY_PREFIX + UUID.randomUUID().toString().replace("-", "").substring(0, 10)
+			.toUpperCase();
+		jdbc.update("""
+			insert into network_storage_s3_credentials (id, access_key, secret_hash, secret_encrypted, owner_user_id,
+				allowed_bucket, allowed_operations, created_at)
+			values (?, ?, ?, ?, ?, null, 'GET PUT LIST DELETE', ?)
+			""", "s3c_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12), acesso,
+			com.socialcoisa.rede.shared.security.Hashes.sha256Hex(SECRET), cipher.encrypt(SECRET),
+			dono.userId(), java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00Z")));
+		// O objeto que o prefixo cobre é o que a URL emitida para o prefixo vai listar.
+		MockHttpServletRequestBuilder put = put("/s3/" + bucket + "/pasta/vazia/x.txt")
+			.content("dentro".getBytes(StandardCharsets.UTF_8)).contentType("text/plain");
+		assinar(put, SECRET, shaDe("dentro"), acesso);
+		mockMvc.perform(put).andExpect(status().isOk());
+
+		var emissao = mockMvc.perform(MockMvcRequestBuilders.post("/s3/" + bucket + "/presign")
+			.param("key", chave).param("method", "GET").param("expires", "600")
+			.header("X-Session-Token", dono.token())).andReturn().getResponse();
+		assertThat(emissao.getStatus()).as(emissao.getContentAsString()).isEqualTo(200);
+		String url = objectMapper.readTree(emissao.getContentAsString()).get("url").asText();
+		assertThat(url).as("a barra final tem que sobreviver ao caminho assinado").contains("/pasta/vazia/");
+
+		var leitura = MockMvcRequestBuilders.get(java.net.URI.create(url)).header("host", "localhost");
+		var resposta = mockMvc.perform(leitura).andReturn();
+		if (resposta.getRequest().isAsyncStarted()) {
+			resposta = mockMvc.perform(asyncDispatch(resposta)).andReturn();
+		}
+		// Assinatura de outro caminho é `403`; a URL emitida tem que ser aceita.
+		assertThat(resposta.getResponse().getStatus()).as(resposta.getResponse().getContentAsString())
+			.isNotEqualTo(403);
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {
