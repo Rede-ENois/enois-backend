@@ -55,11 +55,14 @@ class GroupContentController {
 	private final CursorCodec cursorCodec;
 	private final GetMediaSummariesUseCase mediaSummaries;
 	private final com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications;
+	private final com.socialcoisa.rede.shared.birthday.DiaDoNascimento aniversarios;
 
 	GroupContentController(GroupFeedService feed, CurrentUserResolver currentUserResolver,
 			UserProfileRepository profiles, IdempotencyApplicationService idempotency, CursorCodec cursorCodec,
 			GetMediaSummariesUseCase mediaSummaries,
-			com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications) {
+			com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications,
+			java.time.Clock clock) {
+		this.aniversarios = new com.socialcoisa.rede.shared.birthday.DiaDoNascimento(profiles, clock);
 		this.mediaSummaries = mediaSummaries;
 		this.identityVerifications = identityVerifications;
 		this.feed = feed;
@@ -324,7 +327,7 @@ class GroupContentController {
 			author == null ? null : author.avatar(),
 			author == null ? List.of() : author.allBadges(),
 			comment.parentId(), comment.content(), comment.createdAt(), author == null ? null : author.avatarFrame(), NameStyleView.from(author),
-			humanityVerified);
+			humanityVerified, aniversarios.fazAniversarioHoje(author == null ? null : author.id()));
 	}
 
 	private GroupPostView postView(GroupPost post, ReactionType myReaction, UserProfile author) {
@@ -347,7 +350,8 @@ class GroupContentController {
 			badges,
 			post.content(), post.mediaIds(), post.pinned(), post.reactions(), post.comments(),
 			myReaction == null ? null : myReaction.name(), post.createdAt(), author == null ? null : author.avatarFrame(), NameStyleView.from(author),
-			MediaSummaryView.inOrder(post.mediaIds(), media), humanityVerified.contains(post.authorId()));
+			MediaSummaryView.inOrder(post.mediaIds(), media), humanityVerified.contains(post.authorId()),
+			aniversarios.fazAniversarioHoje(author == null ? null : author.id()));
 	}
 
 	private static TopicView topicView(GroupTopic topic) {
@@ -372,7 +376,9 @@ class GroupContentController {
 			String authorUsername, String authorAvatar, List<String> authorBadges, String content,
 			List<String> mediaIds, boolean pinned, int reactions, int comments, String myReaction,
 			Instant createdAt, String authorAvatarFrame, NameStyleView authorStyle, List<MediaSummaryView> media,
-			boolean authorHumanityVerified) {
+			boolean authorHumanityVerified,
+			/** Faz aniversario hoje (horario de Brasilia); ver AniversarioDoDia. */
+			boolean authorBirthdayToday) {
 	}
 
 	record CommentRequest(String content, String parentCommentId) {
@@ -386,6 +392,7 @@ class GroupContentController {
 
 	record CommentView(String id, String postId, String authorId, String authorName, String authorUsername,
 			String authorAvatar, List<String> authorBadges, String parentCommentId, String content,
-			Instant createdAt, String authorAvatarFrame, NameStyleView authorStyle, boolean authorHumanityVerified) {
+			Instant createdAt, String authorAvatarFrame, NameStyleView authorStyle, boolean authorHumanityVerified,
+			boolean authorBirthdayToday) {
 	}
 }

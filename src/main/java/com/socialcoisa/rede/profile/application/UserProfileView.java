@@ -55,7 +55,12 @@ public record UserProfileView(String id, String username, String name, String he
 		 * um administrador preenche (ver {@code ProfileService}); para qualquer outro leitor é
 		 * {@code null}, e o histórico não é público.
 		 */
-		Integer activeWarnings) {
+		Integer activeWarnings,
+		/**
+		 * Tag "Aniversariante": faz aniversario hoje (horario de Brasilia). So a leitura de UM
+		 * perfil calcula; listas devolvem falso.
+		 */
+		boolean birthdayToday) {
 
 	public static UserProfileView from(UserProfile profile) {
 		return new UserProfileView(profile.id(), profile.username(), profile.displayWithNickname(), profile.headline(),
@@ -68,7 +73,7 @@ public record UserProfileView(String id, String username, String name, String he
 			profile.profileEffect(), profile.statusText(), profile.statusIcon(), profile.createdAt() == null ? null : profile.createdAt().toString(),
 			profile.publicPlace() == null ? null : profile.publicPlace().city(),
 			profile.publicPlace() == null ? null : profile.publicPlace().state(), profile.gardenStyle(),
-			profile.garden(), profile.profileAppearance().social(), false, null);
+			profile.garden(), profile.profileAppearance().social(), false, null, false);
 
 	}
 
@@ -81,7 +86,7 @@ public record UserProfileView(String id, String username, String name, String he
 			bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor, connectionsCount,
 			followersCount, reputation, postsCount, pronouns, badges, aka, avatarFrame, nameTheme, nameFont, nameColor,
 			contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, joinedAt, city, state,
-			gardenStyle, garden, profileLook, humanityVerified, activeWarnings);
+			gardenStyle, garden, profileLook, humanityVerified, activeWarnings, birthdayToday);
 	}
 
 	/**
@@ -93,7 +98,7 @@ public record UserProfileView(String id, String username, String name, String he
 			bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor, connectionsCount,
 			followersCount, reputation, postsCount, pronouns, badges, aka, avatarFrame, nameTheme, nameFont, nameColor,
 			contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, joinedAt, city, state,
-			gardenStyle, garden, profileLook, verified, activeWarnings);
+			gardenStyle, garden, profileLook, verified, activeWarnings, birthdayToday);
 	}
 
 	/** Foto de perfil no host deste ambiente ({@code avatar} continua o endereco gravado, sem troca). */
@@ -102,7 +107,7 @@ public record UserProfileView(String id, String username, String name, String he
 			bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor, connectionsCount,
 			followersCount, reputation, postsCount, pronouns, badges, aka, avatarFrame, nameTheme, nameFont, nameColor,
 			contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, joinedAt, city, state,
-			gardenStyle, garden, profileLook, humanityVerified, activeWarnings);
+			gardenStyle, garden, profileLook, humanityVerified, activeWarnings, birthdayToday);
 	}
 
 	/** Capa em HTML/CSS; so a leitura do perfil anexa (mesmo motivo da bio). */
@@ -111,7 +116,7 @@ public record UserProfileView(String id, String username, String name, String he
 			bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor, connectionsCount,
 			followersCount, reputation, postsCount, pronouns, badges, aka, avatarFrame, nameTheme, nameFont, nameColor,
 			contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText, statusIcon, joinedAt, city, state,
-			gardenStyle, garden, profileLook, humanityVerified, activeWarnings);
+			gardenStyle, garden, profileLook, humanityVerified, activeWarnings, birthdayToday);
 	}
 
 	/**
@@ -123,6 +128,16 @@ public record UserProfileView(String id, String username, String name, String he
 			bio, bioHtml, bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor,
 			connectionsCount, followersCount, reputation, postsCount, pronouns, badges, aka, avatarFrame, nameTheme,
 			nameFont, nameColor, contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText,
-			statusIcon, joinedAt, city, state, gardenStyle, garden, profileLook, humanityVerified, activeWarnings);
+			statusIcon, joinedAt, city, state, gardenStyle, garden, profileLook, humanityVerified, activeWarnings, birthdayToday);
+	}
+
+	/** Tag "Aniversariante" na leitura de um perfil (so ela calcula; listas ficam em falso). */
+	public UserProfileView withBirthdayToday(boolean fazAniversario) {
+		return new UserProfileView(id, username, name, headline, company, location, avatar, banner, avatarUrl, badge,
+			bio, bioHtml, bannerHtml, skills, goals, availability, portfolio, externalLinks, openToWork, isMentor,
+			connectionsCount, followersCount, reputation, postsCount, pronouns, badges, aka, avatarFrame, nameTheme,
+			nameFont, nameColor, contributorTagColor, cardTheme, nameplate, bannerItem, profileEffect, statusText,
+			statusIcon, joinedAt, city, state, gardenStyle, garden, profileLook, humanityVerified, activeWarnings,
+			fazAniversario);
 	}
 }

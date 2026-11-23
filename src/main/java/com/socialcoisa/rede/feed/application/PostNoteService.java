@@ -50,6 +50,7 @@ public class PostNoteService {
 	private final BlockedUsersReader blockedUsers;
 	private final UserRateLimiter rateLimiter;
 	private final Clock clock;
+	private final com.socialcoisa.rede.shared.birthday.DiaDoNascimento aniversarios;
 
 	public PostNoteService(PostNoteRepository notes, PostRepository posts, UserProfileRepository profiles,
 			UserSealRepository seals, BlockedUsersReader blockedUsers, UserRateLimiter rateLimiter, Clock clock) {
@@ -60,6 +61,7 @@ public class PostNoteService {
 		this.blockedUsers = blockedUsers;
 		this.rateLimiter = rateLimiter;
 		this.clock = clock;
+		this.aniversarios = new com.socialcoisa.rede.shared.birthday.DiaDoNascimento(profiles, clock);
 	}
 
 	@Transactional
@@ -111,6 +113,7 @@ public class PostNoteService {
 		Map<String, UserProfile> profilesById = profiles.findAllByIds(authorIds).stream()
 			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
 		Set<String> contributors = seals.findActiveUserIds(authorIds);
+		Set<String> aniversariantes = aniversarios.aniversariantes(authorIds);
 		Map<String, List<PostNoteView>> result = new LinkedHashMap<>();
 		for (PostNote note : approved) {
 			UserProfile profile = profilesById.get(note.authorId());
@@ -120,7 +123,8 @@ public class PostNoteService {
 				profile != null ? profile.avatar() : null,
 				profile != null ? profile.allBadges() : List.of(),
 				NameStyleView.from(profile),
-				contributors.contains(note.authorId()) ? ContributorTagView.from(profile) : null);
+				contributors.contains(note.authorId()) ? ContributorTagView.from(profile) : null,
+				aniversariantes.contains(note.authorId()));
 			result.computeIfAbsent(note.postId(), key -> new ArrayList<>()).add(view);
 		}
 		return result;
