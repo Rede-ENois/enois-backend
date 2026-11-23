@@ -1066,6 +1066,7 @@ assinou.
 `PUT` e listagem com o dono certo → `200`, objeto legível). Mutações: sem a guarda; aceitar qualquer
 valor — **2 de 2 derrubam**.
 
+
 ## 4.33 `ListMultipartUploads`: `?uploads` mostra o que ficou aberto (ciclo 122)
 
 `GET /{bucket}?uploads` caía no `ListObjects`, que ignora o subrecurso e responde um
@@ -1073,10 +1074,18 @@ valor — **2 de 2 derrubam**.
 **silenciosamente errada**, e as partes órfãs (processo que morreu, rede que caiu) seguiam ocupando
 disco até a varredura de lixo, sem rota para o operador vê-las.
 
+## 4.34 `ListObjectVersions`: `?versions` mostra o histórico do bucket (ciclo 123)
+
+`GET /{bucket}?versions` caía no `ListObjects`, que ignora o subrecurso e responde
+`200 <ListBucketResult>` com os objetos **correntes**. O `aws s3api list-object-versions` mostrava
+cada chave uma vez só e o operador não tinha como ver as versões substituídas ocupando disco. Só
+existia o histórico **de uma chave** (`StorageCatalogService.versions`).
+
 ### Agora
 
 | pedido | resposta |
 |---|---|
+
 | `GET /{bucket}?uploads` | `200` `<ListMultipartUploadsResult>` com `<Upload><Key/><UploadId/><Initiated/>` por upload aberto **do dono** |
 | `?uploads&prefix=p` | só as chaves que começam com `p` (`%` e `_` escapados no SQL) |
 | upload de outra conta | omitido (não vira erro) |
@@ -1087,6 +1096,23 @@ disco até a varredura de lixo, sem rota para o operador vê-las.
 aparece com chave e id, `prefix` que não casa não o traz). Vermelho antes: `ListBucketResult` com
 os objetos, sem o `<UploadId>` — o cliente não via upload nenhum. Mutações: tirar o filtro por dono;
 ignorar o `prefix` — **2 de 2 derrubam**.
+
+| `GET /{bucket}?versions` | `200 <ListVersionsResult>` com `<Version>` por versão e `<DeleteMarker>` para a lápide |
+| campos | `Key`, `VersionId`, `IsLatest`, `LastModified`, `ETag`, `Size` |
+| `?versions&prefix=p` | só as chaves que começam com `p` (`%`, `_`, `\` escapados) |
+| versão de outra conta no mesmo bucket | omitida |
+
+`StorageCatalogService.versionsNoBucket(bucket, prefix)` →
+`StorageCatalogRepository.versionsNoBucket` (ordem `object_key asc, version asc`, teto de 10 000
+linhas). Versão só existe em bucket com `versioning` ligado — sem ele, reescrever a chave é `409` e
+o histórico tem uma linha só.
+
+**Verificação:** `S3GatewayTests` **+1** (`listar_versoes_do_bucket`: duas versões da chave
+reescrita e uma da outra, todas com `VersionId`; uma linha de outra conta **plantada no mesmo
+bucket** não aparece; `prefix` que não casa não traz nada). Vermelho antes: `<ListBucketResult>`.
+Mutações: tirar o filtro por dono (a primeira rodada **passou verde** porque o teste não tinha
+objeto alheio — a asserção foi tornada discriminante com a linha plantada); ignorar o `prefix`;
+listar só `version > 1` — **3 de 3 derrubam**.
 
 ## 4.36 `?lifecycle` fala a mesma política que o varredor (ciclo 125)
 

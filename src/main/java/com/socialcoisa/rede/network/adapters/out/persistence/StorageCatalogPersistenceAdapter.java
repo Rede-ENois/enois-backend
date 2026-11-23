@@ -132,6 +132,17 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		order by version asc
 		""".formatted(OBJECT_COLUMNS);
 
+	/** Todas as versões do bucket, por chave e versão — o ListObjectVersions (§4.34). */
+	/** O histórico do bucket inteiro; o filtro de `prefix` entra no `where`, antes do `order by`. */
+	private static String selectAllVersions(String filtro) {
+		return """
+			select %s from network_storage_objects
+			where bucket = ?%s
+			order by object_key asc, version asc
+			limit 10000
+			""".formatted(OBJECT_COLUMNS, filtro);
+	}
+
 	/**
 	 * Objetos correntes, servíveis e vencidos. O {@code expires_at is not null} é redundante com a
 	 * comparação, mas deixa o índice usar a árvore: as linhas sem prazo são a maioria.
@@ -485,6 +496,15 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	@Override
 	public List<StorageObject> versions(String bucket, String key) {
 		return jdbc.query(SELECT_VERSIONS, OBJECT_MAPPER, bucket, key);
+	}
+
+	@Override
+	public List<StorageObject> versionsNoBucket(String bucket, String prefix) {
+		if (prefix == null || prefix.isEmpty()) {
+			return jdbc.query(selectAllVersions(""), OBJECT_MAPPER, bucket);
+		}
+		String escapado = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%";
+		return jdbc.query(selectAllVersions(" and object_key like ?"), OBJECT_MAPPER, bucket, escapado);
 	}
 
 	@Override

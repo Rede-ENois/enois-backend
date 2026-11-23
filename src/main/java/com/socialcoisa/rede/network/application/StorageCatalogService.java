@@ -855,6 +855,18 @@ public class StorageCatalogService {
 		return saved;
 	}
 
+	/**
+	 * O histórico de <b>todas</b> as chaves do bucket — o {@code ListObjectVersions} do gateway S3.
+	 *
+	 * <p><b>Antes:</b> só existia o histórico de uma chave. O {@code GET /{bucket}?versions} caía no
+	 * {@code ListObjects}, que ignora o subrecurso, e o cliente recebia os objetos correntes com
+	 * {@code 200} — nem erro, nem versão.</p>
+	 */
+	public List<StorageObject> versionsNoBucket(String bucket, String prefix) {
+		validateBucket(bucket);
+		return catalog.versionsNoBucket(bucket, prefix);
+	}
+
 	/** O histórico da chave, da versão mais antiga para a mais nova. */
 	public List<StorageObject> versions(String bucket, String key) {
 		validateBucket(bucket);
