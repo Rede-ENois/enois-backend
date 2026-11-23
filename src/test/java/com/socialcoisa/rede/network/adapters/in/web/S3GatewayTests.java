@@ -1997,6 +1997,56 @@ void lifecycle_do_bucket_le_e_grava_a_mesma_politica_do_varredor() throws Except
 		// Ids de requisições diferentes são diferentes: um valor fixo não correlaciona nada.
 		assertThat(idDoErro).isNotEqualTo(idDoSucesso);	}
 
+	/**
+	 * O {@code HEAD} recusa os mesmos subrecursos que o {@code GET}, e não promete cabeçalho que o
+	 * {@code GET} não entrega.
+	 *
+	 * <p><b>Antes:</b> o {@code HEAD} só chamava a recusa dos subrecursos de <b>leitura</b>
+	 * ({@code versionId}, {@code torrent}, {@code partNumber}); a dos subrecursos que <b>gravariam</b>
+	 * ({@code acl}, {@code tagging}, {@code retention}, {@code legal-hold}, {@code object-lock}) ficava
+	 * só no {@code GET}. O cliente que perguntava a ACL pelo {@code HEAD} — o caminho de quem quer só o
+	 * tamanho antes de baixar — recebia {@code 200} com o {@code Content-Length} do <b>arquivo</b> e o
+	 * {@code Content-Type} do arquivo: {@code ?acl} respondia "existe, 3 bytes, text/plain", que é
+	 * exatamente a pergunta errada respondida com cara de certa.</p>
+	 *
+	 * <p>E o {@code HEAD} do {@code ?response-content-type=} devolvia {@code 200} enquanto o
+	 * {@code GET} correspondente servia o {@code Content-Type} gravado (§4.28): as duas metades da
+	 * mesma pergunta discordavam. Os dois agora respondem igual — o cabeçalho entra na assinatura e
+	 * não é aplicado, nos dois.</p>
+	 */
+	@Test
+	void head_recusa_os_mesmos_subrecursos_que_o_get() throws Exception {
+		gravar("head/h.txt", "abc");
+
+		for (String sub : new String[] { "acl", "tagging", "retention", "legal-hold", "object-lock",
+				"versionId=1", "torrent", "partNumber=1" }) {
+			// O GET é a referência: o que ele recusa, o HEAD recusa.
+			MockHttpServletRequestBuilder leitura = get("/s3/" + bucket + "/head/h.txt?" + sub);
+			assinar(leitura, SECRET, shaVazio());
+			var r = mockMvc.perform(leitura).andReturn();
+			var doGet = r.getRequest().isAsyncStarted()
+				? mockMvc.perform(asyncDispatch(r)).andReturn().getResponse() : r.getResponse();
+
+			MockHttpServletRequestBuilder cabecalho = MockMvcRequestBuilders
+				.head("/s3/" + bucket + "/head/h.txt?" + sub);
+			assinar(cabecalho, SECRET, shaVazio());
+			var doHead = mockMvc.perform(cabecalho).andReturn().getResponse();
+
+			assertThat(doGet.getStatus()).as("GET ?" + sub).isEqualTo(501);
+			assertThat(doHead.getStatus()).as("HEAD ?" + sub).isEqualTo(501);
+			// O tamanho do arquivo não vaza num 501: é o que fazia parecer "existe e tem 3 bytes".
+			assertThat(doHead.getHeader("Content-Length")).as("HEAD ?" + sub).isNotEqualTo("3");
+		}
+
+		// `response-content-type` entra na assinatura mas não é aplicado no GET; o `HEAD` diz o mesmo.
+		MockHttpServletRequestBuilder comTipo = MockMvcRequestBuilders
+			.head("/s3/" + bucket + "/head/h.txt?response-content-type=text/html");
+		assinar(comTipo, SECRET, shaVazio());
+		var tipoDoHead = mockMvc.perform(comTipo).andReturn().getResponse();
+		assertThat(tipoDoHead.getStatus()).isEqualTo(200);
+		assertThat(tipoDoHead.getContentType()).doesNotContain("text/html");
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {
