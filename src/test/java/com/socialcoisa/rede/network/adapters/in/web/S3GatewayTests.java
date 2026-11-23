@@ -1709,6 +1709,58 @@ void put_com_if_none_match_nao_sobrescreve_chave_ocupada() throws Exception {
 			.isEqualTo("com acento".getBytes(StandardCharsets.UTF_8));
 	}
 
+
+	/**
+	 * `x-amz-expected-bucket-owner`: o cliente diz de quem ele acha que é o bucket.
+	 *
+	 * <p><b>Antes:</b> o cabeçalho era ignorado por todas as rotas. Ele existe justamente para o caso em
+	 * que duas contas têm bucket com o mesmo nome (comum em multi-tenant): o SDK manda o dono esperado
+	 * e o S3 responde {@code 403 AccessDenied} se o bucket pertencer a outra conta. Aqui o cliente
+	 * recebia `200` e — pior — <b>gravava na conta errada</b>, porque o PUT só confere a donagem quando o
+	 * bucket já tem objeto e um bucket novo nasce do primeiro objeto de quem chega primeiro. O
+	 * {@code --expected-bucket-owner} de {@code aws s3api} é o que impede o dado de outra empresa de
+	 * cair no namespace desta.</p>
+	 *
+	 * <p><b>Agora:</b> quando o cabeçalho vem, tem de ser o dono do bucket ({@code ownerUserId} da
+	 * credencial). Divergente → {@code 403 AccessDenied} <b>antes</b> de qualquer gravação; correto →
+	 * segue o fluxo normal. Sem o cabeçalho, nada muda.</p>
+	 */
+	@Test
+	void expected_bucket_owner_divergente_recusa_antes_de_gravar() throws Exception {
+		String donoDoBucket = jdbc.queryForObject(
+			"select owner_user_id from network_storage_s3_credentials where access_key = ?", String.class, accessKey);
+
+		// Gravação com o dono errado: 403 e nenhuma linha no catálogo.
+		MockHttpServletRequestBuilder putErrado = put("/s3/" + bucket + "/dono/errado.txt")
+			.content("nao devia entrar".getBytes(StandardCharsets.UTF_8)).contentType("text/plain")
+			.header("x-amz-expected-bucket-owner", "outra-conta-qualquer");
+		assinar(putErrado, SECRET, shaDe("nao devia entrar"));
+		var recusado = mockMvc.perform(putErrado).andReturn().getResponse();
+		assertThat(recusado.getStatus()).as(recusado.getContentAsString()).isEqualTo(403);
+		assertThat(recusado.getContentAsString()).contains("<Code>AccessDenied</Code>");
+		assertThat(jdbc.queryForObject("select count(*) from network_storage_objects where bucket = ?"
+			+ " and object_key = ?", Integer.class, bucket, "dono/errado.txt")).isZero();
+
+		// Listagem com o dono errado: 403, mesmo sem tocar em nada.
+		MockHttpServletRequestBuilder listErrado = get("/s3/" + bucket).queryParam("list-type", "2")
+			.header("x-amz-expected-bucket-owner", "outra-conta-qualquer");
+		assinar(listErrado, SECRET, shaVazio());
+		assertThat(mockMvc.perform(listErrado).andReturn().getResponse().getStatus()).isEqualTo(403);
+
+		// Com o dono certo, a mesma gravação entra, e a listagem responde 200.
+		MockHttpServletRequestBuilder putCerto = put("/s3/" + bucket + "/dono/certo.txt")
+			.content("entra".getBytes(StandardCharsets.UTF_8)).contentType("text/plain")
+			.header("x-amz-expected-bucket-owner", donoDoBucket);
+		assinar(putCerto, SECRET, shaDe("entra"));
+		mockMvc.perform(putCerto).andExpect(status().isOk());
+		assertThat(ler("dono/certo.txt")).isEqualTo("entra");
+
+		MockHttpServletRequestBuilder listCerto = get("/s3/" + bucket).queryParam("list-type", "2")
+			.header("x-amz-expected-bucket-owner", donoDoBucket);
+		assinar(listCerto, SECRET, shaVazio());
+		mockMvc.perform(listCerto).andExpect(status().isOk());
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {
