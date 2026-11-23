@@ -197,4 +197,13 @@ class PostJpaEntity {
 	String comunidadeId() {
 		return communityId;
 	}
+
+	String getId() {
+		return id;
+	}
+
+	Instant getCreatedAt() {
+		return createdAt;
+	}
+
 }

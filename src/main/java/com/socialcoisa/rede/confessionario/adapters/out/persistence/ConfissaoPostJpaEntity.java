@@ -54,4 +54,13 @@ class ConfissaoPostJpaEntity {
 		return new ConfissaoPost(id, new com.socialcoisa.rede.feed.domain.UserId(authorId), content, createdAt, status,
 			removedAt);
 	}
+
+	String getId() {
+		return id;
+	}
+
+	Instant getCreatedAt() {
+		return createdAt;
+	}
+
 }
