@@ -834,6 +834,36 @@ A guarda roda **antes** do desvio para o `CopyObject` (§4.19): um `PUT ?tagging
 cópia que o ciclo 90 tinha no `PUT` foi substituída pela operação de verdade (§4.19); a do
 `UploadPartCopy` ficou só no caminho da parte.
 
+## 4.23 A lápide própria lê `404`, não `403` (ciclo 111)
+
+O `GET` e o `HEAD` provavam donagem por `bucketsOf`, que filtra `state <> 'DELETED'`. O `DELETE`
+grava **lápide** (`DELETED`), então apagar a **última** chave viva do bucket tirava o bucket do dono
+para a leitura dele mesmo: o `GET` e o `HEAD` da chave apagada respondiam
+**`403 AccessDenied` — "Este bucket nao e do dono da credencial"**, como se o bucket fosse de outra
+conta. O dono perdia o próprio objeto pelo nome errado, e só o `DeleteBucket` (ciclo 100) usava a régua
+certa. O teste que existia aceitava `403` **e** `404` (`isIn(403, 404)`), então a regressão passava.
+
+### Agora
+
+`requireBucketDoDono` aceita o bucket do dono (`bucketsOf`, só vivo) **ou** o bucket em que ele tem
+linha no catálogo, vivo ou lápide (`bucketHasObjectsOf`) — a mesma régua do `DeleteBucket` (§4.15).
+
+| situação | resposta |
+|---|---|
+| leitura de chave **viva** do dono | `200` |
+| leitura de **lápide** do dono | `404 NoSuchKey` |
+| leitura em bucket que o dono **nunca** gravou | `403 AccessDenied` |
+| `PUT` na lápide **de outra conta** | `403 AccessDenied` (§4.22, quando mergeado) |
+
+A lápide é de quem a criou: a régua nova não abre bucket alheio, e o dono continua regravando a chave
+que ele mesmo apagou.
+
+**Verificação:** `S3GatewayTests` **+1** (`lapide_propria_le_404_e_nao_403`: grava, apaga a única
+chave, e exige `404 NoSuchKey` no `GET` e no `HEAD`, `200` com `<KeyCount>0</KeyCount>` na listagem e o
+regrave funcionando). O `delete_vira_lapide`, que aceitava `isIn(403, 404)`, passa a exigir `404`.
+Mutações: voltar à régua só de vivos (`403`); aceitar qualquer bucket
+(`escopo_nulo_nao_alcanca_bucket_de_outra_conta_por_cabecalho` cai) — **2 de 2 derrubam**.
+
 ## 4.24 Objeto cuja cópia está em outro nó: `503 SlowDown` (ciclo 112)
 
 A cópia era procurada **dentro** do corpo da resposta (`StreamingResponseBody`), depois de os `200` e

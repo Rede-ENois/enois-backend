@@ -1323,11 +1323,56 @@ class S3GatewayTests {
 
 		MockHttpServletRequestBuilder getObject = get("/s3/" + bucket + "/apagar.txt");
 		assinar(getObject, SECRET, shaVazio());
-		// A lápide é a última linha do dono naquele bucket: `bucketsOf` filtra `state <> 'DELETED'` e o
-		// bucket deixa de "existir" para ele. A recusa é 403 ("não é do dono"), não 404 — a ordem
-		// donagem-antes-de-existência está documentada no `getObject`.
+		// A lápide é a última linha do dono naquele bucket. A leitura prova a donagem por
+		// `bucketHasObjectsOf` (vivo ou lápide): o objeto não existe mais, então 404 NoSuchKey — não
+		// 403 "bucket de outra conta".
 		var depoisDaLapide = mockMvc.perform(getObject).andReturn();
-		assertThat(depoisDaLapide.getResponse().getStatus()).isIn(403, 404);
+		assertThat(depoisDaLapide.getResponse().getStatus()).as(depoisDaLapide.getResponse().getContentAsString())
+			.isEqualTo(404);
+	}
+
+	/**
+	 * Ler a lápide própria é {@code 404 NoSuchKey}, não {@code 403 AccessDenied}.
+	 *
+	 * <p><b>Antes:</b> o {@code GET} e o {@code HEAD} provavam a donagem pelo {@code bucketsOf}, que
+	 * filtra {@code state <> 'DELETED'}. Depois que o dono apagava a <b>última</b> chave do bucket, a
+	 * lápide não contava como viva, o bucket deixava de "ser dele" na leitura, e o dono recebia
+	 * {@code 403 AccessDenied} ao pedir o objeto que era seu — a resposta dizia que o bucket era de
+	 * <b>outra conta</b>. O {@code DeleteBucket} (ciclo 100) já usa a régua certa
+	 * ({@code bucketHasObjectsOf}, vivo ou lápide); a leitura não usava.</p>
+	 *
+	 * <p><b>Agora:</b> vale o bucket do dono <b>ou</b> o bucket em que ele tem linha no catálogo —
+	 * vivo ou lápide. A leitura da lápide é {@code 404 NoSuchKey}, e o dono continua podendo regravar
+	 * a chave. Quem nunca gravou nada num bucket alheio continua barrado.</p>
+	 */
+	@Test
+	void lapide_propria_le_404_e_nao_403() throws Exception {
+		gravar("so/uma.txt", "x");
+		MockHttpServletRequestBuilder del = MockMvcRequestBuilders.delete("/s3/" + bucket + "/so/uma.txt");
+		assinar(del, SECRET, shaVazio());
+		mockMvc.perform(del).andExpect(status().isNoContent());
+
+		// A última chave viva do bucket virou lápide: o dono ainda tem o bucket.
+		MockHttpServletRequestBuilder getLapide = get("/s3/" + bucket + "/so/uma.txt");
+		assinar(getLapide, SECRET, shaVazio());
+		var lida = mockMvc.perform(getLapide).andReturn().getResponse();
+		assertThat(lida.getStatus()).as(lida.getContentAsString()).isEqualTo(404);
+		assertThat(lida.getContentAsString()).contains("<Code>NoSuchKey</Code>");
+		assertThat(lida.getContentAsString()).as("a leitura acusou bucket de outra conta").doesNotContain("nao e do dono");
+
+		MockHttpServletRequestBuilder headLapide = MockMvcRequestBuilders.head("/s3/" + bucket + "/so/uma.txt");
+		assinar(headLapide, SECRET, shaVazio());
+		assertThat(mockMvc.perform(headLapide).andReturn().getResponse().getStatus()).isEqualTo(404);
+
+		// E o dono não perdeu o bucket: a listagem continua respondendo 200 e mostrando zero chaves.
+		MockHttpServletRequestBuilder listagem = get("/s3/" + bucket).queryParam("list-type", "2");
+		assinar(listagem, SECRET, shaVazio());
+		var lista = mockMvc.perform(listagem).andReturn().getResponse();
+		assertThat(lista.getStatus()).as(lista.getContentAsString()).isEqualTo(200);
+		assertThat(lista.getContentAsString()).contains("<KeyCount>0</KeyCount>");
+
+		// Regravar a própria chave continua funcionando.
+		gravar("so/uma.txt", "de novo");
 	}
 
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
