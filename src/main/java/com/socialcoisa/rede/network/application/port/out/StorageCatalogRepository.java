@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
+import com.socialcoisa.rede.network.domain.ObjectMetadata;
 import com.socialcoisa.rede.network.domain.StorageBucketPolicy;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.network.domain.StorageRebalance;
@@ -60,15 +61,23 @@ public interface StorageCatalogRepository {
 	boolean discardPending(String id);
 
 	/**
-	 * Devolve ao estado de espera um objeto que teve a gravação desfeita: {@code STORED → PENDING}.
+	 * Devolve um objeto <b>reescrito</b> ao retrato que ele tinha antes da gravação recusada por donagem.
 	 *
 	 * <p>É o par de {@link #markStored} na direção contrária, e existe para a recusa por donagem de um
-	 * {@code PUT} que <b>reescreveu</b> uma chave: apagar a linha seria apagar o objeto do dono. Só o
-	 * estado mudal — o corpo que a gravação recusada deixou no disco fica, e a próxima gravação o
-	 * substitui; os bytes e o digest saem, porque o catálogo não promete mais nada sobre uma cópia que a
-	 * resposta recusou.</p>
+	 * {@code PUT} que <b>reescreveu</b> uma chave: apagar a linha seria apagar o objeto do dono.</p>
+	 *
+	 * <p><b>Antes:</b> a volta era só {@code STORED → PENDING} com {@code bytes} e {@code sha256}
+	 * apagados, e o tipo, o metadado e o prazo ficavam os da gravação recusada. O objeto do dono saía da
+	 * listagem e respondia {@code 404} no {@code GET} e no {@code HEAD}, com o nome de anexo do invasor
+	 * por cima.</p>
+	 *
+	 * <p><b>Agora:</b> recebe o retrato lido antes de abrir a gravação e o devolve inteiro. Um objeto que
+	 * tinha corpo volta a {@code STORED} com o corpo e o digest de antes — é o que o torna servível de
+	 * novo; o que só existia como espera volta a {@code PENDING}, com o tipo, o metadado e o prazo que
+	 * a linha trazia (a abertura de uma versão nova já nasce com eles, então a devolução não os zera).</p>
 	 */
-	boolean restorePending(String id);
+	boolean restorePending(String id, String contentType, Long bytes, String sha256, ObjectMetadata metadata,
+			String cacheControl, String contentDisposition, Instant expiresAt);
 
 	/**
 	 * Listagem por prefixo de chave, ordenada por chave. {@code limit + 1} linhas é o que o chamador
@@ -84,6 +93,31 @@ public interface StorageCatalogRepository {
 	 * dos objetos que existem.</p>
 	 */
 	List<String> bucketsOf(String ownerUserId);
+
+	/**
+	 * O dono registrado do bucket, ou {@code null} se ninguém o registrou ainda.
+	 *
+	 * <p>O {@code CreateBucket} grava o criador em {@code network_storage_buckets.updated_by} — é o
+	 * que permite responder {@code 409 BucketAlreadyExists} antes de o bucket ter o primeiro objeto.
+	 * Para o bucket que nasceu do primeiro upload (sem linha de política), a resposta é o dono do
+	 * objeto mais antigo: a mesma régua do {@code bucketsOf}.</p>
+	 */
+	default java.util.Optional<String> ownerDoBucket(String bucket) {
+		// O criador registrado na linha do bucket manda, e nunca é reescrito (`V373`). Sem ele —
+		// bucket anterior à coluna — vale o dono do primeiro objeto vivo: a régua do `bucketsOf`,
+		// que o CreateBucket usa quando o bucket nasce do primeiro upload.
+		java.util.Optional<String> criador = bucketPolicy(bucket).map(StorageBucketPolicy::ownerUserId)
+			.filter(id -> id != null && !id.isBlank());
+		if (criador.isPresent()) {
+			return criador;
+		}
+		return list(bucket, null, null, 1000).stream()
+			.filter(o -> !"DELETED".equals(o.state()))
+			.map(StorageObject::createdBy)
+			.filter(java.util.Objects::nonNull)
+			.findFirst();
+	}
+
 
 	/**
 	 * O bucket tem objeto no catálogo (vivo ou lápide) e <b>algum</b> é deste dono?

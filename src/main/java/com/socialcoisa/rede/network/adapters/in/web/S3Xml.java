@@ -74,6 +74,21 @@ final class S3Xml {
 		return this;
 	}
 
+	/**
+	 * Atributo com prefixo e namespace: {@code prefix:name="value"}. O valor é dado e a API o escapa;
+	 * o prefixo é declarado no próprio elemento, como o S3 faz no {@code <Grantee xsi:type=...>}.
+	 */
+	S3Xml attribute(String prefix, String namespace, String name, String value) {
+		try {
+			writer.writeNamespace(prefix, namespace);
+			writer.writeAttribute(prefix, namespace, name, value);
+		}
+		catch (XMLStreamException falha) {
+			throw broken(falha);
+		}
+		return this;
+	}
+
 	/** Elemento com texto: o valor é escrito como caracteres, e a API o escapa. */
 	S3Xml element(String name, String value) {
 		open(name);

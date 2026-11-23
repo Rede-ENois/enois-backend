@@ -108,18 +108,21 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		""";
 
 	private static final String SELECT_BUCKET_POLICY = """
-		select bucket, versioning, retain_superseded_days, expire_after_days, updated_by, updated_at
+		select bucket, versioning, retain_superseded_days, expire_after_days, updated_by, updated_at,
+			owner_user_id
 		from network_storage_buckets where bucket = ?
 		""";
 
 	private static final String UPSERT_BUCKET_POLICY = """
 		insert into network_storage_buckets (bucket, versioning, retain_superseded_days, expire_after_days,
-			updated_by, updated_at)
-		values (?, ?, ?, ?, ?, ?)
+			updated_by, updated_at, owner_user_id)
+		values (?, ?, ?, ?, ?, ?, ?)
 		on duplicate key update versioning = values(versioning),
 			retain_superseded_days = values(retain_superseded_days),
 			expire_after_days = values(expire_after_days),
-			updated_by = values(updated_by), updated_at = values(updated_at)
+			updated_by = values(updated_by), updated_at = values(updated_at),
+			-- O criador não é reescrito: quem configura a política não vira dono.
+			owner_user_id = coalesce(owner_user_id, values(owner_user_id))
 		""";
 
 	/** A ordenação é por chave ascendente e versão ascendente para o histórico ser estável. */
@@ -218,8 +221,31 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	 */
 	// Donagem do DeleteBucket: conta vivo e lápide. `bucketsOf` (só vivo) é a resposta certa para ler
 	// e gravar, e errada para apagar — depois da última lápide o dono perderia o próprio bucket.
+	/**
+	 * O dono tem uma <b>linha</b> no bucket — viva ou lápide — ou é o criador registrado na política.
+	 *
+	 * <p><b>Antes:</b> contava só objetos vivos ({@code branch "matéria}}}). O dono registrado por
+	 * {@code CreateBucket} (§4.32) não tem objeto nenhum: o {@code DELETE} do próprio bucket
+	 * respondia {@code 403 AccessDenied} ("não é do dono") e o bucket ficava inapagável. O mesmo
+	 * valia para o dono que apagou a última chave: a lápide existe, mas não era contada.</p>
+	 *
+	 * <p><b>Agora:</b> basta uma linha de qualquer estado, ou a linha de política com
+	 * {@code updated_by} igual ao dono. Quem nunca gravou nada continua de fora.</p>
+	 */
+	/**
+	 * O dono tem <b>linha</b> no bucket: objeto de qualquer estado (vivo ou lapide) ou a linha de
+	 * politica que o {@code CreateBucket} grava com o criador.
+	 *
+	 * <p><b>Antes:</b> contava so objeto vivo. O dono registrado por {@code CreateBucket} (§4.32) nao
+	 * tem objeto nenhum, e o {@code DELETE} do proprio bucket respondia {@code 403 AccessDenied} ("nao
+	 * e do dono"): o bucket ficava inapagavel por quem o criou.</p>
+	 *
+	 * <p><b>Agora:</b> a linha de politica com {@code updated_by} igual ao dono tambem conta. Quem
+	 * nunca gravou nem criou nada num bucket alheio continua de fora.</p>
+	 */
 	private static final String BUCKET_HAS_OBJECTS_OF = """
-		select count(*) from network_storage_objects where bucket = ? and created_by = ?
+		select (select count(*) from network_storage_objects where bucket = ? and created_by = ?)
+			+ (select count(*) from network_storage_buckets where bucket = ? and updated_by = ?)
 		""";
 
 	private static final String BUCKETS_OF = """
@@ -480,7 +506,7 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	public StorageBucketPolicy saveBucketPolicy(StorageBucketPolicy policy) {
 		Timestamp stamp = Timestamp.from(policy.updatedAt());
 		jdbc.update(UPSERT_BUCKET_POLICY, policy.bucket(), policy.versioning(), policy.retainSupersededDays(),
-			policy.expireAfterDays(), policy.updatedBy(), stamp);
+			policy.expireAfterDays(), policy.updatedBy(), stamp, policy.ownerUserId());
 		return bucketPolicy(policy.bucket()).orElseThrow(() -> new IllegalStateException(
 			"politica do bucket " + policy.bucket() + " invisivel apos gravar"));
 	}
@@ -488,7 +514,7 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	private static final RowMapper<StorageBucketPolicy> BUCKET_MAPPER = (ResultSet rs, int rowNum) ->
 		new StorageBucketPolicy(rs.getString("bucket"), rs.getBoolean("versioning"),
 			nullableInt(rs, "retain_superseded_days"), nullableInt(rs, "expire_after_days"),
-			rs.getString("updated_by"), instant(rs, "updated_at"));
+			rs.getString("updated_by"), instant(rs, "updated_at"), rs.getString("owner_user_id"));
 
 	private static Integer nullableInt(ResultSet rs, String column) throws SQLException {
 		int value = rs.getInt(column);
@@ -581,11 +607,20 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	}
 
 	@Override
-	public boolean restorePending(String id) {
+	public boolean restorePending(String id, String contentType, Long bytes, String sha256, ObjectMetadata metadata,
+			String cacheControl, String contentDisposition, Instant expiresAt) {
+		// O retrato lido ANTES da gravação volta inteiro, e o estado também: a linha, depois do
+		// `finishUpload`, tem o conteúdo e o metadado que a gravação recusada deixou, mas o que ela era
+		// antes é o que a recusa devolve. Voltar a `STORED` com o conteúdo de antes é o que a deixa
+		// servível de novo; `PENDING` a tirava da listagem e do GET (e o HEAD da donagem a apagava).
 		return jdbc.update("""
-			update network_storage_objects set state = 'PENDING', bytes = null, sha256 = null, updated_at = ?
+			update network_storage_objects
+			set state = case when ? is null then 'PENDING' else 'STORED' end,
+			  content_type = ?, bytes = ?, sha256 = ?, metadata_json = ?, cache_control = ?,
+			  content_disposition = ?, expires_at = ?, updated_at = ?
 			where id = ? and state = 'STORED'
-			""", Timestamp.from(Instant.now()), id) == 1;
+			""", sha256, contentType, bytes, sha256, metadata.toJson(), cacheControl, contentDisposition,
+			expiresAt == null ? null : Timestamp.from(expiresAt), Timestamp.from(Instant.now()), id) == 1;
 	}
 
 	@Override
@@ -603,7 +638,8 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 
 	@Override
 	public boolean bucketHasObjectsOf(String bucket, String ownerUserId) {
-		Integer total = jdbc.queryForObject(BUCKET_HAS_OBJECTS_OF, Integer.class, bucket, ownerUserId);
+		Integer total = jdbc.queryForObject(BUCKET_HAS_OBJECTS_OF, Integer.class, bucket, ownerUserId, bucket,
+			ownerUserId);
 		return total != null && total > 0;
 	}
 

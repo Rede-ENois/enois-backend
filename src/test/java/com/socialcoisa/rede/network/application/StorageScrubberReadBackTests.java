@@ -340,13 +340,17 @@ class StorageScrubberReadBackTests {
 		public boolean discardPending(String id) {
 			throw new UnsupportedOperationException("nao usado neste teste");
 		}
-		@Override
-		public boolean restorePending(String id) {
+
+		public boolean restorePending(String id, String contentType, Long bytes, String sha256,
+				ObjectMetadata metadata, String cacheControl, String contentDisposition, java.time.Instant expiresAt) {
 			for (int i = 0; i < objects.size(); i++) {
 				StorageObject o = objects.get(i);
 				if (o.id().equals(id) && o.state() == StorageObjectState.STORED) {
-					objects.set(i, StorageObject.current(o.id(), o.bucket(), o.key(), o.contentType(), null, null,
-						StorageObjectState.PENDING, o.createdBy(), o.createdAt(), java.time.Instant.now(), null));
+					objects.set(i, new StorageObject(o.id(), o.bucket(), o.key(), contentType, bytes, sha256,
+						sha256 == null ? StorageObjectState.PENDING : StorageObjectState.STORED, o.createdBy(),
+						o.createdAt(), java.time.Instant.now(),
+						o.deletedAt(), o.version(), o.supersededBy(), expiresAt,
+						metadata == null ? ObjectMetadata.EMPTY : metadata, cacheControl, contentDisposition));
 					return true;
 				}
 			}

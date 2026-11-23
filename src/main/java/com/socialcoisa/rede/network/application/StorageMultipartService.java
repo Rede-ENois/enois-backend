@@ -232,6 +232,42 @@ public class StorageMultipartService {
 		}
 	}
 
+	/**
+	 * Uma página de partes: até {@code maxParts}, só as de número maior que {@code depoisDe}.
+	 *
+	 * <p>Pede {@code maxParts + 1} linhas: a extra diz se há próxima página sem uma segunda consulta.
+	 * "Página cheia" e "há mais" eram a mesma conta no `ListParts` do gateway antes desta rota existir
+	 * (ele devolvia tudo, sem `IsTruncated`).</p>
+	 */
+	public record Pagina(List<Part> partes, boolean truncada) {
+	}
+
+	public Pagina paginaDePartes(String uploadId, int depoisDe, int maxParts) {
+		long inicio = System.nanoTime();
+		try {
+			Pagina pagina = doPaginaDePartes(uploadId, depoisDe, maxParts);
+			// A página é uma listagem para o painel: o `ListParts` do gateway saía pelo `parts`, que
+			// conta `LIST`, e a rota paginada não pode desaparecer da métrica.
+			conta("LIST", inicio, null);
+			return pagina;
+		}
+		catch (RuntimeException recusado) {
+			conta("LIST", inicio, recusado);
+			throw recusado;
+		}
+	}
+
+	private Pagina doPaginaDePartes(String uploadId, int depoisDe, int maxParts) {
+		int teto = Math.max(1, Math.min(maxParts <= 0 ? 1000 : maxParts, 1000));
+		List<Part> achadas = jdbc.query("""
+			select part_number, bytes, sha256 from network_storage_multipart_parts
+			where upload_id = ? and part_number > ? order by part_number limit ?
+			""", (rs, i) -> new Part(rs.getInt("part_number"), rs.getLong("bytes"), rs.getString("sha256")),
+			uploadId, depoisDe, teto + 1);
+		boolean truncada = achadas.size() > teto;
+		return new Pagina(truncada ? achadas.subList(0, teto) : achadas, truncada);
+	}
+
 	private List<Part> doParts(String uploadId) {
 		return jdbc.query("""
 			select part_number, bytes, sha256 from network_storage_multipart_parts
@@ -358,9 +394,22 @@ public class StorageMultipartService {
 	 * Os dois têm de bater.</p>
 	 */
 	public Completed complete(Upload upload, List<Integer> pedidas) {
+		return complete(upload, pedidas, java.util.Map.of());
+	}
+
+	/**
+	 * A conclusão com o ETag que o cliente declarou para cada parte.
+	 *
+	 * <p>O S3 exige que o {@code <ETag>} de cada {@code <Part>} seja o da parte enviada; um ETag
+	 * diferente é {@code InvalidPart} e o upload continua aberto. Antes o ETag era <b>descartado</b> e
+	 * a conclusão respondia {@code 200} com as partes que estavam no disco — se o cliente trocou os
+	 * valores no XML, ele recebia um objeto que não conferiu, em silêncio. Sem ETag declarado para uma
+	 * parte, o número basta: é o que mandam os clientes que não conferem.</p>
+	 */
+	public Completed complete(Upload upload, List<Integer> pedidas, java.util.Map<Integer, String> etags) {
 		long inicio = System.nanoTime();
 		try {
-			Completed pronto = doComplete(upload, pedidas);
+			Completed pronto = doComplete(upload, pedidas, etags);
 			// A gravação do objeto já contou `PUT` no catálogo; contar aqui de novo faria todo upload
 			// grande valer dois. A conclusão conta só quando falha — é ela que o painel precisa ver.
 			return pronto;
@@ -371,7 +420,7 @@ public class StorageMultipartService {
 		}
 	}
 
-	private Completed doComplete(Upload upload, List<Integer> pedidas) {
+	private Completed doComplete(Upload upload, List<Integer> pedidas, java.util.Map<Integer, String> etags) {
 		Instant now = clock.instant();
 		if (now.isAfter(upload.expiresAt())) {
 			discard(upload.uploadId());
@@ -399,6 +448,14 @@ public class StorageMultipartService {
 			if (part == null) {
 				throw new ApiException(400, "InvalidPart",
 					"A parte " + pedidas.get(i) + " nao chegou; reenvie-a antes de concluir.");
+			}
+			String etagDeclarado = etags.get(pedidas.get(i));
+			if (etagDeclarado != null && !etagDeclarado.isEmpty() && !etagDeclarado.equals(part.sha256())) {
+				// O ETag da parte é o digest do que ela tem; diferente é o cliente conferindo outro
+				// conteúdo. Montar assim gravaria bytes que ele não aprovou.
+				throw new ApiException(400, "InvalidPart",
+					"O ETag declarado para a parte " + part.number() + " nao e o da parte que chegou;"
+						+ " reenvie-a ou corrija a lista.");
 			}
 			boolean ultima = i == pedidas.size() - 1;
 			if (!ultima && part.bytes() < MIN_PART_BYTES) {

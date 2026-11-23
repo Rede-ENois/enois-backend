@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
+import com.socialcoisa.rede.network.domain.ObjectMetadata;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.network.domain.StorageObjectState;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
@@ -124,11 +125,21 @@ public abstract class CatalogoEmMemoria implements StorageCatalogRepository {
 		placements.keySet().removeIf(chave -> chave.startsWith(id + "/"));
 		return true;
 	}
+
 	@Override
-	public boolean restorePending(String id) {
-		return replace(id, o -> o.state() == StorageObjectState.STORED,
-			o -> StorageObject.current(o.id(), o.bucket(), o.key(), o.contentType(), null, null,
-				StorageObjectState.PENDING, o.createdBy(), o.createdAt(), java.time.Instant.now(), null));
+	public boolean restorePending(String id, String contentType, Long bytes, String sha256,
+				ObjectMetadata metadata, String cacheControl, String contentDisposition, java.time.Instant expiresAt) {
+		return replace(id, o -> o.state() == StorageObjectState.STORED, o -> comRetrato(o, contentType, bytes, sha256,
+			metadata, cacheControl, contentDisposition, expiresAt));
+	}
+
+	/** O objeto com o retrato recebido e o estado de espera — o mesmo que a recusa por donagem devolve. */
+	private static StorageObject comRetrato(StorageObject o, String contentType, Long bytes, String sha256,
+			ObjectMetadata metadata, String cacheControl, String contentDisposition, java.time.Instant expiresAt) {
+		return new StorageObject(o.id(), o.bucket(), o.key(), contentType, bytes, sha256,
+			sha256 == null ? StorageObjectState.PENDING : StorageObjectState.STORED, o.createdBy(), o.createdAt(),
+			java.time.Instant.now(), o.deletedAt(), o.version(), o.supersededBy(), expiresAt,
+			metadata == null ? ObjectMetadata.EMPTY : metadata, cacheControl, contentDisposition);
 	}
 
 

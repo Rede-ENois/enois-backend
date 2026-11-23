@@ -70,6 +70,11 @@ class PapoRetoServiceTests {
 		return new PapoAssunto(subject, falasPost, 0, pessoas, 0, AGORA, pessoas, 400, potencia, potenciaAntes);
 	}
 
+	/** O agregado com os volumes das duas vésperas medidos — a matéria do crescimento exibido. */
+	private static PapoAssunto agregadoComJanelas(String subject, long falasDia, long falasDiaAnterior) {
+		return new PapoAssunto(subject, 10, 0, 10, 0, AGORA, 10, 400, 40.0, 39.0, falasDia, falasDiaAnterior);
+	}
+
 	/** O assunto com o tamanho REAL da base do escopo — é ele que decide o chão de pessoas. */
 	private static PapoAssunto agregadoComBase(String subject, long falasPost, long pessoas, double potencia,
 			double potenciaAntes, long publicacoesDoEscopo) {
@@ -173,12 +178,12 @@ class PapoRetoServiceTests {
 		// Mesma potência, mesma gente: a que aparece em menos publicações da janela é a conversa
 		// da comunidade; a que aparece em muitas é a fala de todo mundo.
 		repositorio.assuntos.add(new PapoAssunto("pangolim", 30, 0, 8, 2, AGORA, 8, 400, 12.0, 12.0));
-		repositorio.assuntos.add(new PapoAssunto("pessoa", 30, 0, 8, 2, AGORA, 50, 400, 12.0, 12.0));
+		repositorio.assuntos.add(new PapoAssunto("cadeira", 30, 0, 8, 2, AGORA, 50, 400, 12.0, 12.0));
 
 		List<PapoRetoService.SubjectView> ranking = service().ranking();
 
 		assertThat(ranking).extracting(PapoRetoService.SubjectView::subject)
-			.containsExactly("pangolim", "pessoa");
+			.containsExactly("pangolim", "cadeira");
 		assertThat(ranking.get(0).pontuacao()).isGreaterThan(ranking.get(1).pontuacao());
 	}
 
@@ -199,15 +204,83 @@ class PapoRetoServiceTests {
 
 	@Test
 	void statusECrescimentoSaemDaTrajetoriaMedidaNoCorte() {
-		repositorio.assuntos.add(agregado("nascendo", 10, 10, 40.0, 1.0));
-		repositorio.assuntos.add(agregado("sustentado", 10, 10, 40.0, 39.0));
+		repositorio.assuntos.add(agregado("violao", 10, 10, 40.0, 1.0));
+		repositorio.assuntos.add(agregado("mercado", 10, 10, 40.0, 39.0));
 
 		List<PapoRetoService.SubjectView> ranking = service().ranking();
 
-		assertThat(ranking.get(0).subject()).isEqualTo("nascendo");
-		assertThat(ranking.get(0).status()).isEqualTo("EMERGENTE");
-		assertThat(ranking.get(1).status()).isEqualTo("PERSISTENTE");
-		assertThat(ranking.get(1).crescimento()).isLessThan(10.0);
+		// A pontuação empatou (mesmos números); o status, não: nasceu agora × sustentou.
+		assertThat(statusDe(ranking, "violao")).isEqualTo("EMERGENTE");
+		assertThat(statusDe(ranking, "mercado")).isEqualTo("PERSISTENTE");
+		// A linha sem janelas medidas (legada ou de teste) não inventa percentual.
+		assertThat(crescimentoDe(ranking, "violao")).isZero();
+		assertThat(crescimentoDe(ranking, "mercado")).isZero();
+	}
+
+	@Test
+	void crescimentoEhAProporcaoDeVolumeRealDasDuasVesperas() {
+		// Seis falas hoje contra duas ontem: cresceu três vezes — +200%, e não o número da
+		// potência (que soma gente e decaimento e não é proporção de nada).
+		repositorio.assuntos.add(agregadoComJanelas("foguete", 6, 2));
+		repositorio.assuntos.add(agregadoComJanelas("queda", 2, 8));
+		repositorio.assuntos.add(agregadoComJanelas("estavel", 4, 4));
+
+		List<PapoRetoService.SubjectView> ranking = rankingPor("foguete", "queda", "estavel");
+
+		assertThat(crescimentoDe(ranking, "foguete")).isEqualTo(200.0);
+		// Queda não vira percentual negativo na tela: estável.
+		assertThat(crescimentoDe(ranking, "queda")).isZero();
+		assertThat(crescimentoDe(ranking, "estavel")).isZero();
+	}
+
+	@Test
+	void crescimentoNuloQuandoNaoHaVesperaComparavel() {
+		// O assunto nasceu hoje: a véspera é zero e o denominador seria zero — dividir inventaria
+		// "+100%" (foi o "+127%" da produção). Nulo diz "novo em alta".
+		repositorio.assuntos.add(agregadoComJanelas("foguete", 6, 0));
+
+		List<PapoRetoService.SubjectView> ranking = service().ranking();
+
+		assertThat(ranking.get(0).crescimento()).isNull();
+	}
+
+	@Test
+	void crescimentoSemFalaNenhumaNosDoisDiasViraZero() {
+		repositorio.assuntos.add(agregadoComJanelas("quieto", 0, 0));
+
+		List<PapoRetoService.SubjectView> ranking = service().ranking();
+
+		assertThat(ranking.get(0).crescimento()).isZero();
+	}
+
+	/** Os subjects do teste, na ordem pedida (os fixtures têm pontuação empatada). */
+	private List<PapoRetoService.SubjectView> rankingPor(String... subjects) {
+		List<PapoRetoService.SubjectView> ranking = service().ranking();
+		List<PapoRetoService.SubjectView> naOrdem = new ArrayList<>();
+		for (String subject : subjects) {
+			ranking.stream()
+				.filter(v -> v.subject().equals(subject))
+				.findFirst()
+				.ifPresent(naOrdem::add);
+		}
+		return naOrdem;
+	}
+
+	/** O status do subject no ranking, sem depender da ordem do empate. */
+	private String statusDe(List<PapoRetoService.SubjectView> ranking, String subject) {
+		return ranking.stream()
+			.filter(v -> v.subject().equals(subject))
+			.findFirst()
+			.orElseThrow()
+			.status();
+	}
+
+	private static Double crescimentoDe(List<PapoRetoService.SubjectView> ranking, String subject) {
+		return ranking.stream()
+			.filter(v -> v.subject().equals(subject))
+			.findFirst()
+			.orElseThrow()
+			.crescimento();
 	}
 
 	@Test

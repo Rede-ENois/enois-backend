@@ -34,6 +34,8 @@ import com.socialcoisa.rede.network.domain.TaskType;
 import com.socialcoisa.rede.network.domain.StorageBucketPolicy;
 import com.socialcoisa.rede.shared.audit.AuditTrail;
 import com.socialcoisa.rede.shared.web.ApiException;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
 /**
  * O catálogo do Énóis Storage em funcionamento (fase 1).
@@ -74,6 +76,8 @@ public class StorageCatalogService {
 	 */
 	public static final long MIN_DISK_FREE_MB = 1024;
 
+	private static final Logger LOG = LoggerFactory.getLogger(StorageCatalogService.class);
+
 	private final StorageCatalogRepository catalog;
 	private final AuditTrail audit;
 	private final Clock clock;
@@ -83,6 +87,12 @@ public class StorageCatalogService {
 	 * primeiro nó; na fase 2 o corpo vai para o nó designado e este diretório deixa de ser usado.
 	 */
 	private final String storageRoot;
+	/**
+	 * O corpo que cada gravação em curso substituiu, por id de objeto. Existe só durante o
+	 * `finishUpload`, até a gravação ser confirmada ou recusada: a recusa precisa dos bytes de antes,
+	 * não só dos metadados.
+	 */
+	private final java.util.Map<String, Path> backups = new java.util.concurrent.ConcurrentHashMap<>();
 	/**
 	 * Quem escolhe os nós que recebem cópia (fase 3). Fica aqui porque a designação é decidida no
 	 * mesmo passo em que o objeto passa a ter conteúdo: a colocação nasce com a gravação, não num
@@ -261,6 +271,10 @@ public class StorageCatalogService {
 			// A versão vencida sai da chave sem virar lápide: vencimento não é remoção. Se fosse lápide,
 			// o corpo de um objeto só vencido deixaria de ser servido por quem tem cópia, e a coleta o
 			// trataria como removido em vez de expirado. O que ela aponta é a linha nova.
+			//
+			// A linha nova NASCE com o retrato da vencida (V367 e o conteúdo): o reenvio na mesma chave
+			// é o caso normal, e abrir em branco fazia a gravação recusada, ao devolver o objeto, voltar
+			// um objeto sem tipo, sem metadado e sem prazo — o dono perdia o que tinha declarado.
 			String novoId = OBJECT_ID_PREFIX + NodeIds.next("");
 			if (!catalog.markSuperseded(bucket, key, novoId, now)) {
 				throw new ApiException(409, "STORAGE_VERSION_RACE",
@@ -270,7 +284,10 @@ public class StorageCatalogService {
 			// número, e o cache do antigo e do novo precisa reler.
 			esquecerUsoDoParticipante(existente.createdBy());
 			esquecerUsoDoParticipante(actorId);
-			return catalog.createPending(novoId, bucket, key, type, actorId, now);
+			StorageObject aberta = catalog.createPending(novoId, bucket, key, type, actorId, now);
+			catalog.setClientHeaders(aberta.id(), existente.metadata(), existente.cacheControl(),
+				existente.contentDisposition());
+			return catalog.findById(aberta.id()).orElse(aberta);
 		}
 		StorageObject object = catalog.createPending(OBJECT_ID_PREFIX + NodeIds.next(""), bucket, key, type,
 			actorId, now);
@@ -360,6 +377,18 @@ public class StorageCatalogService {
 			headers.contentDisposition());
 	}
 
+	/**
+	 * O que a linha <b>já tem</b> declarado: o metadado, o {@code Cache-Control} e o
+	 * {@code Content-Disposition}.
+	 *
+	 * <p>É o que o {@code PUT} precisa <b>antes</b> de {@link #saveClientHeaders}: a gravação nova
+	 * declara o que o cliente mandou, e a recusa por donagem tem de devolver o retrato de antes — o valor
+	 * que estava na linha, e não o da requisição recusada.</p>
+	 */
+	public ClientHeaders declaredHeaders(StorageObject object) {
+		return new ClientHeaders(object.metadata(), object.cacheControl(), object.contentDisposition());
+	}
+
 	/** Quantas vezes a gravação versionada tenta de novo quando outra requisição venceu a corrida. */
 	private static final int VERSIONED_ATTEMPTS = 3;
 
@@ -429,6 +458,28 @@ public class StorageCatalogService {
 		}
 	}
 
+	/**
+	 * O mesmo upload, com o corpo vazio permitido: é o caminho do <b>cliente S3</b>.
+	 *
+	 * <p>O S3 aceita objeto de 0 byte — é o marcador de "pasta" que {@code aws s3 cp --recursive}
+	 * cria e o resultado de uma escrita vazia legítima. Recusá-lo fazia um cliente que sincroniza uma
+	 * árvore inteira tratar a sincronização como falha em cada marcador, com todos os arquivos já
+	 * gravados. A recusa continua valendo para o upload <b>do nó</b> ({@link #store}): ali o corpo
+	 * vazio é sinal de gravação que não aconteceu.</p>
+	 */
+	public StorageObject finishUploadPermitindoVazio(String objectId, InputStream body, String actorId) {
+		long inicio = System.nanoTime();
+		try {
+			StorageObject gravado = doFinishUpload(objectId, body, actorId, true, true);
+			conta("PUT", StorageOperationMetrics.Resultado.OK, inicio);
+			return gravado;
+		}
+		catch (RuntimeException recusado) {
+			conta("PUT", resultadoDe(recusado), inicio);
+			throw recusado;
+		}
+	}
+
 	public StorageObject finishUpload(String objectId, InputStream body, String actorId) {
 		long inicio = System.nanoTime();
 		try {
@@ -458,13 +509,18 @@ public class StorageCatalogService {
 	 */
 	private StorageObject doFinishUpload(String objectId, InputStream body, String actorId,
 			boolean cobrarPartesReservadas) {
+		return doFinishUpload(objectId, body, actorId, cobrarPartesReservadas, false);
+	}
+
+	private StorageObject doFinishUpload(String objectId, InputStream body, String actorId,
+			boolean cobrarPartesReservadas, boolean aceitaVazio) {
 		StorageObject object = catalog.findById(objectId)
 			.orElseThrow(() -> new ApiException(404, "STORAGE_OBJECT_UNKNOWN", "Objeto nao encontrado no catalogo."));
 		if (object.state() != StorageObjectState.PENDING) {
 			throw new ApiException(409, "STORAGE_ALREADY_STORED", "O objeto ja tem copia confirmada.");
 		}
 		Spooled measured = measure(body);
-		if (measured.bytes() == 0) {
+		if (measured.bytes() == 0 && !aceitaVazio) {
 			deleteQuietly(measured.temp());
 			throw new ApiException(400, "STORAGE_EMPTY_BODY", "O corpo enviado esta vazio.");
 		}
@@ -483,6 +539,7 @@ public class StorageCatalogService {
 			throw semCota;
 		}
 		Path destination = bodyPath(object.id());
+		Path backup = guardarCorpoAnterior(destination);
 		try {
 			if (envelope == null) {
 				Files.move(measured.temp(), destination, StandardCopyOption.REPLACE_EXISTING);
@@ -497,7 +554,11 @@ public class StorageCatalogService {
 		}
 		catch (IOException unwritable) {
 			deleteQuietly(measured.temp());
+			restaurarBackup(object.id(), backup, destination);
 			throw new ApiException(500, "STORAGE_ROOT_UNAVAILABLE", "Nao foi possivel gravar o objeto.");
+		}
+		if (backup != null) {
+			backups.put(object.id(), backup);
 		}
 		Instant now = clock.instant();
 		if (!catalog.markStored(object.id(), measured.bytes(), measured.sha256(), now)) {
@@ -513,7 +574,81 @@ public class StorageCatalogService {
 		audit.record(actorId, "STORAGE_OBJECT_STORED", object.id(),
 			"{\"bucket\":\"" + escape(object.bucket()) + "\",\"key\":\"" + escape(object.key()) + "\",\"bytes\":"
 				+ measured.bytes() + ",\"sha256\":\"" + measured.sha256() + "\",\"via\":\"s3\"}");
+		// O backup NÃO sai aqui: esta gravação ainda pode ser recusada depois de confirmada (donagem),
+		// e a recusa precisa dos bytes de antes. Quem solta é quem responde `200` (`soltarBackup`).
 		return catalog.findById(object.id()).orElse(object);
+	}
+
+	/**
+	 * Guardo o corpo que já estava na chave antes de a gravação o substituir.
+	 *
+	 * <p>Uma recusa depois da gravação (donagem, por exemplo) devolve o objeto ao que era; os
+	 * metadados sozinhos não devolvem os bytes, porque o {@code GET} serve do disco. Devolve o caminho
+	 * do backup, ou {@code null} quando não havia corpo ou ele não pôde ser movido.</p>
+	 */
+	private Path guardarCorpoAnterior(Path destination) {
+		if (!Files.exists(destination)) {
+			return null;
+		}
+		Path backup = Path.of(destination + ".antes-" + java.util.UUID.randomUUID().toString().replace("-", ""));
+		try {
+			Files.move(destination, backup, StandardCopyOption.ATOMIC_MOVE);
+			return backup;
+		}
+		catch (IOException semBackup) {
+			return null;
+		}
+	}
+
+	/**
+	 * Devolve o corpo que a gravação substituiu, se ela guardou um.
+	 *
+	 * <p>{@code restorePending} devolve os metadados, mas o {@code GET} serve do disco: sem os bytes de
+	 * antes, o {@code HEAD} do dono volta certo (12 bytes) e o {@code GET} entrega os da gravação
+	 * recusada (13). Chamado dentro de {@link #restorePending}; idempotente.</p>
+	 */
+	private void restaurarBackup(String objectId, Path backup, Path destination) {
+		if (backup == null) {
+			return;
+		}
+		try {
+			Files.move(backup, destination, StandardCopyOption.REPLACE_EXISTING);
+		}
+		catch (IOException naoRestaurou) {
+			// O backup fica no disco, com nome próprio: apagá-lo perderia o único corpo de antes. O
+			// caminho fica no log para quem for recuperar à mão.
+			LOG.warn("Corpo de antes nao voltou para `{}`; o backup esta em `{}`.", objectId, backup);
+		}
+	}
+
+	/**
+	 * Restaura o objeto ao retrato de antes, <b>incluindo os bytes</b>.
+	 *
+	 * <p>O {@code finishUpload} grava o arquivo antes de o catálogo confirmar; uma recusa depois disso
+	 * (donagem) precisa devolver o corpo anterior. Os metadados sozinhos devolviam um objeto pela
+	 * metade: {@code HEAD} com o tamanho antigo e {@code GET} com o conteúdo recusado.</p>
+	 */
+	public boolean restorePending(String id, String contentType, Long bytes, String sha256, ObjectMetadata metadata,
+			String cacheControl, String contentDisposition, Instant expiresAt) {
+		Path backup = backups.remove(id);
+		if (backup != null) {
+			restaurarBackup(id, backup, bodyPath(id));
+		}
+		return catalog.restorePending(id, contentType, bytes, sha256, metadata, cacheControl, contentDisposition,
+			expiresAt);
+	}
+
+	/**
+	 * Descarta o backup de uma gravação confirmada.
+	 *
+	 * <p>Chamado quando a resposta é `200`: o corpo novo é o que fica, e o de antes não serve mais. Sem
+	 * isso, todo PUT sobre uma chave existente deixaria um arquivo `.antes-*` para trás.</p>
+	 */
+	public void soltarBackup(String objectId) {
+		Path backup = backups.remove(objectId);
+		if (backup != null) {
+			deleteQuietly(backup);
+		}
 	}
 
 	/**
@@ -710,8 +845,10 @@ public class StorageCatalogService {
 				"Retencao so faz sentido em bucket com versionamento.");
 		}
 		Instant now = clock.instant();
+		// `ownerUserId` só é gravado se a coluna ainda estiver vazia (o `coalesce` do UPSERT): o
+		// primeiro a tocar na linha é o criador do bucket, e as políticas seguintes não o trocam.
 		StorageBucketPolicy saved = catalog.saveBucketPolicy(new StorageBucketPolicy(bucket, versioning,
-			retainSupersededDays, expireAfterDays, actorId, now));
+			retainSupersededDays, expireAfterDays, actorId, now, actorId));
 		audit.record(actorId, "STORAGE_BUCKET_POLICY", bucket,
 			"{\"versioning\":" + versioning + ",\"retainSupersededDays\":" + json(retainSupersededDays)
 				+ ",\"expireAfterDays\":" + json(expireAfterDays) + "}");
@@ -859,6 +996,7 @@ public class StorageCatalogService {
 		// O arquivo vai para o destino ANTES do catálogo: registrar "tem cópia" apontando para um
 		// arquivo que ainda não existe daria um objeto servível sem bytes.
 		Path destination = bodyPath(object.id());
+		Path backup = guardarCorpoAnterior(destination);
 		try {
 			if (envelope == null) {
 				Files.move(measured.temp(), destination, StandardCopyOption.REPLACE_EXISTING);
@@ -873,14 +1011,21 @@ public class StorageCatalogService {
 		}
 		catch (IOException unwritable) {
 			deleteQuietly(measured.temp());
+			restaurarBackup(object.id(), backup, destination);
 			throw new ApiException(500, "STORAGE_ROOT_UNAVAILABLE", "Nao foi possivel gravar o objeto.");
+		}
+		if (backup != null) {
+			backups.put(object.id(), backup);
 		}
 		Instant now = clock.instant();
 		if (!catalog.markStored(object.id(), measured.bytes(), measured.sha256(), now)) {
 			// Corrida: outra requisição confirmou o objeto entre a leitura e o update. A transição é
 			// condicional no estado, então o perdedor descobre aqui em vez de sobrescrever o medido.
-			// O arquivo recém-escrito sai: quem venceu gravou o dele no mesmo caminho.
+			// O arquivo recém-escrito sai: quem venceu gravou o dele no mesmo caminho. O backup também
+			// sai — nesta corrida ele pode ser o de antes de outra gravação, e devolvê-lo passaria por
+			// cima do que venceu.
 			deleteQuietly(destination);
+			soltarBackup(object.id());
 			throw new ApiException(409, "STORAGE_ALREADY_STORED", "O objeto ja tem copia confirmada.");
 		}
 		catalog.savePlacement(new StoragePlacement(object.id(), 0, node.id(), measured.bytes(), measured.sha256(),

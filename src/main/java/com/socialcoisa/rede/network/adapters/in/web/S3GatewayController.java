@@ -1,6 +1,8 @@
 package com.socialcoisa.rede.network.adapters.in.web;
 
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
@@ -11,6 +13,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -33,6 +36,7 @@ import com.socialcoisa.rede.network.application.port.out.S3CredentialRepository;
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
 import com.socialcoisa.rede.network.domain.ObjectMetadata;
 import com.socialcoisa.rede.network.domain.S3Credential;
+import com.socialcoisa.rede.network.domain.StorageBucketPolicy;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.network.domain.StorageObjectState;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
@@ -55,6 +59,8 @@ import jakarta.servlet.http.HttpServletRequest;
  * <table>
  * <tr><th>operação</th><th>rota</th><th>semântica</th></tr>
  * <tr><td>PutObject</td><td>{@code PUT /{bucket}/{key}}</td><td>igual</td></tr>
+ * <tr><td>CopyObject</td><td>{@code PUT /{bucket}/{key}} + {@code x-amz-copy-source}</td><td>copia no servidor, sem trafegar os bytes</td></tr>
+ * <tr><td>UploadPartCopy</td><td>{@code PUT /{bucket}/{key}?partNumber=&uploadId=} + {@code x-amz-copy-source}</td><td>parte a partir de um intervalo da origem</td></tr>
  * <tr><td>GetObject</td><td>{@code GET /{bucket}/{key}}</td><td>igual; Range/206/416 e 304 por ETag</td></tr>
  * <tr><td>HeadObject</td><td>{@code HEAD /{bucket}/{key}}</td><td>igual</td></tr>
  * <tr><td>DeleteObject</td><td>{@code DELETE /{bucket}/{key}}</td><td><b>lápide</b>, não remoção imediata (igual ao S3 com versionamento)</td></tr>
@@ -71,10 +77,8 @@ import jakarta.servlet.http.HttpServletRequest;
  * mesmo caminho do PUT simples: nada vira objeto antes de o arquivo inteiro existir. Detalhes em
  * {@code StorageMultipartService} e em {@code 18-storage-gateway-s3.md} §4.2.</p>
  *
- * <p><b>Não implementado:</b> CopyObject e UploadPartCopy são <b>recusados com 501</b> antes de
- * qualquer escrita — um PUT com {@code x-amz-copy-source} não grava objeto nem parte vazia. ACL,
- * tagging, {@code versionId}, bucket policy e {@code POST} de formulário não têm suporte e não são
- * anunciados; a doc 18 é a lista do que existe.</p>
+ * <p><b>Não implementado:</b> ACL, tagging, {@code versionId}, bucket policy e {@code POST} de
+ * formulário não têm suporte e não são anunciados; a doc 18 é a lista do que existe.</p>
  *
  * <p><b>Documento em XML:</b> o gateway serializa à mão, sem {@code ListBucketResult.class}. O motivo
  * é controle de namespace e de ordem dos elementos: um JAXB muda a ordem e o SDK não protesta, mas
@@ -97,8 +101,46 @@ class S3GatewayController {
 	/** Teto de chaves por página, igual ao S3. */
 	private static final int MAX_KEYS = 1000;
 
-	/** O cabeçalho do S3 para copiar no servidor. CopyObject e UploadPartCopy não existem aqui. */
+	/** O cabeçalho do S3 para copiar no servidor: CopyObject e UploadPartCopy existem. */
 	private static final String COPY_SOURCE = "x-amz-copy-source";
+
+	/**
+	 * Subrecursos do objeto que o S3 implementa com um {@code PUT} e que este gateway <b>não</b>: a
+	 * etiqueta, a ACL, o bloqueio de objeto e a retenção. Estão juntos porque a consequência de não
+	 * recusá-los é a mesma — o XML da operação viraria o conteúdo do objeto.
+	 */
+	/**
+	 * Subrecursos do PUT que gravaria o XML deles no corpo do objeto. Lista e não {@code Set}: a
+	 * mensagem cita <b>um</b> subrecurso, e com dois na mesma requisição ({@code ?tagging&acl}) a ordem
+	 * de um {@code Set.of} não é contrato — a mesma requisição responderia uma coisa ou outra.
+	 */
+	private static final List<String> SUBRECURSOS_QUE_GRAVARIAM = List.of("tagging", "acl", "retention",
+		"legal-hold", "object-lock");
+
+	/**
+	 * Subrecursos de <b>leitura</b> do objeto que este gateway nao endereca.
+	 *
+	 * <p>{@code versionId} e a versao especifica (o gateway so serve a corrente, e devolver outra
+	 * com {@code 200} e conteudo errado com cara de certo); {@code torrent} e {@code partNumber}
+	 * so fazem sentido junto de operacoes que aqui nao existem. Sem a recusa, os tres serviam o
+	 * corpo do arquivo — e a URL pre-assinada de {@code ?torrent} baixava o objeto.</p>
+	 *
+	 * <p>{@code response-content-*} fica de fora: entra na assinatura da URL pre-assinada (§4.28),
+	 * entao adulterar e recusado, mas o gateway <b>nao</b> aplica o cabecalho (o
+	 * {@code Content-Disposition} e o declarado no {@code PUT}).</p>
+	 */
+	private static final List<String> SUBRECURSOS_DE_LEITURA_NAO_ENDERECADOS = List.of("versionId", "torrent",
+		"partNumber");
+
+	/**
+	 * Subrecurso de <b>bucket</b> que e politica no S3 e aqui nao existe (a unica que age e a do
+	 * varredor, {@code ?lifecycle}). Recusados no {@code DELETE}, onde sem a guarda viravam
+	 * {@code DeleteBucket} — e num bucket vazio apagavam o bucket.
+	 */
+	private static final List<String> SUBRECURSOS_DE_BUCKET_NAO_IMPLEMENTADOS = List.of("cors", "tagging",
+		"policy", "website", "notification", "logging", "replication", "encryption", "accelerate",
+		"requestPayment", "publicAccessBlock", "ownershipControls", "analytics", "intelligent-tiering",
+		"metrics", "inventory", "object-lock");
 
 	/** O formato de instante da S3: sempre três casas decimais e sempre {@code Z}. */
 	private static final DateTimeFormatter S3_INSTANT = DateTimeFormatter
@@ -150,6 +192,183 @@ class S3GatewayController {
 
 	// ---------------------------------------------------------------- bucket: listagem e remoção
 
+	/**
+	 * GetBucketLifecycleConfiguration: {@code GET /{bucket}?lifecycle}.
+	 *
+	 * <p><b>Antes:</b> caía no {@code ListObjects} e respondia {@code 200 <ListBucketResult>} — o
+	 * cliente perguntava o ciclo de vida e recebia a lista de objetos.</p>
+	 *
+	 * <p><b>Agora:</b> devolve as <b>mesmas</b> regras que o varredor aplica: {@code <Expiration>} vem
+	 * do {@code expire_after_days} e {@code <NoncurrentVersionExpiration>} do
+	 * {@code retain_superseded_days} da política (V352). Sem política, {@code
+	 * <LifecycleConfiguration/>}.</p>
+	 */
+	@GetMapping(value = "/{bucket}", params = "lifecycle")
+	ResponseEntity<String> getBucketLifecycle(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "LIST");
+		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
+		StorageBucketPolicy politica = storage.bucketPolicy(bucket);
+		S3Xml xml = new S3Xml();
+		xml.root("LifecycleConfiguration");
+		if (politica.expireAfterDays() != null || politica.retainSupersededDays() != null) {
+			xml.open("Rule").element("ID", "enois-padrao").element("Status", "Enabled")
+				.open("Filter").element("Prefix", "").close("Filter");
+			if (politica.expireAfterDays() != null) {
+				xml.open("Expiration").element("Days", String.valueOf(politica.expireAfterDays()))
+					.close("Expiration");
+			}
+			if (politica.retainSupersededDays() != null) {
+				xml.open("NoncurrentVersionExpiration")
+					.element("NoncurrentDays", String.valueOf(politica.retainSupersededDays()))
+					.close("NoncurrentVersionExpiration");
+			}
+			xml.close("Rule");
+		}
+		return xml(HttpStatus.OK).body(xml.toString());
+	}
+
+	/**
+	 * PutBucketLifecycleConfiguration: {@code PUT /{bucket}?lifecycle}.
+	 *
+	 * <p><b>Antes:</b> caía no {@code PutObject} e respondia
+	 * {@code 400 InvalidRequest "Informe o bucket e a chave"}. O operador que tentava ajustar o prazo
+	 * de expiração pelo protocolo S3 <b>não conseguia</b> — e se tivesse uma rota que respondesse
+	 * sucesso, acreditaria ter mudado um prazo que o varredor segue aplicando do jeito antigo.</p>
+	 *
+	 * <p><b>Agora:</b> {@code <Expiration><Days>} grava em {@code expire_after_days} e
+	 * {@code <NoncurrentVersionExpiration><NoncurrentDays>} em {@code retain_superseded_days} — a
+	 * mesma linha que o varredor lê. O versionamento é preservado. Regra que este gateway não honra
+	 * ({@code <Transition>}, {@code <AbortIncompleteMultipartUpload>}, {@code <Date>}) é
+	 * {@code 400 InvalidRequest}: aceitar calado é o defeito que este ciclo fecha.</p>
+	 */
+	@RequestMapping(value = "/{bucket}", method = RequestMethod.PUT, params = "lifecycle")
+	ResponseEntity<Void> putBucketLifecycle(@PathVariable String bucket, HttpServletRequest request)
+			throws IOException {
+		S3Credential credential = authenticate(request, "PUT");
+		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
+		String texto = new String(body(request).readAllBytes(), StandardCharsets.UTF_8);
+		for (String naoHonrada : List.of("Transition", "AbortIncompleteMultipartUpload", "NoncurrentVersionTransition")) {
+			if (texto.contains("<" + naoHonrada + ">")) {
+				throw s3Error(400, "InvalidRequest",
+					"Este gateway nao aplica <" + naoHonrada + ">; a politica nao foi alterada.");
+			}
+		}
+		// Por varredura do elemento, não por string literal: qualquer indentação (`\t`, 6 espaços,
+		// `\r\n`) escapava da comparação byte-exata, `diasDoXml` voltava `null` e o `UPSERT` gravava
+		// `null` por cima do prazo que o varredor segue aplicando — apagar em silêncio.
+		for (String bloco : List.of("Expiration", "NoncurrentVersionExpiration", "NoncurrentVersionTransition")) {
+			for (String trecho : trechosDe(texto, bloco)) {
+				boolean temData = trecho.contains("<Date>");
+				boolean temDias = trecho.contains("<Days>") || trecho.contains("<NoncurrentDays>");
+				if (temData || !temDias) {
+					throw s3Error(400, "InvalidRequest",
+						"Prazo em <" + bloco + "> sem <Days> nao e suportado; a politica nao foi alterada.");
+				}
+			}
+		}
+		Integer dias = diasDoXml(texto, "Expiration", "Days");
+		Integer diasNaoCorrente = diasDoXml(texto, "NoncurrentVersionExpiration", "NoncurrentDays");
+		if (dias == null && diasNaoCorrente == null && !texto.contains("<Rule>")) {
+			throw s3Error(400, "MalformedXML", "LifecycleConfiguration sem <Rule>.");
+		}
+		StorageBucketPolicy atual = storage.bucketPolicy(bucket);
+		storage.putBucketPolicy(credential.ownerUserId(), bucket, atual.versioning(),
+			diasNaoCorrente, dias);
+		return ResponseEntity.ok().build();
+	}
+
+	/**
+	 * GetBucketAcl: {@code GET /{bucket}?acl}.
+	 *
+	 * <p><b>Antes:</b> caía no {@code ListObjects} e respondia {@code 200 <ListBucketResult>}. O
+	 * {@code aws s3api get-bucket-acl} lia uma lista de arquivos como se fosse a ACL do bucket.</p>
+	 *
+	 * <p><b>Agora:</b> {@code <AccessControlPolicy>} com o dono da credencial e um grant
+	 * {@code FULL_CONTROL} para ele. É a verdade do Storage: um bucket tem <b>um</b> dono, sem ACL por
+	 * usuário — expor isso é mais honesto que inventar grantees.</p>
+	 */
+	@GetMapping(value = "/{bucket}", params = "acl")
+	ResponseEntity<String> getBucketAcl(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "LIST");
+		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
+		S3Xml xml = new S3Xml();
+		xml.root("AccessControlPolicy").open("Owner")
+			.element("ID", credential.ownerUserId())
+			.element("DisplayName", credential.ownerUserId())
+			.close("Owner")
+			.open("AccessControlList").open("Grant")
+			.open("Grantee").attribute("xsi", "http://www.w3.org/2001/XMLSchema-instance", "type", "CanonicalUser")
+			.element("ID", credential.ownerUserId())
+			.element("DisplayName", credential.ownerUserId())
+			.close("Grantee")
+			.element("Permission", "FULL_CONTROL")
+			.close("Grant").close("AccessControlList");
+		return xml(HttpStatus.OK).body(xml.toString());
+	}
+
+	/**
+	 * GetBucketPolicy: {@code GET /{bucket}?policy}.
+	 *
+	 * <p><b>Antes:</b> caía no {@code ListObjects} e respondia {@code 200 <ListBucketResult>} — o
+	 * {@code get-bucket-policy} lia objetos como política.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 404 NoSuchBucketPolicy}, o "não há política" do S3. O gateway não aceita
+	 * política de recurso: quem manda é a donagem (§4 do brief), e devolver um documento vazio ou
+	 * inventado seria pior que a ausência declarada.</p>
+	 */
+	@GetMapping(value = "/{bucket}", params = "policy")
+	ResponseEntity<Void> getBucketPolicy(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "LIST");
+		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
+		throw s3Error(404, "NoSuchBucketPolicy",
+			"Este bucket nao tem politica de recurso; o acesso e do dono da credencial.");
+	}
+
+	/** O inteiro de {@code <Bloco><Campo>N</Campo></Bloco>} no XML, ou {@code null} se ausente. */
+	private static Integer diasDoXml(String texto, String bloco, String campo) {
+		for (String trecho : trechosDe(texto, bloco)) {
+			String valor = entre(trecho, "<" + campo + ">", "</" + campo + ">");
+			if (valor != null) {
+				try {
+					return Integer.parseInt(valor.trim());
+				}
+				catch (NumberFormatException naoENumero) {
+					return null;
+				}
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Os trechos de cada {@code <Bloco>…</Bloco>} do XML, na ordem.
+	 *
+	 * <p>Varredura linear, como o parser do `CompleteMultipartUpload`: a versão anterior era uma
+	 * expressão com {@code .*?} dos dois lados sobre o corpo inteiro, que o CodeQL marca e que erra
+	 * em qualquer formatação que não a esperada.</p>
+	 */
+	private static List<String> trechosDe(String texto, String bloco) {
+		List<String> trechos = new java.util.ArrayList<>();
+		int cursor = 0;
+		while (true) {
+			int abre = texto.indexOf("<" + bloco + ">", cursor);
+			if (abre < 0) {
+				break;
+			}
+			int fecha = texto.indexOf("</" + bloco + ">", abre);
+			if (fecha < 0) {
+				break;
+			}
+			trechos.add(texto.substring(abre + bloco.length() + 2, fecha));
+			cursor = fecha + bloco.length() + 3;
+		}
+		return trechos;
+	}
+
 	/** ListObjectsV2 ({@code ?list-type=2}) e ListObjects v1. */
 	@GetMapping("/{bucket}")
 	ResponseEntity<String> listObjects(@PathVariable String bucket, HttpServletRequest request) {
@@ -160,7 +379,13 @@ class S3GatewayController {
 		boolean v2 = "2".equals(query.get("list-type"));
 		int maxKeys = parseMaxKeys(query.get("max-keys"));
 		// `continuation-token` (v2) e `marker` (v1) são a mesma coisa: a chave da última página.
-		String after = v2 ? query.get("continuation-token") : query.get("marker");
+		// `start-after` (só no V2) é a chave de partida de quem começa a varredura no meio; era
+		// ignorado, e o cliente que retomava a partir de uma chave relistava tudo o que já tinha.
+		// Quando há `continuation-token`, ele manda: o token já diz onde continuar, e o S3 ignora o
+		// `start-after` nesse caso.
+		String after = v2
+			? (query.get("continuation-token") != null ? query.get("continuation-token") : query.get("start-after"))
+			: query.get("marker");
 		String prefix = query.get("prefix");
 		String delimiter = query.get("delimiter");
 		// `delimiter` vazio é "sem agrupamento" na prática; o parâmetro do S3 é de um caractere.
@@ -269,6 +494,8 @@ class S3GatewayController {
 	@DeleteMapping("/{bucket}")
 	ResponseEntity<Void> deleteBucket(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "DELETE");
+		// `DELETE ?cors`, `?tagging`, `?policy` e apagar a politica daquele subrecurso, nao o bucket.
+		recusarSubrecursoNoBucket(request, bucket);
 		requireBucket(credential, bucket);
 		requireBucketDoDonoOuEsvaziado(credential, bucket);
 		List<StorageObject> vivos = storage.list(bucket, null, null, 1);
@@ -295,6 +522,103 @@ class S3GatewayController {
 		throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
 	}
 
+	/**
+	 * Recusa, antes de abrir o objeto, o subrecurso de leitura que nao e {@code GetObject}.
+	 *
+	 * <p>O {@code GET} do objeto nao olhava a consulta: {@code ?versionId=} pedia uma versao e
+	 * recebia a corrente com {@code 200} — o SDK que acabou de listar versoes lia outro conteudo
+	 * como sucesso. {@code ?torrent} e {@code ?partNumber} so tem sentido com operacoes que aqui
+	 * nao existem.</p>
+	 */
+	private static void recusarLeituraDeSubrecurso(HttpServletRequest request, String chaveDoObjeto) {
+		for (String naoImplementado : SUBRECURSOS_DE_LEITURA_NAO_ENDERECADOS) {
+			if (query(request).containsKey(naoImplementado)) {
+				throw s3Error(501, "NotImplemented", "O subrecurso '" + naoImplementado
+					+ "' nao e suportado; " + chaveDoObjeto + " nao foi lido.");
+			}
+		}
+	}
+
+	/**
+	 * O {@code DELETE} de subrecurso no <b>bucket</b> nao e {@code DeleteBucket}.
+	 *
+	 * <p>{@code ?cors}, {@code ?tagging}, {@code ?policy}, {@code ?website} e os demais sao
+	 * politicas do bucket no S3. Aqui a unica que age e a do varredor ({@code ?lifecycle}, §4.36).
+	 * Sem a guarda, {@code DELETE /{bucket}?cors} entrava no {@code DeleteBucket}: com objeto vivo
+	 * respondia {@code 409 BucketNotEmpty} (mentindo sobre o motivo) e num bucket vazio apagaria o
+	 * bucket em resposta a "remova a CORS". A recusa e {@code 501}, como no {@code PUT} de
+	 * subrecurso que gravaria (§4.21).</p>
+	 */
+	private static void recusarSubrecursoNoBucket(HttpServletRequest request, String bucket) {
+		for (String subrecurso : SUBRECURSOS_DE_BUCKET_NAO_IMPLEMENTADOS) {
+			if (query(request).containsKey(subrecurso)) {
+				throw s3Error(501, "NotImplemented", "O subrecurso de bucket '" + subrecurso
+					+ "' nao e suportado; o bucket " + bucket + " nao foi alterado.");
+			}
+		}
+	}
+
+	/**
+	 * Subrecurso da consulta que o gateway não implementa e que, sem esta guarda, seria gravado.
+	 *
+	 * <p><b>Antes:</b> o {@code PUT} era despachado pela chave da rota, sem olhar a consulta. Um
+	 * {@code PUT ?tagging}, {@code ?acl}, {@code ?retention}, {@code ?legal-hold} ou {@code ?object-lock}
+	 * abria um upload da chave, gravava o <b>XML daquela operação</b> como corpo, substituía o arquivo
+	 * de verdade e respondia {@code 200} — que é o "sucesso" de várias operações do S3 que este gateway
+	 * não implementa. O cliente via sucesso e o objeto ficava com o XML dentro.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 501 NotImplemented} no XML do S3, devolvendo o subrecurso não suportado,
+	 * e nada é gravado. A lista vizinha (ecoada em {@code 200} sem gravar) já fazia isso para
+	 * {@code ?versioning}, {@code ?encryption}, {@code ?logging} e companhia; o que distingue os dois
+	 * grupos é justamente o que acontece sem a guarda — ali, um corpo vazio confundido com objeto;
+	 * aqui, o objeto sobrescrito.</p>
+	 */
+	private static void recusarSubrecurso(HttpServletRequest request, String chaveDoObjeto) throws IOException {
+		Set<String> pedidos = query(request).keySet();
+		for (String naoImplementado : SUBRECURSOS_QUE_GRAVARIAM) {
+			if (pedidos.contains(naoImplementado)) {
+				// A recusa acontece antes de o corpo ser lido, e o corpo do `?tagging` é o XML da
+				// etiqueta. Em conexão persistente, responder 501 com o corpo pendente faz o servidor
+				// fechar a conexão no meio de um pedido; drenar (e descartar) deixa a próxima
+				// requisição da mesma conexão chegar inteira. RFC 9110 §15.6.2.
+				drenarCorpo(request);
+				throw s3Error(501, "NotImplemented", "O subrecurso '" + naoImplementado + "' nao e suportado; "
+					+ chaveDoObjeto + " nao foi alterado.");
+			}
+		}
+	}
+
+	/** Lê e descarta o corpo já enviado, sem guardar. Sem corpo, não há nada a drenar. */
+	static void drenarCorpo(HttpServletRequest request) throws IOException {
+		try (InputStream corpo = request.getInputStream()) {
+			corpo.transferTo(OutputStream.nullOutputStream());
+		} catch (IOException recusado) {
+			// O cliente pode já ter cortado o envio ao receber a recusa; a resposta é a mesma.
+		}
+	}
+
+	/**
+	 * A chave apagada por <b>outra conta</b> ainda está resolvida pela lápide dela.
+	 *
+	 * <p><b>Antes:</b> a recusa por donagem conferia o bucket pelo que estava visível — a lápide do
+	 * dono e o objeto do intruso apareciam juntos, e a gravação do intruso passava. Na pior ordem de
+	 * eventos, um {@code PUT} numa chave vizinha depois do {@code DELETE} do dono deixava a chave
+	 * <b>inteira</b> com o objeto do intruso (tipo, metadado e nome de anexo dele) e respondia
+	 * {@code 200}: o {@code DELETE} do dono não entregava o nome da chave.</p>
+	 *
+	 * <p><b>Agora:</b> a lápide é uma tomada de posse — a chave só volta a aceitar escrita de quem
+	 * a apagou. É a regra do bucket aplicada à chave, e a resposta continua no vocabulário do S3
+	 * ({@code 403 AccessDenied}).</p>
+	 */
+	private void recusarChaveDeOutraConta(S3Credential credential, String bucket, String key) {
+		catalog.find(bucket, key).ifPresent(atual -> {
+			if (atual.state() == StorageObjectState.DELETED && !credential.ownerUserId().equals(atual.createdBy())) {
+				throw s3Error(403, "AccessDenied", "A chave foi removida por outra conta.");
+			}
+		});
+	}
+
+
 	// ---------------------------------------------------------------- objeto
 
 	/**
@@ -314,17 +638,35 @@ class S3GatewayController {
 	 * esta gravação criou e devolve o objeto que ela substituiu ao estado em que estava.</p>
 	 */
 	@RequestMapping(value = "/{bucket}/{*key}", method = RequestMethod.PUT)
-	ResponseEntity<Void> putObject(@PathVariable String bucket, HttpServletRequest request) {
+	ResponseEntity<?> putObject(@PathVariable String bucket, HttpServletRequest request) throws IOException {
 		S3Credential credential = authenticate(request, "PUT");
 		requireBucket(credential, bucket);
-		recusarCopiaNoServidor(request);
 		String key = keyOf(request);
+		// Subrecurso que este gateway não implementa NÃO é PutObject: recusa antes de tocar no
+		// catálogo e antes do desvio para a cópia. Ver `recusarSubrecurso`.
+		recusarSubrecurso(request, "/" + bucket + "/" + key);
+		// A chave apagada por outra conta é recusa antes de abrir: a lápide é tomada de posse (§4.22).
+		recusarChaveDeOutraConta(credential, bucket, key);
+		String origemDaCopia = request.getHeader(COPY_SOURCE);
+		if (origemDaCopia != null && !origemDaCopia.isBlank()) {
+			return copiarObjeto(credential, bucket, key, origemDaCopia, request);
+		}
 		// O tipo é o que o SDK manda; sem ele, o mesmo padrão do resto do módulo.
 		String contentType = request.getContentType();
 		// Refazer um PUT na mesma chave é o caso normal do S3: `beginUpload` devolve o objeto que já
 		// existe, que pode estar STORED. Guardar o estado de antes é o que permite devolvê-lo intacto
-		// se a gravação for recusada por donagem.
+		// se a gravação for recusada por donagem (§4.22).
 		StorageObject antes = catalog.find(bucket, key).orElse(null);
+		// `If-None-Match`/`If-Match` no PUT: o cliente pediu uma CONDIÇÃO, e a resposta de "a chave
+		// existe" é `412 PreconditionFailed`, não `409 ObjectAlreadyStored` (que é a confissão de que
+		// o gateway não sobrescreve). Antes os dois cabeçalhos eram ignorados: `--if-none-match '*'`
+		// — o jeito de criar sem sobrescrever — recebia a recusa da sobrescrita ou, com o objeto
+		// PENDING, gravava por cima. A conferência vem antes de abrir upload (§4.29).
+		// Um `PENDING` é gravação em curso, não versão publicada: o `sha256` dele é nulo, e comparar
+		// com ele faria `If-Match` do ETag confirmado anterior falhar só por haver upload na vez.
+		exigirPrecondicoesDoPut(request, antes != null && antes.state() == StorageObjectState.PENDING ? null : antes);
+		// O retrato do que a linha declarava, lido antes de `saveClientHeaders` trocá-lo (§4.22).
+		StorageCatalogService.ClientHeaders antesDeclarados = StorageCatalogService.ClientHeaders.NONE;
 		// Metadado e cabeçalhos declarados junto do corpo (V367): lidos ANTES da gravação, porque cabeçalho
 		// recusado não pode deixar objeto criado — nem um PENDING decorado com o que não foi aceito.
 		StorageCatalogService.ClientHeaders declarados = clientHeaders(request);
@@ -338,8 +680,20 @@ class S3GatewayController {
 			// do Control Plane. A abertura traduzia pelo `catch` da gravação, que ela nunca alcança.
 			throw noVocabularioDoS3(recusado);
 		}
+		// O retrato de antes é a linha que o `finishUpload` vai gravar, lida <b>depois</b> da abertura e
+		// <b>antes</b> do `saveClientHeaders`: `beginUpload` devolve a linha da chave — a mesma, se ela
+		// ainda está viva, ou a nova que substitui a aposentada — com o conteúdo e o metadado que ela
+		// tem. Se a gravação for recusada, é isto que volta.
+		antes = pending;
+		// O `saveClientHeaders` troca o que a linha declarava pelos desta requisição — e um `PUT` sem
+		// `x-amz-meta-*` apagaria o metadado do dono. O que a linha já tinha é lido ANTES e volta na
+		// recusa, junto do resto do retrato.
+		antesDeclarados = storage.declaredHeaders(antes);
 		storage.saveClientHeaders(pending, declarados);
-		boolean iaCriar = antes == null || !antes.id().equals(pending.id());
+		// "Criar" é a linha ainda sem corpo: a chave nova e a que uma linha anterior deixou sem conteúdo.
+		// Reescrever um objeto confirmado é 409, o mesmo contrato de antes desta mudança. Numa chave nova
+		// de outra conta, a recusa por donagem apaga esta linha — sem conteúdo, nada a devolver.
+		boolean iaCriar = antes.bytes() == null;
 		if (!iaCriar && antes.state() != StorageObjectState.PENDING) {
 			throw s3Error(409, "ObjectAlreadyStored", "A chave ja tem copia confirmada; use outro nome de chave.");
 		}
@@ -349,15 +703,19 @@ class S3GatewayController {
 		// falha opaca do cliente em vez de "seu espaço acabou".
 		StorageObject stored;
 		try {
-			stored = storage.finishUpload(pending.id(), body(request), credential.ownerUserId());
+			// Corpo vazio é objeto válido no S3 (marcador de "pasta" do `aws s3 cp --recursive`):
+			// o caminho do cliente aceita 0 byte, o do nó continua recusando.
+			stored = storage.finishUploadPermitindoVazio(pending.id(), body(request), credential.ownerUserId());
 		}
 		catch (ApiException recusado) {
 			throw noVocabularioDoS3(recusado);
 		}
 		if (!bucketSemDono(bucket, credential.ownerUserId())) {
-			desfazer(stored, antes);
+			desfazer(stored, antes, antesDeclarados);
 			throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
 		}
+		// A requisição passou: o corpo de antes não serve mais e o backup sai do disco.
+		storage.soltarBackup(stored.id());
 		return ResponseEntity.ok()
 			.eTag("\"" + stored.sha256() + "\"")
 			.header(HttpHeaders.CONTENT_LENGTH, "0")
@@ -365,19 +723,281 @@ class S3GatewayController {
 	}
 
 	/**
+	 * CopyObject: {@code PUT /{bucket}/{key}} com {@code x-amz-copy-source} copia os bytes da origem
+	 * para o destino <b>sem o cliente enviar o arquivo</b>.
+	 *
+	 * <p><b>Antes:</b> o cabeçalho era recusado com {@code 501 NotImplemented} — a operação não existia.
+	 * {@code aws s3 cp --recursive} e {@code rclone copy} usam a cópia no servidor para não baixar e
+	 * reenviar cada arquivo; sem ela, um cliente que não cai para o caminho lento (baixar e mandar de
+	 * novo) falha no item, e o que cai gasta a banda duas vezes.</p>
+	 *
+	 * <p><b>Agora:</b> a origem é lida pelo mesmo caminho de download ({@code readBody}, que só entrega
+	 * o que o catálogo tem como servível e confere a réplica 0) e atravessa o mesmo
+	 * {@code finishUpload} do PUT. Nada é carregado em memória: o corpo vai do disco de origem ao
+	 * temporário da gravação em blocos de 64 KiB. O destino é um objeto novo do mesmo dono da
+	 * credencial; o ETag devolvido é o sha-256 do que foi escrito, não o da origem — se os dois
+	 * divergirem, o que vale é o que está no disco.</p>
+	 *
+	 * <p><b>Cabeçalhos:</b> {@code x-amz-metadata-directive} aceita {@code COPY} (padrão: content-type,
+	 * metadado, Cache-Control e Content-Disposition da origem) e {@code REPLACE} (o que veio nesta
+	 * requisição). {@code x-amz-copy-source-if-match} e {@code -if-none-match} são conferidos contra o
+	 * ETag da origem; as condições por data respondem {@code 501} em vez de serem ignoradas — uma
+	 * condição aceita e não aplicada é uma resposta errada com cara de certa. {@code versionId} fica
+	 * de fora: a versão corrente é a única que o gateway endereça.</p>
+	 *
+	 * <p><b>Semântica herdada do PUT:</b> copiar para uma chave que já tem cópia confirmada responde
+	 * {@code 409 ObjectAlreadyStored} (o gateway não sobrescreve; um bucket versionado cria a versão
+	 * nova, como no PUT) e copiar um objeto sobre ele mesmo responde {@code 400 InvalidRequest}.</p>
+	 */
+	private ResponseEntity<?> copiarObjeto(S3Credential credential, String bucket, String key,
+			String cabecalhoDaOrigem, HttpServletRequest request) {
+		OrigemDaCopia origem = origemDaCopia(cabecalhoDaOrigem);
+		StorageObject fonte = origemServivel(credential, origem);
+		exigirPrecondicoesDaCopia(request, fonte);
+
+		boolean mesmoObjeto = origem.bucket().equals(bucket)
+			&& (origem.key().equals(key) || origem.chaveBruta().equals(key));
+		if (mesmoObjeto) {
+			throw s3Error(400, "InvalidRequest",
+				"Copiar um objeto sobre ele mesmo nao e suportado; use PUT para trocar o conteudo.");
+		}
+		// A donagem do destino é conferida ANTES da abertura: uma cópia para bucket de outra conta não
+		// chega a reservar chave. O PUT precisa gravar primeiro (um bucket novo nasce do primeiro
+		// objeto); a cópia já sabe que o destino existe e de quem é.
+		if (!bucketSemDono(bucket, credential.ownerUserId())) {
+			throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
+		}
+
+		boolean substituirMetadado = diretivaDeMetadadoSubstitui(request);
+		StorageCatalogService.ClientHeaders cabecalhos = substituirMetadado ? clientHeaders(request)
+			: new StorageCatalogService.ClientHeaders(fonte.metadata(), fonte.cacheControl(),
+				fonte.contentDisposition());
+		// O tipo do destino é o da origem no COPY e o declarado na requisição no REPLACE. O
+		// `beginUpload` é quem grava o content-type; `saveClientHeaders` não o carrega.
+		String tipoDoDestino = substituirMetadado ? request.getContentType() : fonte.contentType();
+		StorageObject antes = catalog.find(bucket, key).orElse(null);
+		StorageObject pending;
+		try {
+			pending = storage.beginUpload(credential.ownerUserId(), bucket, key, tipoDoDestino);
+		}
+		catch (ApiException recusado) {
+			throw noVocabularioDoS3(recusado);
+		}
+		boolean iaCriar = antes == null || !antes.id().equals(pending.id());
+		if (!iaCriar && antes.state() != StorageObjectState.PENDING) {
+			// A recusa vem antes de `saveClientHeaders`: reescrever metadado de um objeto confirmado
+			// que a resposta diz não ter sido tocado deixaria o catálogo mentindo sobre o conteúdo.
+			throw s3Error(409, "ObjectAlreadyStored",
+				"A chave ja tem copia confirmada; use outro nome de chave.");
+		}
+		StorageCatalogService.ClientHeaders cabecalhosDeAntes = pending.id().equals(antes == null ? null : antes.id())
+			? storage.declaredHeaders(antes) : StorageCatalogService.ClientHeaders.NONE;
+		storage.saveClientHeaders(pending, cabecalhos);
+		StorageObject stored;
+		try (InputStream corpoDaOrigem = storage.readBody(fonte.id())) {
+			stored = storage.finishUploadPermitindoVazio(pending.id(), corpoDaOrigem, credential.ownerUserId());
+		}
+		catch (ApiException recusado) {
+			throw noVocabularioDoS3(recusado);
+		}
+		catch (java.io.IOException fechou) {
+			throw s3Error(500, "InternalError", "A origem nao pode ser lida para a copia.");
+		}
+		if (!bucketSemDono(bucket, credential.ownerUserId())) {
+			// Corrida: o bucket passou a ter objeto de outra conta entre a conferência e a gravação.
+			desfazer(stored, antes, cabecalhosDeAntes);
+			throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
+		}
+		storage.soltarBackup(stored.id());
+		S3Xml xml = new S3Xml();
+		xml.root("CopyObjectResult").element("ETag", "\"" + stored.sha256() + "\"")
+			.element("LastModified", lastModified(stored));
+		return xml(HttpStatus.OK).eTag("\"" + stored.sha256() + "\"").body(xml.toString());
+	}
+
+	/**
+	 * A origem de uma cópia: do dono da credencial, dentro do escopo e servível.
+	 *
+	 * <p>É a mesma régua do {@code CopyObject} e do {@code UploadPartCopy} — um lugar só para as duas
+	 * operações. `bucketsOf` só conhece bucket que já tem objeto vivo; um bucket vazio (inclusive o
+	 * que ainda não existe) não tem dono, e a resposta certa para a origem ausente é 404, não 403.</p>
+	 */
+	private StorageObject origemServivel(S3Credential credential, OrigemDaCopia origem) {
+		// O escopo da credencial vale para a origem também: ler de um bucket fora do escopo não é
+		// uma operação que a credencial autoriza, ainda que o dono seja o mesmo.
+		requireBucket(credential, origem.bucket());
+		boolean bucketDaOrigemEhNossa = catalog.bucketsOf(credential.ownerUserId()).contains(origem.bucket())
+			|| bucketSemDono(origem.bucket(), credential.ownerUserId());
+		if (!bucketDaOrigemEhNossa) {
+			throw s3Error(403, "AccessDenied", "O bucket de origem nao e do dono da credencial.");
+		}
+		StorageObject fonte;
+		try {
+			fonte = storage.requireDownloadable(origem.bucket(), origem.key(), "GET");
+		}
+		catch (ApiException naoAchou) {
+			// Duas formas de chave convivem na instalação: o caminho do PUT guarda o que veio na URI
+			// (percent-encoded) e um cliente pode mandar a chave já decodificada no cabeçalho. Tentar
+			// as duas é o que faz a cópia encontrar o objeto nas duas.
+			if (origem.key().equals(origem.chaveBruta())) {
+				throw noVocabularioDoS3(naoAchou);
+			}
+			try {
+				fonte = storage.requireDownloadable(origem.bucket(), origem.chaveBruta(), "GET");
+			}
+			catch (ApiException tambemNaoAchou) {
+				throw noVocabularioDoS3(tambemNaoAchou);
+			}
+		}
+		if (!credential.ownerUserId().equals(fonte.createdBy())) {
+			// A donagem do bucket pode ter mudado entre a lista e a leitura; o objeto é a verdade.
+			throw s3Error(403, "AccessDenied", "O objeto de origem nao e do dono da credencial.");
+		}
+		return fonte;
+	}
+
+	/** A origem de uma cópia, com a chave como veio e a chave decodificada. */
+	private record OrigemDaCopia(String bucket, String key, String chaveBruta) {
+	}
+
+	/**
+	 * {@code x-amz-copy-source} é um <b>caminho</b>: {@code /bucket/chave}, com percent-encoding.
+	 *
+	 * <p>{@code +} não vira espaço — essa regra é de query string. O SDK manda {@code %2B} para uma
+	 * chave com mais, mas um {@code +} literal também é uma chave com mais; tratar os dois como espaço
+	 * faria a cópia procurar um objeto que não existe.</p>
+	 */
+	private static OrigemDaCopia origemDaCopia(String cabecalho) {
+		String valor = cabecalho.trim();
+		if (valor.startsWith("/")) {
+			valor = valor.substring(1);
+		}
+		if (valor.indexOf('?') >= 0) {
+			// `?versionId=` não é endereçável pelo gateway (a versão corrente é a única que ele serve).
+			throw s3Error(501, "NotImplemented",
+				"Copiar uma versao especifica (versionId) nao e suportado.");
+		}
+		int barra = valor.indexOf('/');
+		if (barra <= 0 || barra == valor.length() - 1) {
+			throw s3Error(400, "InvalidArgument", "x-amz-copy-source precisa ser /bucket/chave.");
+		}
+		String bruta = valor.substring(barra + 1);
+		return new OrigemDaCopia(decodificaCaminho(valor.substring(0, barra)), decodificaCaminho(bruta), bruta);
+	}
+
+	private static String decodificaCaminho(String valor) {
+		try {
+			// `%2B` é o mais; `+` literal também. Trocar o literal por `%2B` antes de decodificar
+			// preserva os dois e ainda aceita `%20` para espaço.
+			return java.net.URLDecoder.decode(valor.replace("+", "%2B"), StandardCharsets.UTF_8);
+		}
+		catch (IllegalArgumentException invalido) {
+			throw s3Error(400, "InvalidArgument", "x-amz-copy-source tem percent-encoding invalido.");
+		}
+	}
+
+	/**
+	 * As condições da origem. As de ETag são aplicadas; as de data são recusadas com {@code 501} em vez
+	 * de ignoradas — aceitar o cabeçalho e copiar mesmo assim seria uma resposta que mente.
+	 */
+	private static void exigirPrecondicoesDaCopia(HttpServletRequest request, StorageObject fonte) {
+		if (request.getHeader("x-amz-copy-source-if-modified-since") != null
+				|| request.getHeader("x-amz-copy-source-if-unmodified-since") != null) {
+			throw s3Error(501, "NotImplemented",
+				"As condicoes de data da copia nao sao suportadas; use if-match ou if-none-match.");
+		}
+		String ifMatch = request.getHeader("x-amz-copy-source-if-match");
+		if (ifMatch != null && !etagNaLista(ifMatch, fonte)) {
+			throw s3Error(412, "PreconditionFailed", "O ETag da origem nao confere com If-Match.");
+		}
+		String ifNoneMatch = request.getHeader("x-amz-copy-source-if-none-match");
+		if (ifNoneMatch != null && etagNaLista(ifNoneMatch, fonte)) {
+			throw s3Error(412, "PreconditionFailed", "O ETag da origem confere com If-None-Match.");
+		}
+	}
+
+	/**
+	 * As condições do PUT contra o objeto que já está na chave (pode ser {@code null}).
+	 *
+	 * <p>{@code If-None-Match: *} é "só se não existir"; {@code If-Match} é "só se for esta versão".
+	 * As de data não são implementadas e respondem {@code 501} em vez de serem ignoradas, como as da
+	 * cópia. Chave livre com {@code If-Match} não confere: não há versão para casar.</p>
+	 */
+	private static void exigirPrecondicoesDoPut(HttpServletRequest request, StorageObject existente) {
+		if (request.getHeader("If-Modified-Since") != null || request.getHeader("If-Unmodified-Since") != null) {
+			throw s3Error(501, "NotImplemented",
+				"As condicoes de data no PUT nao sao suportadas; use If-Match ou If-None-Match.");
+		}
+		String ifMatch = request.getHeader("If-Match");
+		if (ifMatch != null && !ifMatch.isBlank()) {
+			if (existente == null || !etagNaLista(ifMatch, existente)) {
+				throw s3Error(412, "PreconditionFailed", "O objeto nao confere com If-Match.");
+			}
+		}
+		String ifNoneMatch = request.getHeader("If-None-Match");
+		if (ifNoneMatch != null && !ifNoneMatch.isBlank() && existente != null
+				&& etagNaLista(ifNoneMatch, existente)) {
+			throw s3Error(412, "PreconditionFailed", "A chave ja existe (If-None-Match).");
+		}
+	}
+
+	static boolean etagNaLista(String cabecalho, StorageObject fonte) {
+		// `sha256` nulo é linha `PENDING` (gravação em curso) ou sem corpo: não é versão. Sem ETag,
+		// só o asterisco casa — e ele casa porque a chave <b>existe</b>. Comparar o nulo com
+		// `"null"` fazia o `If-Match` do ETag confirmado falhar por causa de um upload na vez.
+		if (fonte.sha256() == null) {
+			return "*".equals(cabecalho.trim());
+		}
+		String comAspas = "\"" + fonte.sha256() + "\"";
+		for (String candidato : cabecalho.split(",")) {
+			String valor = candidato.trim();
+			if ("*".equals(valor) || comAspas.equals(valor) || fonte.sha256().equals(valor)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** {@code COPY} (padrão) mantém o metadado da origem; {@code REPLACE} usa o da requisição. */
+	private static boolean diretivaDeMetadadoSubstitui(HttpServletRequest request) {
+		String diretiva = request.getHeader("x-amz-metadata-directive");
+		if (diretiva == null || diretiva.isBlank()) {
+			return false;
+		}
+		if ("REPLACE".equalsIgnoreCase(diretiva.trim())) {
+			return true;
+		}
+		if ("COPY".equalsIgnoreCase(diretiva.trim())) {
+			return false;
+		}
+		throw s3Error(400, "InvalidArgument", "x-amz-metadata-directive aceita COPY ou REPLACE.");
+	}
+
+	/**
 	 * Desfaz uma gravação recusada por donagem.
 	 *
 	 * <p>O que conta é <b>a linha desta gravação</b>, não {@code stored.id()}: quando a chave já existia,
 	 * {@code finishUpload} devolve o <i>mesmo</i> id, e apagar a linha seria apagar o objeto do dono — o
-	 * oposto do que a recusa quer. Por isso só o objeto <b>novo</b> ({@code iaCriar}) é removido; o que
-	 * existia antes é devolvido ao estado anterior (o corpo já gravado deixa o catálogo e volta a ser
-	 * PENDING, que é o estado de espera que ele realmente tem).</p>
+	 * oposto do que a recusa quer. Por isso só a linha que ainda não tinha corpo é removida; o que
+	 * existia antes volta inteiro — estado, conteúdo, tipo, metadado e prazo —, e o corpo já gravado
+	 * pelo {@code finishUpload} é trocado pelos bytes de antes.</p>
 	 */
-	private void desfazer(StorageObject stored, StorageObject antes) {
-		if (antes != null && antes.id().equals(stored.id())) {
-			catalog.restorePending(stored.id());
+	private void desfazer(StorageObject stored, StorageObject antes,
+			StorageCatalogService.ClientHeaders antesDeclarados) {
+		if (antes.bytes() != null || antes.state() != StorageObjectState.PENDING) {
+			// A chave já tinha objeto: o que a recusa devolve é o retrato de antes — estado, conteúdo,
+			// tipo, metadado e prazo —, porque o `finishUpload` deixou ali o da gravação recusada.
+			// Apagar a linha seria apagar o objeto do dono.
+			// Pelo serviço, não pelo repositório: é ele que guarda o corpo de antes e o devolve ao
+			// disco. Só os metadados, o HEAD reportava o retrato do dono e o GET servia os bytes da
+			// gravação recusada.
+			storage.restorePending(stored.id(), antes.contentType(), antes.bytes(), antes.sha256(),
+				antesDeclarados.metadata(), antesDeclarados.cacheControl(), antesDeclarados.contentDisposition(),
+				antes.expiresAt());
 			return;
 		}
+		// A linha era desta gravação — sem conteúdo e sem estado. Apagá-la é o que impede o objeto
+		// recusado de dar o bucket ao intruso.
 		catalog.discardPending(stored.id());
 	}
 
@@ -426,15 +1046,17 @@ class S3GatewayController {
 	/**
 	 * UploadPart: {@code PUT /{bucket}/{key}?partNumber=N&uploadId=...}.
 	 *
+	 * <p>Com {@code x-amz-copy-source} é o <b>UploadPartCopy</b>: a parte vem de um intervalo da
+	 * origem, não do corpo da requisição ({@link #copiarParte}).</p>
+	 *
 	 * <p>A credencial é a do upload aberto (e do dono dela) — não uma assinatura nova. É o que impede
 	 * que uma parte entre no upload por uma conta que não abriu nenhum.</p>
 	 */
 	@RequestMapping(value = "/{bucket}/{*key}", method = RequestMethod.PUT, params = {
 			"partNumber", "uploadId" })
-	ResponseEntity<Void> uploadPart(@PathVariable String bucket, HttpServletRequest request) {
+	ResponseEntity<?> uploadPart(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "PUT");
 		requireBucket(credential, bucket);
-		recusarCopiaNoServidor(request);
 		java.util.Map<String, String> query = query(request);
 		var upload = uploadDaChave(credential, bucket, request);
 		int numero;
@@ -443,6 +1065,10 @@ class S3GatewayController {
 		}
 		catch (NumberFormatException notNumber) {
 			throw s3Error(400, "InvalidArgument", "partNumber invalido.");
+		}
+		String origemDaCopia = request.getHeader(COPY_SOURCE);
+		if (origemDaCopia != null && !origemDaCopia.isBlank()) {
+			return copiarParte(credential, upload, numero, origemDaCopia, request);
 		}
 		// O `Content-Length` é o único tamanho conhecido antes de ler: com ele a cota recusa a parte
 		// sem gravar nada; sem ele (corpo em chunks), a conta fecha depois de a parte ser medida.
@@ -468,6 +1094,122 @@ class S3GatewayController {
 	}
 
 	/**
+	 * UploadPartCopy: {@code PUT ?partNumber=&uploadId=} com {@code x-amz-copy-source} copia um
+	 * <b>intervalo</b> da origem para dentro do upload aberto.
+	 *
+	 * <p><b>Antes:</b> a parte com o cabeçalho respondia {@code 501}; copiar um arquivo grande em
+	 * partes (o caminho de {@code rclone} e do {@code aws s3 cp} acima de 8 MB) não existia.</p>
+	 *
+	 * <p><b>Agora:</b> {@code x-amz-copy-source-range: bytes=primeiro-ultimo} (inclusive, base zero)
+	 * recorta a origem; sem o cabeçalho, a parte é o objeto inteiro. O recorte é lido pelo mesmo
+	 * {@code readBody} do download e entra pelo mesmo {@code receivePart} do envio direto — cota,
+	 * digest, temporário e substituição de parte reenviada são os mesmos. A conclusão continua
+	 * aplicando o mínimo de 5 MiB às partes intermediárias. A resposta é o {@code CopyPartResult} do
+	 * S3, com o ETag do que foi gravado.</p>
+	 */
+	private ResponseEntity<?> copiarParte(S3Credential credential,
+			com.socialcoisa.rede.network.application.StorageMultipartService.Upload upload, int numero,
+			String cabecalhoDaOrigem, HttpServletRequest request) {
+		OrigemDaCopia origem = origemDaCopia(cabecalhoDaOrigem);
+		StorageObject fonte = origemServivel(credential, origem);
+		exigirPrecondicoesDaCopia(request, fonte);
+		long inicio = 0;
+		long tamanho = fonte.bytes();
+		String faixa = request.getHeader("x-amz-copy-source-range");
+		if (faixa != null && !faixa.isBlank()) {
+			long[] intervalo = intervaloDaCopia(faixa, fonte.bytes());
+			inicio = intervalo[0];
+			tamanho = intervalo[1];
+		}
+		com.socialcoisa.rede.network.application.StorageMultipartService.Part parte;
+		try (InputStream corpo = storage.readBody(fonte.id())) {
+			corpo.skipNBytes(inicio);
+			// O tamanho vai como `anunciado`: a cota recusa a parte antes de qualquer byte, como no
+			// envio direto com Content-Length.
+			parte = multipart.receivePart(upload, numero, limite(corpo, tamanho), tamanho);
+		}
+		catch (ApiException recusado) {
+			throw noVocabularioDoS3(recusado);
+		}
+		catch (java.io.IOException falhou) {
+			throw s3Error(500, "InternalError", "A origem nao pode ser lida para a copia da parte.");
+		}
+		S3Xml xml = new S3Xml();
+		xml.root("CopyPartResult").element("ETag", "\"" + parte.sha256() + "\"")
+			.element("LastModified", S3_INSTANT.format(clock.instant()));
+		return xml(HttpStatus.OK).body(xml.toString());
+	}
+
+	/**
+	 * {@code bytes=primeiro-ultimo}, inclusive, base zero. Fora do objeto, invertido ou malformado é
+	 * {@code 400 InvalidArgument}: copiar um intervalo que não existe gravaria uma parte que o cliente
+	 * não pediu.
+	 */
+	private static long[] intervaloDaCopia(String cabecalho, long tamanhoDaOrigem) {
+		String valor = cabecalho.trim();
+		if (!valor.startsWith("bytes=")) {
+			throw s3Error(400, "InvalidArgument",
+				"x-amz-copy-source-range precisa ser bytes=primeiro-ultimo.");
+		}
+		String[] limites = valor.substring("bytes=".length()).split("-", -1);
+		if (limites.length != 2 || limites[0].isBlank() || limites[1].isBlank()) {
+			throw s3Error(400, "InvalidArgument",
+				"x-amz-copy-source-range precisa ser bytes=primeiro-ultimo.");
+		}
+		long primeiro;
+		long ultimo;
+		try {
+			primeiro = Long.parseLong(limites[0].trim());
+			ultimo = Long.parseLong(limites[1].trim());
+		}
+		catch (NumberFormatException invalido) {
+			throw s3Error(400, "InvalidArgument", "x-amz-copy-source-range tem numero invalido.");
+		}
+		if (primeiro < 0 || ultimo < primeiro || ultimo >= tamanhoDaOrigem) {
+			throw s3Error(400, "InvalidArgument",
+				"O intervalo pedido nao cabe na origem de " + tamanhoDaOrigem + " bytes.");
+		}
+		return new long[] { primeiro, ultimo - primeiro + 1 };
+	}
+
+	/** Um fluxo que entrega no máximo {@code tamanho} bytes do fluxo da origem. */
+	private static InputStream limite(InputStream origem, long tamanho) {
+		return new InputStream() {
+
+			private long entregues;
+
+			@Override
+			public int read() throws java.io.IOException {
+				if (entregues >= tamanho) {
+					return -1;
+				}
+				int lido = origem.read();
+				if (lido >= 0) {
+					entregues++;
+				}
+				return lido;
+			}
+
+			@Override
+			public int read(byte[] destino, int inicio, int quantidade) throws java.io.IOException {
+				if (entregues >= tamanho) {
+					return -1;
+				}
+				int lido = origem.read(destino, inicio, (int) Math.min(quantidade, tamanho - entregues));
+				if (lido > 0) {
+					entregues += lido;
+				}
+				return lido;
+			}
+
+			@Override
+			public void close() throws java.io.IOException {
+				origem.close();
+			}
+		};
+	}
+
+	/**
 	 * CompleteMultipartUpload: {@code POST /{bucket}/{key}?uploadId=...} com a lista de partes.
 	 *
 	 * <p>A lista vem em XML ({@code <CompleteMultipartUpload><Part><PartNumber>..}). O corpo só é
@@ -479,8 +1221,10 @@ class S3GatewayController {
 		S3Credential credential = authenticate(request, "PUT");
 		requireBucket(credential, bucket);
 		var upload = uploadDaChave(credential, bucket, request);
-		java.util.List<Integer> pedidas = partesDoXml(body(request));
-		var concluido = multipart.complete(upload, pedidas);
+		java.util.List<Parte> pedidas = partesDoXml(body(request));
+		var concluido = multipart.complete(upload, pedidas.stream().map(Parte::numero).toList(),
+			pedidas.stream().collect(java.util.stream.Collectors.toMap(Parte::numero,
+				p -> p.etag() == null ? "" : p.etag(), (a, b) -> a)));
 		S3Xml xml = new S3Xml();
 		xml.root("CompleteMultipartUploadResult").element("Location", bucket + "/" + concluido.key())
 			.element("Bucket", bucket).element("Key", concluido.key()).element("ETag", "\"" + concluido.etag() + "\"");
@@ -533,34 +1277,95 @@ class S3GatewayController {
 		S3Credential credential = authenticate(request, "LIST");
 		requireBucket(credential, bucket);
 		var upload = uploadDaChave(credential, bucket, request);
+		Map<String, String> query = query(request);
+		// `part-number-marker` é EXCLUSIVO no S3: a próxima página começa depois dele. Sem isso o
+		// cliente que pagina recebia a mesma parte na primeira e na segunda página, e a lista sem
+		// `IsTruncated` fazia ele parar convencido de que tinha visto tudo.
+		int depoisDe = inteiroOu(query.get("part-number-marker"), 0);
+		int maxParts = inteiroOu(query.get("max-parts"), 1000);
+		var pagina = multipart.paginaDePartes(upload.uploadId(), depoisDe, maxParts);
 		S3Xml xml = new S3Xml();
 		xml.root("ListPartsResult").element("Bucket", bucket).element("Key", upload.key())
-			.element("UploadId", upload.uploadId());
-		for (var part : multipart.parts(upload.uploadId())) {
+			.element("UploadId", upload.uploadId())
+			.element("PartNumberMarker", depoisDe).element("MaxParts", Math.max(1, Math.min(maxParts, 1000)))
+			.element("IsTruncated", pagina.truncada());
+		for (var part : pagina.partes()) {
 			xml.open("Part").element("PartNumber", part.number()).element("ETag", "\"" + part.sha256() + "\"")
 				.element("Size", part.bytes()).close("Part");
+		}
+		if (pagina.truncada() && !pagina.partes().isEmpty()) {
+			xml.element("NextPartNumberMarker", pagina.partes().get(pagina.partes().size() - 1).number());
 		}
 		xml.close("ListPartsResult");
 		return xml(HttpStatus.OK).body(xml.toString());
 	}
 
-	/** A lista de {@code <PartNumber>} do CompleteMultipartUpload, na ordem em que o cliente mandou. */
-	private static java.util.List<Integer> partesDoXml(java.io.InputStream body) throws java.io.IOException {
-		String texto = new String(body.readAllBytes(), StandardCharsets.UTF_8);
-		java.util.List<Integer> numeros = new java.util.ArrayList<>();
-		java.util.regex.Matcher m = java.util.regex.Pattern.compile("<PartNumber>\\s*(\\d+)\\s*</PartNumber>")
-			.matcher(texto);
-		while (m.find()) {
-			numeros.add(Integer.parseInt(m.group(1)));
-		}
-		if (numeros.isEmpty()) {
-			throw s3Error(400, "MalformedXML", "CompleteMultipartUpload sem partes.");
-		}
-		return numeros;
+	/** Uma {@code <Part>} do CompleteMultipartUpload: o número e o ETag que o cliente conferiu. */
+	record Parte(int numero, String etag) {
 	}
 
 	/**
-	 * GetObject: Range/206/416, 304 por If-None-Match, ETag = digest.
+	 * A lista de partes do CompleteMultipartUpload, na ordem em que o cliente mandou.
+	 *
+	 * <p>O {@code <ETag>} de cada {@code <Part>} é lido junto do número. O S3 exige que ele seja o da
+	 * parte que chegou; antes era descartado, e um cliente que montava o XML com o ETag de outra parte
+	 * recebia {@code 200} com bytes que ele não conferiu.</p>
+	 *
+	 * <p><b>Divergência do S3:</b> aqui, {@code <Part>} sem {@code <ETag>} é aceito e o número basta — é
+	 * o que mandam os clientes que não conferem. A AWS responde {@code MalformedXML} nesse caso; a
+	 * tolerância é deliberada (não quebra cliente que já funcionava) e o teste dela está em
+	 * {@code S3MultipartTests}.</p>
+	 *
+	 * <p><b>Sem regex:</b> o recorte era uma única expressão com {@code \\s*} guloso ao lado de
+	 * {@code [^<]*?} sobre o corpo inteiro — retrocesso sobre entrada do chamador, marcado pelo CodeQL.
+	 * A varredura linear abaixo é {@code O(n)} por construção e não depende do tamanho da entrada.</p>
+	 */
+	private static java.util.List<Parte> partesDoXml(java.io.InputStream body) throws java.io.IOException {
+		String texto = new String(body.readAllBytes(), StandardCharsets.UTF_8);
+		java.util.List<Parte> partes = new java.util.ArrayList<>();
+		int cursor = 0;
+		while (true) {
+			int abre = texto.indexOf("<Part>", cursor);
+			if (abre < 0) {
+				break;
+			}
+			int fecha = texto.indexOf("</Part>", abre);
+			if (fecha < 0) {
+				break;
+			}
+			// O trecho de UM `Part`, não o documento: cada `indexOf` começa de pelo menos onde o
+			// anterior parou, então o custo é linear no total.
+			String trecho = texto.substring(abre + "<Part>".length(), fecha);
+			String numero = entre(trecho, "<PartNumber>", "</PartNumber>");
+			if (numero == null) {
+				throw s3Error(400, "MalformedXML", "Part sem PartNumber.");
+			}
+			String etag = entre(trecho, "<ETag>", "</ETag>");
+			partes.add(new Parte(Integer.parseInt(numero.trim()),
+				etag == null ? null : etag.replace("\"", "").trim()));
+			cursor = fecha + "</Part>".length();
+		}
+		if (partes.isEmpty()) {
+			throw s3Error(400, "MalformedXML", "CompleteMultipartUpload sem partes.");
+		}
+		return partes;
+	}
+
+	/** O texto entre {@code abre}/{@code fecha}, ou {@code null} se algum faltar. Sem regex. */
+	private static String entre(String trecho, String abre, String fecha) {
+		int i = trecho.indexOf(abre);
+		if (i < 0) {
+			return null;
+		}
+		int f = trecho.indexOf(fecha, i + abre.length());
+		if (f < 0) {
+			return null;
+		}
+		return trecho.substring(i + abre.length(), f);
+	}
+
+	/**
+	 * GetObject: Range/206/416, 304 por If-None-Match ou If-Modified-Since, ETag = digest.
 	 *
 	 * <p><b>Ordem deliberada:</b> donagem antes da existência. O S3 responde 404 a um bucket que o
 	 * chamador não pode ver; aqui a resposta é 403. O motivo é que um 404 para quem tem credencial válida
@@ -568,23 +1373,31 @@ class S3GatewayController {
 	 * privado": ou é do dono, ou não existe para ele.</p>
 	 */
 	@GetMapping("/{bucket}/{*key}")
-	ResponseEntity<StreamingResponseBody> getObject(@PathVariable String bucket, HttpServletRequest request) {
+	ResponseEntity<StreamingResponseBody> getObject(@PathVariable String bucket, HttpServletRequest request)
+		throws IOException {
 		S3Credential credential = authenticate(request, "GET");
 		requireBucket(credential, bucket);
 		requireBucketDoDono(credential, bucket);
+		// `GET ?acl` é a leitura da ACL do objeto, não do objeto: sem esta recusa, a rota servia o
+		// arquivo em 200, e o cliente lia "a ACL é o conteúdo do arquivo". Mesma lista do PUT.
+		recusarSubrecurso(request, "/" + bucket + "/" + keyOf(request));
+		recusarLeituraDeSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		StorageObject object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, keyOf(request)));
 		return comVocabularioDoS3(() -> content.respond(object, request.getHeader(HttpHeaders.RANGE),
-			request.getHeader(HttpHeaders.IF_NONE_MATCH)));
+			request.getHeader(HttpHeaders.IF_NONE_MATCH), request.getHeader(HttpHeaders.IF_MODIFIED_SINCE)));
 	}
 
 	/** HeadObject: mesmos cabeçalhos do GetObject, sem corpo. */
 	@RequestMapping(value = "/{bucket}/{*key}", method = RequestMethod.HEAD)
-	ResponseEntity<Void> headObject(@PathVariable String bucket, HttpServletRequest request) {
+	ResponseEntity<StreamingResponseBody> headObject(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "GET");
 		requireBucket(credential, bucket);
 		requireBucketDoDono(credential, bucket);
+		// O `HEAD` e o `GET` sem corpo: a mesma pergunta tem a mesma recusa.
+		recusarLeituraDeSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		StorageObject object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, keyOf(request), "HEAD"));
-		return comVocabularioDoS3(() -> content.head(object));
+		return comVocabularioDoS3(() -> content.head(object, request.getHeader(HttpHeaders.IF_NONE_MATCH),
+			request.getHeader(HttpHeaders.IF_MODIFIED_SINCE)));
 	}
 
 	/** DeleteObject: lápide no catálogo. A resposta é 204 mesmo se a chave não existir (igual ao S3). */
@@ -683,6 +1496,7 @@ class S3GatewayController {
 		}
 		// Mesma conta da assinatura por cabeçalho: a URL é a credencial, e portador de link também
 		// consome o Control Plane.
+		exigirDonoEsperado(request, credential);
 		exigirRitmo(credential.accessKey());
 		return credential;
 	}
@@ -765,7 +1579,15 @@ class S3GatewayController {
 		// A assinatura usa o `Host` que o portador mandará ao usar a URL — sem o prefixo do gateway:
 		// o `PREFIX` é da instalação, não do protocolo, e entra só na URL como caminho.
 		String hostAssinado = hostBase;
-		String path = "/" + bucket + "/" + key;
+		// O caminho assinado é o da URL que vai sair: cada segmento codificado como o `uriEncode`
+		// aplica (e como o `canonicalUri` do verificador recodifica). Assinar a chave CRUA fazia uma
+		// chave com espaço ou acento emitir uma URL cuja assinatura não era a dela — e o portador
+		// recebia 403 numa URL recém-emitida.
+		StringBuilder pathCodificado = new StringBuilder("/").append(SigV4Verifier.uriEncode(bucket));
+		for (String segment : key.split("/")) {
+			pathCodificado.append('/').append(SigV4Verifier.uriEncode(segment));
+		}
+		String path = pathCodificado.toString();
 
 		// Os parâmetros da URL: datas e escopo, na forma que a AWS usa. `X-Amz-Credential` leva
 		// `/`, codificado duas vezes porque é dado DENTRO de um parâmetro.
@@ -860,8 +1682,30 @@ class S3GatewayController {
 		if (!credential.allows(operation)) {
 			throw s3Error(403, "AccessDenied", "A credencial nao permite " + operation + ".");
 		}
+		exigirDonoEsperado(request, credential);
 		exigirRitmo(credential.accessKey());
 		return credential;
+	}
+
+	/**
+	 * {@code x-amz-expected-bucket-owner}: o cliente diz de quem ele acha que é o bucket.
+	 *
+	 * <p>Existe para o caso em que duas contas têm bucket com o mesmo nome — o SDK manda o dono que
+	 * espera e o S3 recusa se o bucket for de outro. Sem isto, o {@code PUT} para um bucket novo (que
+	 * nasce do primeiro objeto, sem dono ainda) grava na conta de quem chega primeiro, e o
+	 * {@code --expected-bucket-owner} do {@code aws s3api} não protege nada. A conferência é a
+	 * <b>última</b> do {@code authenticate}: antes dela, a assinatura e o escopo da credencial já
+	 * foram provados, então a resposta não revela nada a quem não assinou.</p>
+	 */
+	private void exigirDonoEsperado(HttpServletRequest request, S3Credential credential) {
+		String esperado = request.getHeader("x-amz-expected-bucket-owner");
+		if (esperado == null || esperado.isBlank()) {
+			return;
+		}
+		if (!esperado.trim().equals(credential.ownerUserId())) {
+			throw s3Error(403, "AccessDenied",
+				"O bucket esperado nao e do dono da credencial (x-amz-expected-bucket-owner).");
+		}
 	}
 
 	/**
@@ -908,17 +1752,18 @@ class S3GatewayController {
 	 * <p>O Storage não tem tabela de buckets: o nome nasce no primeiro upload, então "bucket do dono" é
 	 * "o dono já gravou algo nele". <b>Ordem:</b> no {@code PUT} a conferência vem DEPOIS da gravação —
 	 * é a gravação que cria o bucket do dono. Nos demais verbos, antes, com o dado já no catálogo.</p>
-	 */
-	/**
-	 * O bucket pertence ao dono da credencial.
 	 *
-	 * <p>{@code allowedBucket} nulo significa "todos os buckets <b>do dono</b>", nunca "todos os buckets
-	 * da rede". Sem esta conferência, uma credencial de escopo nulo — o padrão — lia, gravava e apagava
-	 * em bucket de qualquer outra conta cuja chave conhecesse. O catálogo sempre soube o dono; o gateway
-	 * é que não perguntava.</p>
+	 * <p><b>A lápide conta.</b> A régua é o bucket do dono ({@code bucketsOf}, só vivo) <b>ou</b> o
+	 * bucket em que ele tem linha no catálogo, vivo ou lápide ({@code bucketHasObjectsOf}) — a mesma do
+	 * {@code DeleteBucket} (§4.15). Só pelos vivos, o dono que apagava a última chave do bucket perdia o
+	 * bucket para a própria leitura: o {@code GET} e o {@code HEAD} da lápide respondiam
+	 * {@code 403 AccessDenied} ("não é do dono"), em vez do {@code 404 NoSuchKey} que a chave apagada
+	 * merece (§4.23). Quem nunca gravou nada num bucket alheio continua barrado: a lápide é de quem a
+	 * criou.</p>
 	 */
 	private void requireBucketDoDono(S3Credential credential, String bucket) {
-		if (!catalog.bucketsOf(credential.ownerUserId()).contains(bucket)) {
+		if (!catalog.bucketsOf(credential.ownerUserId()).contains(bucket)
+				&& !catalog.bucketHasObjectsOf(bucket, credential.ownerUserId())) {
 			throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
 		}
 	}
@@ -1049,6 +1894,19 @@ class S3GatewayController {
 		return S3_INSTANT.format(quando);
 	}
 
+	/** Parâmetro numérico de consulta; ausente ou inválido vale o padrão. */
+	private static int inteiroOu(String valor, int padrao) {
+		if (valor == null || valor.isBlank()) {
+			return padrao;
+		}
+		try {
+			return Integer.parseInt(valor.trim());
+		}
+		catch (NumberFormatException invalido) {
+			return padrao;
+		}
+	}
+
 	private static int parseMaxKeys(String value) {
 		if (value == null || value.isBlank()) {
 			return MAX_KEYS;
@@ -1064,26 +1922,6 @@ class S3GatewayController {
 
 	private static ResponseEntity.BodyBuilder xml(HttpStatus status) {
 		return ResponseEntity.status(status).header(HttpHeaders.CONTENT_TYPE, "application/xml; charset=utf-8");
-	}
-
-	/**
-	 * CopyObject e UploadPartCopy chegam como um PUT com {@code x-amz-copy-source} e corpo vazio.
-	 *
-	 * <p><b>Antes:</b> o cabeçalho era ignorado e o PUT comum seguia até a gravação. Com o corpo
-	 * vazio da cópia, a resposta era {@code 400 STORAGE_EMPTY_BODY} — como se o cliente tivesse
-	 * mandado um arquivo vazio — e a abertura deixava uma linha {@code PENDING} no catálogo. Com
-	 * corpo, os bytes do cliente eram gravados no destino e a resposta dizia 200: uma "cópia" que
-	 * não copiou nada.</p>
-	 *
-	 * <p>Operação ausente responde {@code 501 NotImplemented} no XML do S3, antes de
-	 * {@code beginUpload}/{@code receivePart}: nada é escrito — nem objeto, nem parte, nem linha.</p>
-	 */
-	private static void recusarCopiaNoServidor(HttpServletRequest request) {
-		String origem = request.getHeader(COPY_SOURCE);
-		if (origem != null && !origem.isBlank()) {
-			throw s3Error(501, "NotImplemented",
-				"CopyObject e UploadPartCopy nao sao suportados; envie os bytes no corpo do PUT.");
-		}
 	}
 
 	/**
@@ -1117,11 +1955,24 @@ class S3GatewayController {
 		if (recusado.status() == 507 && "STORAGE_OWNER_QUOTA_EXCEEDED".equals(recusado.code())) {
 			return s3Error(507, "QuotaExceeded", recusado.getMessage());
 		}
+		if (recusado.status() == 404 && "STORAGE_NOT_FOUND".equals(recusado.code())) {
+			// O código do S3 para chave ausente é o que o SDK procura para distinguir "não existe"
+			// de "sem permissão". O interno (`STORAGE_NOT_FOUND`) vazava para o cliente.
+			return s3Error(404, "NoSuchKey", recusado.getMessage());
+		}
 		if ("STORAGE_PLACEMENT_MISSING".equals(recusado.code())) {
 			// O catálogo diz que existe e não há cópia: para o cliente do S3 é um conflito
 			// transitório do lado do servidor, não um erro de pedido — e ele sabe tentar de novo.
 			return s3Error(409, "InternalError", "O objeto esta confirmado no catalogo mas sem copia"
 				+ " registrada em no nenhum; tente de novo.");
+		}
+		if ("STORAGE_REPLICA_ELSEWHERE".equals(recusado.code())) {
+			// A cópia existe, mas em outro nó: é o caso "tenta de novo em instantes" do S3. O XML do
+			// `SlowDown` é o `ClientException` literal que o `S3Exception.retryable` do SDK repete; o
+			// `409` do control plane (que usa o digest para designar o nó) não serve ao cliente do S3 —
+			// e, sem esta tradução, ele saía como JSON do Énóis. O `Retry-After` diz quando voltar.
+			return s3Error(503, "SlowDown", "A copia deste objeto esta em outro no; tente de novo.")
+				.withRetryAfter(1);
 		}
 		// Qualquer outra recusa que nasceu nos serviços do Storage vira XML: o código interno do
 		// Énóis é legível o bastante (`NoSuchUpload`, `InvalidArgument`, `MalformedXML`, `InvalidPart`
@@ -1143,4 +1994,73 @@ class S3GatewayController {
 			.element("Resource", resource == null ? "" : resource)
 			.element("RequestId", java.util.UUID.randomUUID().toString()).close("Error").toString();
 	}
+	/**
+	 * CreateBucket: {@code PUT /{bucket}}, o `aws s3 mb` e o `rclone mkdir`.
+	 *
+	 * <p><b>Antes:</b> a rota caía no {@code PutObject} e respondia
+	 * {@code 400 InvalidRequest "Informe o bucket e a chave"}. O primeiro comando de qualquer fluxo de
+	 * upload falhava, e o cliente que cria o bucket antes de gravá-lo (o jeito normal do S3) não tinha
+	 * caminho.</p>
+	 *
+	 * <p><b>Agora:</b> registra o bucket no catálogo para o dono da credencial. Criar de novo o mesmo
+	 * bucket do mesmo dono é <b>200</b> idempotente ({@code BucketAlreadyOwnedByYou} é sucesso no S3);
+	 * nome que já é de outra conta é {@code 409 BucketAlreadyExists} e não muda o dono.</p>
+	 *
+	 * <p>O Storage não tem tabela de donos de bucket: o dono vem dos objetos ({@code bucketsOf}), e a
+	 * linha em {@code network_storage_buckets} leva o criador em {@code updated_by} — é o que permite
+	 * responder 409 antes de o bucket ter o primeiro objeto.</p>
+	 */
+	@RequestMapping(value = "/{bucket}", method = RequestMethod.PUT)
+	ResponseEntity<Void> createBucket(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "PUT");
+		requireBucket(credential, bucket);
+		String donoAtual = donoDoBucketRegistrado(bucket);
+		if (donoAtual != null && !donoAtual.equals(credential.ownerUserId())) {
+			throw s3Error(409, "BucketAlreadyExists",
+				"O bucket ja existe em outra conta.");
+		}
+		if (donoAtual == null) {
+			storage.putBucketPolicy(credential.ownerUserId(), bucket, false, null, null);
+		}
+		return ResponseEntity.ok().build();
+	}
+
+	/** HeadBucket: {@code HEAD /{bucket}} — o SDK confirma o bucket antes de gravar. */
+	@RequestMapping(value = "/{bucket}", method = RequestMethod.HEAD)
+	ResponseEntity<Void> headBucket(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "LIST");
+		requireBucket(credential, bucket);
+		// 404 para o que não é do dono, como o S3: o HEAD não revela a existência de bucket alheio.
+		boolean nosso = credential.ownerUserId().equals(donoDoBucketRegistrado(bucket));
+		return nosso ? ResponseEntity.ok().build() : ResponseEntity.notFound().build();
+	}
+
+	/** GetBucketLocation: {@code GET /{bucket}?location} — a região do gateway. */
+	@GetMapping(value = "/{bucket}", params = "location")
+	ResponseEntity<String> bucketLocation(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "LIST");
+		requireBucket(credential, bucket);
+		// O criador registrado conta como dono mesmo antes do primeiro objeto (o bucket nasce no
+		// CreateBucket); depois disso vale a mesma régua do resto do gateway.
+		if (!credential.ownerUserId().equals(donoDoBucketRegistrado(bucket))) {
+			requireBucketDoDono(credential, bucket);
+		}
+		S3Xml xml = new S3Xml();
+		xml.root("LocationConstraint").text(REGION);
+		return xml(HttpStatus.OK).body(xml.toString());
+	}
+
+	/**
+	 * O dono registrado do bucket: o <b>criador</b>, gravado em {@code owner_user_id} no
+	 * {@code CreateBucket} e nunca reescrito — quem configura a política depois não vira dono. Sem
+	 * criador registrado (bucket anterior à coluna), o dono do primeiro objeto vivo: o bucket que
+	 * nasceu do primeiro upload, de quem só sobe objeto sem {@code CreateBucket}.
+	 */
+	private String donoDoBucketRegistrado(String bucket) {
+		return catalog.bucketPolicy(bucket).map(StorageBucketPolicy::ownerUserId)
+			.filter(criador -> criador != null && !criador.isBlank())
+			.or(() -> catalog.ownerDoBucket(bucket))
+			.orElse(null);
+	}
+
 }
