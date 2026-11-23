@@ -48,9 +48,10 @@ public class MuraisController {
 
 	@GetMapping("/murais")
 	MuraisViews.MuraisPage list(@RequestHeader("X-Session-Token") String sessionToken,
-			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "24") int limit) {
+			@RequestParam(required = false) String cursor, @RequestParam(required = false) String search,
+			@RequestParam(defaultValue = "24") int limit) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		return murais.list(user.id(), cursorCodec.decode(cursor), limit);
+		return murais.list(user.id(), cursorCodec.decode(cursor), search, limit);
 	}
 
 	/** Os meus murais na ótica de um post: alimenta o seletor "adicionar ao mural" do card. */

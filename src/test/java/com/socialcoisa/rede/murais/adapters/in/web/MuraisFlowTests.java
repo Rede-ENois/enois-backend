@@ -340,6 +340,68 @@ class MuraisFlowTests {
 		return objectMapper.readTree(criado.getResponse().getContentAsString()).get("id").asText();
 	}
 
+	@Test
+	void buscaAchaMuralPorTituloOuDescricaoSemDiferenciarCaixa() throws Exception {
+		var dono = auth("mural_busca");
+		String peladas = criaMural(dono, "Peladas do bairro", "Jogo de quarta e domingo");
+		criaMural(dono, "Receitas da vó", "Bolo de fubá e café");
+		String cuscuz = criaMural(dono, "Cuscuz", "Receita do Nordeste para o café");
+
+		// Título, sem ligar para maiúsculas.
+		org.assertj.core.api.Assertions
+			.assertThat(idsDaBusca(dono, "peladas"))
+			.containsExactly(peladas);
+		org.assertj.core.api.Assertions.assertThat(idsDaBusca(dono, "PELADAS")).containsExactly(peladas);
+
+		// Descrição também conta.
+		org.assertj.core.api.Assertions.assertThat(idsDaBusca(dono, "domingo")).containsExactly(peladas);
+		org.assertj.core.api.Assertions.assertThat(idsDaBusca(dono, "nordeste")).containsExactly(cuscuz);
+
+		// Termo que não existe é lista vazia, não a lista inteira; espaço em volta não atrapalha.
+		org.assertj.core.api.Assertions.assertThat(idsDaBusca(dono, "maratona")).isEmpty();
+		java.util.List<String> bolo = idsDaBusca(dono, "bolo");
+		org.assertj.core.api.Assertions.assertThat(bolo).hasSize(1);
+		org.assertj.core.api.Assertions.assertThat(idsDaBusca(dono, "  bolo  ")).containsExactly(bolo.get(0));
+	}
+
+	/** O termo vira texto literal: `%` e `_` procuram esses caracteres, não "qualquer coisa". */
+	@Test
+	void buscaTrataPercentoEUnderlineComoTexto() throws Exception {
+		var dono = auth("mural_busca_literal");
+		String percento = criaMural(dono, "Desconto de 100%", null);
+		String comUnderscore = criaMural(dono, "time_azul", null);
+		criaMural(dono, "Sem sinal", null);
+
+		org.assertj.core.api.Assertions.assertThat(idsDaBusca(dono, "100%")).containsExactly(percento);
+		org.assertj.core.api.Assertions.assertThat(idsDaBusca(dono, "_")).containsExactly(comUnderscore);
+	}
+
+	private String criaMural(TestAuthHelper.AuthSession dono, String titulo, String descricao) throws Exception {
+		var corpo = new java.util.HashMap<String, Object>(Map.of("title", titulo));
+		if (descricao != null) {
+			corpo.put("description", descricao);
+		}
+		MvcResult criado = mockMvc.perform(post("/murais").header("X-Session-Token", dono.token())
+				.header("Idempotency-Key", "mural-busca-" + UUID.randomUUID())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(corpo)))
+			.andExpect(status().isCreated())
+			.andReturn();
+		return objectMapper.readTree(criado.getResponse().getContentAsString()).get("id").asText();
+	}
+
+	private java.util.List<String> idsDaBusca(TestAuthHelper.AuthSession dono, String termo) throws Exception {
+		MvcResult lista = mockMvc
+			.perform(get("/murais").param("search", termo).header("X-Session-Token", dono.token()))
+			.andExpect(status().isOk())
+			.andReturn();
+		java.util.List<String> ids = new java.util.ArrayList<>();
+		for (JsonNode item : objectMapper.readTree(lista.getResponse().getContentAsString()).get("items")) {
+			ids.add(item.get("id").asText());
+		}
+		return ids;
+	}
+
 	private String publishPost(TestAuthHelper.AuthSession author, String content) throws Exception {
 		MvcResult criado = mockMvc.perform(post("/feed/posts")
 				.header("X-Session-Token", author.token())

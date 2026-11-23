@@ -20,6 +20,12 @@ public interface MuraisRepository {
 	/** Murais ativos criados antes da marca, mais novos primeiro. */
 	List<Mural> findActiveMuraisBefore(Instant before, int limit);
 
+	/**
+	 * A mesma lista, filtrada por `search` no título ou na descrição (sem diferenciar maiúsculas).
+	 * `search` vazio é a lista inteira; o termo já vem aparado pelo serviço.
+	 */
+	List<Mural> findActiveMuraisBefore(Instant before, String search, int limit);
+
 	/** Todos os murais ativos de um dono, mais novos primeiro — o seletor do post lista tudo. */
 	List<Mural> findActiveMuraisByOwner(UserId ownerId);
 
