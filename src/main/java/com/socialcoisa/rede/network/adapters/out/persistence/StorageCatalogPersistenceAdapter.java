@@ -108,18 +108,21 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		""";
 
 	private static final String SELECT_BUCKET_POLICY = """
-		select bucket, versioning, retain_superseded_days, expire_after_days, updated_by, updated_at
+		select bucket, versioning, retain_superseded_days, expire_after_days, updated_by, updated_at,
+			owner_user_id
 		from network_storage_buckets where bucket = ?
 		""";
 
 	private static final String UPSERT_BUCKET_POLICY = """
 		insert into network_storage_buckets (bucket, versioning, retain_superseded_days, expire_after_days,
-			updated_by, updated_at)
-		values (?, ?, ?, ?, ?, ?)
+			updated_by, updated_at, owner_user_id)
+		values (?, ?, ?, ?, ?, ?, ?)
 		on duplicate key update versioning = values(versioning),
 			retain_superseded_days = values(retain_superseded_days),
 			expire_after_days = values(expire_after_days),
-			updated_by = values(updated_by), updated_at = values(updated_at)
+			updated_by = values(updated_by), updated_at = values(updated_at),
+			-- O criador não é reescrito: quem configura a política não vira dono.
+			owner_user_id = coalesce(owner_user_id, values(owner_user_id))
 		""";
 
 	/** A ordenação é por chave ascendente e versão ascendente para o histórico ser estável. */
@@ -503,7 +506,7 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	public StorageBucketPolicy saveBucketPolicy(StorageBucketPolicy policy) {
 		Timestamp stamp = Timestamp.from(policy.updatedAt());
 		jdbc.update(UPSERT_BUCKET_POLICY, policy.bucket(), policy.versioning(), policy.retainSupersededDays(),
-			policy.expireAfterDays(), policy.updatedBy(), stamp);
+			policy.expireAfterDays(), policy.updatedBy(), stamp, policy.ownerUserId());
 		return bucketPolicy(policy.bucket()).orElseThrow(() -> new IllegalStateException(
 			"politica do bucket " + policy.bucket() + " invisivel apos gravar"));
 	}
@@ -511,7 +514,7 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	private static final RowMapper<StorageBucketPolicy> BUCKET_MAPPER = (ResultSet rs, int rowNum) ->
 		new StorageBucketPolicy(rs.getString("bucket"), rs.getBoolean("versioning"),
 			nullableInt(rs, "retain_superseded_days"), nullableInt(rs, "expire_after_days"),
-			rs.getString("updated_by"), instant(rs, "updated_at"));
+			rs.getString("updated_by"), instant(rs, "updated_at"), rs.getString("owner_user_id"));
 
 	private static Integer nullableInt(ResultSet rs, String column) throws SQLException {
 		int value = rs.getInt(column);

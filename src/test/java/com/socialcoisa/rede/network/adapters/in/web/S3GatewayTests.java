@@ -1714,6 +1714,7 @@ void put_com_if_none_match_nao_sobrescreve_chave_ocupada() throws Exception {
 	}
 
 
+
 	/**
 	 * `x-amz-expected-bucket-owner`: o cliente diz de quem ele acha que é o bucket.
 	 *
@@ -1930,6 +1931,31 @@ void lifecycle_do_bucket_le_e_grava_a_mesma_politica_do_varredor() throws Except
 		assertThat(corpoNormal.getContentAsString()).isEqualTo("corrente");
 	}
 
+	/** Criar um bucket que já é de outra conta é {@code 409 BucketAlreadyExists}, sem mexer no dono. */
+	@Test
+	void create_de_bucket_de_outra_conta_e_409() throws Exception {
+		String nome = "bkt" + UUID.randomUUID().toString().replace("-", "").substring(0, 10);
+		var outro = new TestAuthHelper(mockMvc, objectMapper).authenticate("s3_outro_dono_bucket");
+		String acessoOutro = "AKIAENOISOUTR" + UUID.randomUUID().toString().replace("-", "").substring(0, 6).toUpperCase();
+		jdbc.update("""
+			insert into network_storage_s3_credentials (id, access_key, secret_hash, secret_encrypted, owner_user_id,
+				allowed_bucket, allowed_operations, created_at)
+			values (?, ?, ?, ?, ?, null, 'GET PUT LIST DELETE', ?)
+			""", "s3c_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12), acessoOutro,
+			com.socialcoisa.rede.shared.security.Hashes.sha256Hex(SECRET), cipher.encrypt(SECRET),
+			outro.userId(), java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00Z")));
+
+		MockHttpServletRequestBuilder dele = put("/s3/" + nome).content(new byte[0]);
+		assinar(dele, SECRET, shaVazio(), acessoOutro);
+		mockMvc.perform(dele).andExpect(status().isOk());
+
+		MockHttpServletRequestBuilder eu = put("/s3/" + nome).content(new byte[0]);
+		assinar(eu, SECRET, shaVazio());
+		var resposta = mockMvc.perform(eu).andReturn().getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(409);
+		assertThat(resposta.getContentAsString()).contains("<Code>BucketAlreadyExists</Code>");
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {
@@ -1944,6 +1970,93 @@ void lifecycle_do_bucket_le_e_grava_a_mesma_politica_do_varredor() throws Except
 		assertThat(result.getResponse().getStatus()).isEqualTo(403);
 		assertThat(result.getResponse().getContentAsString()).contains("<Code>AccessDenied</Code>");
 	}
+
+
+	/**
+	 * `CreateBucket` / `HeadBucket` / `GetBucketLocation` — as três chamadas que o SDK faz primeiro.
+	 *
+	 * <p><b>Antes:</b> nenhuma existia. {@code PUT /{bucket}} caía no {@code PutObject} e respondia
+	 * {@code 400 InvalidRequest "Informe o bucket e a chave"}; {@code HEAD /{bucket}} e
+	 * {@code GET /{bucket}?location} não tinham handler. O {@code aws s3 mb s3://nome} e o
+	 * {@code rclone mkdir} falhavam no primeiro comando, e o cliente que confirma o bucket antes de
+	 * subir (todo SDK: {@code headBucket} antes do primeiro {@code putObject}) não tinha por onde.</p>
+	 *
+	 * <p><b>Agora:</b> {@code CreateBucket} registra o bucket no catálogo para o dono e responde
+	 * {@code 200}; criar de novo o mesmo bucket <b>do mesmo dono</b> é {@code 200} idempotente
+	 * ({@code BucketAlreadyOwnedByYou}); nome que já é de <b>outra conta</b> é
+	 * {@code 409 BucketAlreadyExists}. O {@code HeadBucket} responde {@code 200} para bucket do dono e
+	 * {@code 404} para o que ele não tem. {@code ?location} devolve a região do gateway.</p>
+	 */
+	@Test
+	void create_head_e_location_do_bucket() throws Exception {
+		String novo = "bkt" + UUID.randomUUID().toString().replace("-", "").substring(0, 10);
+
+		MockHttpServletRequestBuilder criar = put("/s3/" + novo).content(new byte[0]);
+		assinar(criar, SECRET, shaVazio());
+		var criado = mockMvc.perform(criar).andReturn().getResponse();
+		assertThat(criado.getStatus()).as(criado.getContentAsString()).isEqualTo(200);
+		assertThat(jdbc.queryForList("select bucket from network_storage_buckets where bucket = ?",
+			String.class, novo)).contains(novo);
+
+		// Criar de novo pelo mesmo dono: 200 (BucketAlreadyOwnedByYou é sucesso no S3).
+		MockHttpServletRequestBuilder denovo = put("/s3/" + novo).content(new byte[0]);
+		assinar(denovo, SECRET, shaVazio());
+		assertThat(mockMvc.perform(denovo).andReturn().getResponse().getStatus()).isEqualTo(200);
+
+		// HeadBucket: 200 no do dono.
+		MockHttpServletRequestBuilder head = MockMvcRequestBuilders.head("/s3/" + novo);
+		assinar(head, SECRET, shaVazio());
+		assertThat(mockMvc.perform(head).andReturn().getResponse().getStatus()).isEqualTo(200);
+
+		// HeadBucket de bucket que não é do dono: 404 (o S3 não revela existência de bucket alheio).
+		MockHttpServletRequestBuilder headAlheio = MockMvcRequestBuilders
+			.head("/s3/bkt" + UUID.randomUUID().toString().replace("-", "").substring(0, 10));
+		assinar(headAlheio, SECRET, shaVazio());
+		assertThat(mockMvc.perform(headAlheio).andReturn().getResponse().getStatus()).isEqualTo(404);
+
+		// GetBucketLocation: a região do gateway.
+		MockHttpServletRequestBuilder local = get("/s3/" + novo + "?location");
+		assinar(local, SECRET, shaVazio());
+		var localResposta = mockMvc.perform(local).andReturn().getResponse();
+		assertThat(localResposta.getStatus()).as(localResposta.getContentAsString()).isEqualTo(200);
+		assertThat(localResposta.getContentAsString()).contains(">enois-1</LocationConstraint>");
+	}
+
+	/**
+	 * O criador do bucket é o dono, e continua sendo depois de perder o último objeto.
+	 *
+	 * <p>A posse vinha de {@code updated_by} — que muda a cada {@code putBucketPolicy}, então quem
+	 * configurasse o ciclo de vida virava "dono" — e, sem política, do primeiro objeto vivo, que muda
+	 * quando todos são apagados e outra conta grava. Agora o criador fica em {@code owner_user_id},
+	 * gravado no {@code CreateBucket} e nunca reescrito.</p>
+	 */
+	@Test
+	void o_criador_e_o_dono_do_bucket_mesmo_depois_de_esvaziar() throws Exception {
+		String meuBuckete = "criado-" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		MockHttpServletRequestBuilder cria = put("/s3/" + meuBuckete);
+		assinar(cria, SECRET, shaVazio());
+		assertThat(mockMvc.perform(cria).andReturn().getResponse().getStatus()).isEqualTo(200);
+		assertThat(jdbc.queryForObject("select owner_user_id from network_storage_buckets where bucket = ?",
+			String.class, meuBuckete)).as("o criador nao foi gravado").isEqualTo(admin);
+
+		// Outra conta (o admin de outro teste não é esta credencial) tenta criar o mesmo nome.
+		jdbc.update("update network_storage_buckets set updated_by = 's3_quem_configurou' where bucket = ?",
+			meuBuckete);
+		// O `updated_by` mudou, mas o dono não: a política não rouba o bucket.
+		assertThat(jdbc.queryForObject("select owner_user_id from network_storage_buckets where bucket = ?",
+			String.class, meuBuckete)).as("o criador foi reescrito pela politica").isEqualTo(admin);
+
+		MockHttpServletRequestBuilder criaDeNovo = put("/s3/" + meuBuckete);
+		assinar(criaDeNovo, SECRET, shaVazio());
+		assertThat(mockMvc.perform(criaDeNovo).andReturn().getResponse().getStatus())
+			.as("o dono deixou de reconhecer o proprio bucket").isEqualTo(200);
+
+		MockHttpServletRequestBuilder head = head("/s3/" + meuBuckete);
+		assinar(head, SECRET, shaVazio());
+		assertThat(mockMvc.perform(head).andReturn().getResponse().getStatus()).isEqualTo(200);
+	}
+
+
 
 	/** Credencial presa a um bucket não alcança outro, mesmo do mesmo dono. */
 	@Test

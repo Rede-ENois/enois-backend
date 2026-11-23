@@ -1994,4 +1994,73 @@ class S3GatewayController {
 			.element("Resource", resource == null ? "" : resource)
 			.element("RequestId", java.util.UUID.randomUUID().toString()).close("Error").toString();
 	}
+	/**
+	 * CreateBucket: {@code PUT /{bucket}}, o `aws s3 mb` e o `rclone mkdir`.
+	 *
+	 * <p><b>Antes:</b> a rota caía no {@code PutObject} e respondia
+	 * {@code 400 InvalidRequest "Informe o bucket e a chave"}. O primeiro comando de qualquer fluxo de
+	 * upload falhava, e o cliente que cria o bucket antes de gravá-lo (o jeito normal do S3) não tinha
+	 * caminho.</p>
+	 *
+	 * <p><b>Agora:</b> registra o bucket no catálogo para o dono da credencial. Criar de novo o mesmo
+	 * bucket do mesmo dono é <b>200</b> idempotente ({@code BucketAlreadyOwnedByYou} é sucesso no S3);
+	 * nome que já é de outra conta é {@code 409 BucketAlreadyExists} e não muda o dono.</p>
+	 *
+	 * <p>O Storage não tem tabela de donos de bucket: o dono vem dos objetos ({@code bucketsOf}), e a
+	 * linha em {@code network_storage_buckets} leva o criador em {@code updated_by} — é o que permite
+	 * responder 409 antes de o bucket ter o primeiro objeto.</p>
+	 */
+	@RequestMapping(value = "/{bucket}", method = RequestMethod.PUT)
+	ResponseEntity<Void> createBucket(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "PUT");
+		requireBucket(credential, bucket);
+		String donoAtual = donoDoBucketRegistrado(bucket);
+		if (donoAtual != null && !donoAtual.equals(credential.ownerUserId())) {
+			throw s3Error(409, "BucketAlreadyExists",
+				"O bucket ja existe em outra conta.");
+		}
+		if (donoAtual == null) {
+			storage.putBucketPolicy(credential.ownerUserId(), bucket, false, null, null);
+		}
+		return ResponseEntity.ok().build();
+	}
+
+	/** HeadBucket: {@code HEAD /{bucket}} — o SDK confirma o bucket antes de gravar. */
+	@RequestMapping(value = "/{bucket}", method = RequestMethod.HEAD)
+	ResponseEntity<Void> headBucket(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "LIST");
+		requireBucket(credential, bucket);
+		// 404 para o que não é do dono, como o S3: o HEAD não revela a existência de bucket alheio.
+		boolean nosso = credential.ownerUserId().equals(donoDoBucketRegistrado(bucket));
+		return nosso ? ResponseEntity.ok().build() : ResponseEntity.notFound().build();
+	}
+
+	/** GetBucketLocation: {@code GET /{bucket}?location} — a região do gateway. */
+	@GetMapping(value = "/{bucket}", params = "location")
+	ResponseEntity<String> bucketLocation(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "LIST");
+		requireBucket(credential, bucket);
+		// O criador registrado conta como dono mesmo antes do primeiro objeto (o bucket nasce no
+		// CreateBucket); depois disso vale a mesma régua do resto do gateway.
+		if (!credential.ownerUserId().equals(donoDoBucketRegistrado(bucket))) {
+			requireBucketDoDono(credential, bucket);
+		}
+		S3Xml xml = new S3Xml();
+		xml.root("LocationConstraint").text(REGION);
+		return xml(HttpStatus.OK).body(xml.toString());
+	}
+
+	/**
+	 * O dono registrado do bucket: o <b>criador</b>, gravado em {@code owner_user_id} no
+	 * {@code CreateBucket} e nunca reescrito — quem configura a política depois não vira dono. Sem
+	 * criador registrado (bucket anterior à coluna), o dono do primeiro objeto vivo: o bucket que
+	 * nasceu do primeiro upload, de quem só sobe objeto sem {@code CreateBucket}.
+	 */
+	private String donoDoBucketRegistrado(String bucket) {
+		return catalog.bucketPolicy(bucket).map(StorageBucketPolicy::ownerUserId)
+			.filter(criador -> criador != null && !criador.isBlank())
+			.or(() -> catalog.ownerDoBucket(bucket))
+			.orElse(null);
+	}
+
 }
