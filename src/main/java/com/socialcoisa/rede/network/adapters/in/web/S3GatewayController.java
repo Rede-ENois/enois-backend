@@ -931,8 +931,10 @@ class S3GatewayController {
 		S3Credential credential = authenticate(request, "PUT");
 		requireBucket(credential, bucket);
 		var upload = uploadDaChave(credential, bucket, request);
-		java.util.List<Integer> pedidas = partesDoXml(body(request));
-		var concluido = multipart.complete(upload, pedidas);
+		java.util.List<Parte> pedidas = partesDoXml(body(request));
+		var concluido = multipart.complete(upload, pedidas.stream().map(Parte::numero).toList(),
+			pedidas.stream().collect(java.util.stream.Collectors.toMap(Parte::numero,
+				p -> p.etag() == null ? "" : p.etag(), (a, b) -> a)));
 		S3Xml xml = new S3Xml();
 		xml.root("CompleteMultipartUploadResult").element("Location", bucket + "/" + concluido.key())
 			.element("Bucket", bucket).element("Key", concluido.key()).element("ETag", "\"" + concluido.etag() + "\"");
@@ -1008,19 +1010,68 @@ class S3GatewayController {
 		return xml(HttpStatus.OK).body(xml.toString());
 	}
 
-	/** A lista de {@code <PartNumber>} do CompleteMultipartUpload, na ordem em que o cliente mandou. */
-	private static java.util.List<Integer> partesDoXml(java.io.InputStream body) throws java.io.IOException {
+	/** Uma {@code <Part>} do CompleteMultipartUpload: o número e o ETag que o cliente conferiu. */
+	record Parte(int numero, String etag) {
+	}
+
+	/**
+	 * A lista de partes do CompleteMultipartUpload, na ordem em que o cliente mandou.
+	 *
+	 * <p>O {@code <ETag>} de cada {@code <Part>} é lido junto do número. O S3 exige que ele seja o da
+	 * parte que chegou; antes era descartado, e um cliente que montava o XML com o ETag de outra parte
+	 * recebia {@code 200} com bytes que ele não conferiu.</p>
+	 *
+	 * <p><b>Divergência do S3:</b> aqui, {@code <Part>} sem {@code <ETag>} é aceito e o número basta — é
+	 * o que mandam os clientes que não conferem. A AWS responde {@code MalformedXML} nesse caso; a
+	 * tolerância é deliberada (não quebra cliente que já funcionava) e o teste dela está em
+	 * {@code S3MultipartTests}.</p>
+	 *
+	 * <p><b>Sem regex:</b> o recorte era uma única expressão com {@code \\s*} guloso ao lado de
+	 * {@code [^<]*?} sobre o corpo inteiro — retrocesso sobre entrada do chamador, marcado pelo CodeQL.
+	 * A varredura linear abaixo é {@code O(n)} por construção e não depende do tamanho da entrada.</p>
+	 */
+	private static java.util.List<Parte> partesDoXml(java.io.InputStream body) throws java.io.IOException {
 		String texto = new String(body.readAllBytes(), StandardCharsets.UTF_8);
-		java.util.List<Integer> numeros = new java.util.ArrayList<>();
-		java.util.regex.Matcher m = java.util.regex.Pattern.compile("<PartNumber>\\s*(\\d+)\\s*</PartNumber>")
-			.matcher(texto);
-		while (m.find()) {
-			numeros.add(Integer.parseInt(m.group(1)));
+		java.util.List<Parte> partes = new java.util.ArrayList<>();
+		int cursor = 0;
+		while (true) {
+			int abre = texto.indexOf("<Part>", cursor);
+			if (abre < 0) {
+				break;
+			}
+			int fecha = texto.indexOf("</Part>", abre);
+			if (fecha < 0) {
+				break;
+			}
+			// O trecho de UM `Part`, não o documento: cada `indexOf` começa de pelo menos onde o
+			// anterior parou, então o custo é linear no total.
+			String trecho = texto.substring(abre + "<Part>".length(), fecha);
+			String numero = entre(trecho, "<PartNumber>", "</PartNumber>");
+			if (numero == null) {
+				throw s3Error(400, "MalformedXML", "Part sem PartNumber.");
+			}
+			String etag = entre(trecho, "<ETag>", "</ETag>");
+			partes.add(new Parte(Integer.parseInt(numero.trim()),
+				etag == null ? null : etag.replace("\"", "").trim()));
+			cursor = fecha + "</Part>".length();
 		}
-		if (numeros.isEmpty()) {
+		if (partes.isEmpty()) {
 			throw s3Error(400, "MalformedXML", "CompleteMultipartUpload sem partes.");
 		}
-		return numeros;
+		return partes;
+	}
+
+	/** O texto entre {@code abre}/{@code fecha}, ou {@code null} se algum faltar. Sem regex. */
+	private static String entre(String trecho, String abre, String fecha) {
+		int i = trecho.indexOf(abre);
+		if (i < 0) {
+			return null;
+		}
+		int f = trecho.indexOf(fecha, i + abre.length());
+		if (f < 0) {
+			return null;
+		}
+		return trecho.substring(i + abre.length(), f);
 	}
 
 	/**
