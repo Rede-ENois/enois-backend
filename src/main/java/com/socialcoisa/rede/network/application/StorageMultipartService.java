@@ -219,19 +219,6 @@ public class StorageMultipartService {
 			.findFirst();
 	}
 
-	public List<Part> parts(String uploadId) {
-		long inicio = System.nanoTime();
-		try {
-			List<Part> lista = doParts(uploadId);
-			conta("LIST", inicio, null);
-			return lista;
-		}
-		catch (RuntimeException recusado) {
-			conta("LIST", inicio, recusado);
-			throw recusado;
-		}
-	}
-
 	/**
 	 * Uma página de partes: até {@code maxParts}, só as de número maior que {@code depoisDe}.
 	 *
@@ -246,8 +233,8 @@ public class StorageMultipartService {
 		long inicio = System.nanoTime();
 		try {
 			Pagina pagina = doPaginaDePartes(uploadId, depoisDe, maxParts);
-			// A página é uma listagem para o painel: o `ListParts` do gateway saía pelo `parts`, que
-			// conta `LIST`, e a rota paginada não pode desaparecer da métrica.
+			// A página é uma listagem para o painel, e é a métrica `LIST` do módulo: o `parts(...)` sem
+			// paginação, que contava aqui, foi removido por não ter chamador.
 			conta("LIST", inicio, null);
 			return pagina;
 		}
