@@ -1530,6 +1530,97 @@ class S3GatewayTests {
 		gravar("so/uma.txt", "de novo");
 	}
 
+	/**
+	 * `start-after` do ListObjectsV2 começa a listagem **depois** daquela chave.
+	 *
+	 * <p><b>Antes:</b> o parâmetro era ignorado. `aws s3api list-objects-v2 --start-after b` e o
+	 * `listObjectsV2(... .startAfter("b"))` do SDK recebiam a listagem <b>desde o começo</b>, com
+	 * `200` — o cliente que retoma uma varredura a partir de uma chave reescreve tudo o que já
+	 * processou, e num bucket grande isso é a listagem inteira de novo. O `marker` (v1) e o
+	 * `continuation-token` (v2) funcionam; o `start-after` — a forma que o V2 usa para começar no
+	 * meio — não existia.</p>
+	 *
+	 * <p><b>Agora:</b> `start-after` é a chave de partida do V2, e tem precedência sobre o
+	 * `continuation-token` (o S3 o ignora quando há token: o token já diz onde continuar). Só vale
+	 * no `list-type=2`; no V1 o parâmetro não é dele.</p>
+	 */
+	@Test
+	void list_v2_start_after_comeca_depois_da_chave() throws Exception {
+		gravar("inicio/a.txt", "a");
+		gravar("inicio/b.txt", "b");
+		gravar("inicio/c.txt", "c");
+
+		MockHttpServletRequestBuilder lista = get("/s3/" + bucket).queryParam("list-type", "2")
+			.queryParam("prefix", "inicio/").queryParam("start-after", "inicio/b.txt");
+		assinar(lista, SECRET, shaVazio());
+		var resposta = mockMvc.perform(lista).andReturn().getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(200);
+		String corpo = resposta.getContentAsString();
+		assertThat(corpo).as("a chave de partida nao pode vir na listagem").doesNotContain("<Key>inicio/a.txt</Key>")
+			.doesNotContain("<Key>inicio/b.txt</Key>");
+		assertThat(corpo).contains("<Key>inicio/c.txt</Key>");
+		assertThat(corpo).contains("<KeyCount>1</KeyCount>");
+
+		// Com `continuation-token`, o token manda — e os dois valores são DIFERENTES, senão o teste
+		// não distingue "token venceu" de "start-after venceu": seria a mesma chave de partida.
+		MockHttpServletRequestBuilder comToken = get("/s3/" + bucket).queryParam("list-type", "2")
+			.queryParam("prefix", "inicio/").queryParam("start-after", "inicio/c.txt")
+			.queryParam("continuation-token", "inicio/a.txt");
+		assinar(comToken, SECRET, shaVazio());
+		var comTokenResposta = mockMvc.perform(comToken).andReturn().getResponse();
+		assertThat(comTokenResposta.getStatus()).isEqualTo(200);
+		String comTokenCorpo = comTokenResposta.getContentAsString();
+		assertThat(comTokenCorpo).as("o token tem de vencer o start-after").contains("<Key>inicio/b.txt</Key>")
+			.contains("<Key>inicio/c.txt</Key>").doesNotContain("<Key>inicio/a.txt</Key>");
+	}
+
+	/**
+	 * URL pré-assinada abre a chave com espaço e acento — o caminho assinado é o que a URL carrega.
+	 *
+	 * <p><b>Antes:</b> o emissor assinava {@code "/" + bucket + "/" + key} com a chave <b>crua</b> e
+	 * emitia a URL com cada segmento passado por {@code uriEncode}. Chave com espaço, acento, {@code +}
+	 * ou {@code %} fazia a assinatura do emissor não ser a da URL: o portador recebia
+	 * {@code 403 AccessDenied "expirou ou a assinatura nao confere"} numa URL recém-emitida. Nome de
+	 * arquivo com espaço é o caso comum, e o teste antigo só usava {@code fotos/url.jpg}.</p>
+	 *
+	 * <p><b>Agora:</b> o caminho assinado é o mesmo texto que a URL carrega (segmentos codificados),
+	 * e a URL emitida abre.</p>
+	 */
+	@Test
+	void url_pre_assinada_abre_chave_com_espaco_e_acento() throws Exception {
+		String chave = "fotos/meu arquivo ção.jpg";
+		var dono = new TestAuthHelper(mockMvc, objectMapper).authenticate("s3_presign_espaco");
+		String acesso = ACCESS_KEY_PREFIX + UUID.randomUUID().toString().replace("-", "").substring(0, 10)
+			.toUpperCase();
+		jdbc.update("""
+			insert into network_storage_s3_credentials (id, access_key, secret_hash, secret_encrypted, owner_user_id,
+				allowed_bucket, allowed_operations, created_at)
+			values (?, ?, ?, ?, ?, null, 'GET PUT LIST DELETE', ?)
+			""", "s3c_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12), acesso,
+			com.socialcoisa.rede.shared.security.Hashes.sha256Hex(SECRET), cipher.encrypt(SECRET),
+			dono.userId(), java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00Z")));
+		MockHttpServletRequestBuilder put = put("/s3/" + bucket + "/" + chave)
+			.content("com acento".getBytes(StandardCharsets.UTF_8)).contentType("image/jpeg");
+		assinar(put, SECRET, shaDe("com acento"), acesso);
+		mockMvc.perform(put).andExpect(status().isOk());
+
+		var emissao = mockMvc.perform(MockMvcRequestBuilders.post("/s3/" + bucket + "/presign")
+			.param("key", chave).param("method", "GET").param("expires", "600")
+			.header("X-Session-Token", dono.token())).andReturn().getResponse();
+		assertThat(emissao.getStatus()).as(emissao.getContentAsString()).isEqualTo(200);
+		String url = objectMapper.readTree(emissao.getContentAsString()).get("url").asText();
+
+		var leitura = MockMvcRequestBuilders.get(java.net.URI.create(url)).header("host", "localhost");
+		var resposta = mockMvc.perform(leitura).andReturn();
+		if (resposta.getRequest().isAsyncStarted()) {
+			resposta = mockMvc.perform(asyncDispatch(resposta)).andReturn();
+		}
+		assertThat(resposta.getResponse().getStatus()).as(resposta.getResponse().getContentAsString())
+			.isEqualTo(200);
+		assertThat(resposta.getResponse().getContentAsByteArray())
+			.isEqualTo("com acento".getBytes(StandardCharsets.UTF_8));
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {

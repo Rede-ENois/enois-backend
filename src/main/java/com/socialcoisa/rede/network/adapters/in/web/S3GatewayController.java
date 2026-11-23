@@ -176,7 +176,13 @@ class S3GatewayController {
 		boolean v2 = "2".equals(query.get("list-type"));
 		int maxKeys = parseMaxKeys(query.get("max-keys"));
 		// `continuation-token` (v2) e `marker` (v1) são a mesma coisa: a chave da última página.
-		String after = v2 ? query.get("continuation-token") : query.get("marker");
+		// `start-after` (só no V2) é a chave de partida de quem começa a varredura no meio; era
+		// ignorado, e o cliente que retomava a partir de uma chave relistava tudo o que já tinha.
+		// Quando há `continuation-token`, ele manda: o token já diz onde continuar, e o S3 ignora o
+		// `start-after` nesse caso.
+		String after = v2
+			? (query.get("continuation-token") != null ? query.get("continuation-token") : query.get("start-after"))
+			: query.get("marker");
 		String prefix = query.get("prefix");
 		String delimiter = query.get("delimiter");
 		// `delimiter` vazio é "sem agrupamento" na prática; o parâmetro do S3 é de um caractere.
@@ -979,12 +985,24 @@ class S3GatewayController {
 		S3Credential credential = authenticate(request, "LIST");
 		requireBucket(credential, bucket);
 		var upload = uploadDaChave(credential, bucket, request);
+		Map<String, String> query = query(request);
+		// `part-number-marker` é EXCLUSIVO no S3: a próxima página começa depois dele. Sem isso o
+		// cliente que pagina recebia a mesma parte na primeira e na segunda página, e a lista sem
+		// `IsTruncated` fazia ele parar convencido de que tinha visto tudo.
+		int depoisDe = inteiroOu(query.get("part-number-marker"), 0);
+		int maxParts = inteiroOu(query.get("max-parts"), 1000);
+		var pagina = multipart.paginaDePartes(upload.uploadId(), depoisDe, maxParts);
 		S3Xml xml = new S3Xml();
 		xml.root("ListPartsResult").element("Bucket", bucket).element("Key", upload.key())
-			.element("UploadId", upload.uploadId());
-		for (var part : multipart.parts(upload.uploadId())) {
+			.element("UploadId", upload.uploadId())
+			.element("PartNumberMarker", depoisDe).element("MaxParts", Math.max(1, Math.min(maxParts, 1000)))
+			.element("IsTruncated", pagina.truncada());
+		for (var part : pagina.partes()) {
 			xml.open("Part").element("PartNumber", part.number()).element("ETag", "\"" + part.sha256() + "\"")
 				.element("Size", part.bytes()).close("Part");
+		}
+		if (pagina.truncada() && !pagina.partes().isEmpty()) {
+			xml.element("NextPartNumberMarker", pagina.partes().get(pagina.partes().size() - 1).number());
 		}
 		xml.close("ListPartsResult");
 		return xml(HttpStatus.OK).body(xml.toString());
@@ -1216,7 +1234,15 @@ class S3GatewayController {
 		// A assinatura usa o `Host` que o portador mandará ao usar a URL — sem o prefixo do gateway:
 		// o `PREFIX` é da instalação, não do protocolo, e entra só na URL como caminho.
 		String hostAssinado = hostBase;
-		String path = "/" + bucket + "/" + key;
+		// O caminho assinado é o da URL que vai sair: cada segmento codificado como o `uriEncode`
+		// aplica (e como o `canonicalUri` do verificador recodifica). Assinar a chave CRUA fazia uma
+		// chave com espaço ou acento emitir uma URL cuja assinatura não era a dela — e o portador
+		// recebia 403 numa URL recém-emitida.
+		StringBuilder pathCodificado = new StringBuilder("/").append(SigV4Verifier.uriEncode(bucket));
+		for (String segment : key.split("/")) {
+			pathCodificado.append('/').append(SigV4Verifier.uriEncode(segment));
+		}
+		String path = pathCodificado.toString();
 
 		// Os parâmetros da URL: datas e escopo, na forma que a AWS usa. `X-Amz-Credential` leva
 		// `/`, codificado duas vezes porque é dado DENTRO de um parâmetro.
@@ -1499,6 +1525,19 @@ class S3GatewayController {
 	static String lastModified(StorageObject object) {
 		Instant quando = object.updatedAt() != null ? object.updatedAt() : object.createdAt();
 		return S3_INSTANT.format(quando);
+	}
+
+	/** Parâmetro numérico de consulta; ausente ou inválido vale o padrão. */
+	private static int inteiroOu(String valor, int padrao) {
+		if (valor == null || valor.isBlank()) {
+			return padrao;
+		}
+		try {
+			return Integer.parseInt(valor.trim());
+		}
+		catch (NumberFormatException invalido) {
+			return padrao;
+		}
 	}
 
 	private static int parseMaxKeys(String value) {

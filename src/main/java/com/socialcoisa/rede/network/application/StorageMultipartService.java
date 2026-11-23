@@ -232,6 +232,42 @@ public class StorageMultipartService {
 		}
 	}
 
+	/**
+	 * Uma página de partes: até {@code maxParts}, só as de número maior que {@code depoisDe}.
+	 *
+	 * <p>Pede {@code maxParts + 1} linhas: a extra diz se há próxima página sem uma segunda consulta.
+	 * "Página cheia" e "há mais" eram a mesma conta no `ListParts` do gateway antes desta rota existir
+	 * (ele devolvia tudo, sem `IsTruncated`).</p>
+	 */
+	public record Pagina(List<Part> partes, boolean truncada) {
+	}
+
+	public Pagina paginaDePartes(String uploadId, int depoisDe, int maxParts) {
+		long inicio = System.nanoTime();
+		try {
+			Pagina pagina = doPaginaDePartes(uploadId, depoisDe, maxParts);
+			// A página é uma listagem para o painel: o `ListParts` do gateway saía pelo `parts`, que
+			// conta `LIST`, e a rota paginada não pode desaparecer da métrica.
+			conta("LIST", inicio, null);
+			return pagina;
+		}
+		catch (RuntimeException recusado) {
+			conta("LIST", inicio, recusado);
+			throw recusado;
+		}
+	}
+
+	private Pagina doPaginaDePartes(String uploadId, int depoisDe, int maxParts) {
+		int teto = Math.max(1, Math.min(maxParts <= 0 ? 1000 : maxParts, 1000));
+		List<Part> achadas = jdbc.query("""
+			select part_number, bytes, sha256 from network_storage_multipart_parts
+			where upload_id = ? and part_number > ? order by part_number limit ?
+			""", (rs, i) -> new Part(rs.getInt("part_number"), rs.getLong("bytes"), rs.getString("sha256")),
+			uploadId, depoisDe, teto + 1);
+		boolean truncada = achadas.size() > teto;
+		return new Pagina(truncada ? achadas.subList(0, teto) : achadas, truncada);
+	}
+
 	private List<Part> doParts(String uploadId) {
 		return jdbc.query("""
 			select part_number, bytes, sha256 from network_storage_multipart_parts

@@ -946,6 +946,30 @@ os cabeçalhos terem saído. Duas consequências:
   com os 12 bytes e sem `Content-Range`. **Verdadeiro antes da mudança** (o MockMvc não aplica o
   `Range`); fica como guarda do contrato declarado, não como prova da correção.
 
+## 4.28 A URL pré-assinada assina o caminho que ela carrega (ciclo 116)
+
+O emissor assinava `"/" + bucket + "/" + key` com a chave **crua** e emitia a URL com cada segmento
+passado por `uriEncode`. Numa chave com espaço, acento, `+` ou `%`, a assinatura não era a da URL
+emitida: o portador recebia, numa URL recém-emitida,
+
+```
+GET /s3/<bucket>/fotos/meu%20arquivo%20%C3%A7%C3%A3o.jpg?X-Amz-Signature=…
+403 AccessDenied "A URL pre-assinada expirou ou a assinatura nao confere."
+```
+
+A mensagem manda o cliente procurar relógio ou validade; o defeito era a codificação. Nome de arquivo
+com espaço é o caso comum, e todos os testes de URL usavam `fotos/url.jpg`, que não tem caractere a
+codificar.
+
+### Agora
+
+O caminho assinado é montado com o mesmo `uriEncode` por segmento que a URL carrega — e é o mesmo
+texto que o `canonicalUri` do verificador produz ao recodificar o caminho recebido.
+
+**Verificação:** `S3GatewayTests` **+1** (`url_pre_assinada_abre_chave_com_espaco_e_acento`: grava e
+emite para `fotos/meu arquivo ção.jpg`, confere `%20`/`%C3%A7` na URL e abre → `200` com o corpo).
+Mutação: voltar a assinar a chave crua — **derruba**.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
