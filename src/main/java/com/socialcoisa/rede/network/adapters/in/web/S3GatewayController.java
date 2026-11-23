@@ -391,7 +391,9 @@ class S3GatewayController {
 		// o gateway não sobrescreve). Antes os dois cabeçalhos eram ignorados: `--if-none-match '*'`
 		// — o jeito de criar sem sobrescrever — recebia a recusa da sobrescrita ou, com o objeto
 		// PENDING, gravava por cima. A conferência vem antes de abrir upload.
-		exigirPrecondicoesDoPut(request, antes);
+		// Um `PENDING` é gravação em curso, não versão publicada: o `sha256` dele é nulo, e comparar
+		// com ele faria `If-Match` do ETag confirmado anterior falhar só por haver upload na vez.
+		exigirPrecondicoesDoPut(request, antes != null && antes.state() == StorageObjectState.PENDING ? null : antes);
 		// Metadado e cabeçalhos declarados junto do corpo (V367): lidos ANTES da gravação, porque cabeçalho
 		// recusado não pode deixar objeto criado — nem um PENDING decorado com o que não foi aceito.
 		StorageCatalogService.ClientHeaders declarados = clientHeaders(request);
@@ -649,7 +651,13 @@ class S3GatewayController {
 		}
 	}
 
-	private static boolean etagNaLista(String cabecalho, StorageObject fonte) {
+	static boolean etagNaLista(String cabecalho, StorageObject fonte) {
+		// `sha256` nulo é linha `PENDING` (gravação em curso) ou sem corpo: não é versão. Sem ETag,
+		// só o asterisco casa — e ele casa porque a chave <b>existe</b>. Comparar o nulo com
+		// `"null"` fazia o `If-Match` do ETag confirmado falhar por causa de um upload na vez.
+		if (fonte.sha256() == null) {
+			return "*".equals(cabecalho.trim());
+		}
 		String comAspas = "\"" + fonte.sha256() + "\"";
 		for (String candidato : cabecalho.split(",")) {
 			String valor = candidato.trim();

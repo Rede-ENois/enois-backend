@@ -36,6 +36,8 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
+import com.socialcoisa.rede.network.domain.StorageObject;
+import com.socialcoisa.rede.network.domain.StorageObjectState;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
 import com.socialcoisa.rede.network.application.SigV4Verifier;
@@ -381,6 +383,15 @@ void put_com_if_none_match_nao_sobrescreve_chave_ocupada() throws Exception {
 	String etagDaChave = jdbc.queryForObject(
 		"select sha256 from network_storage_objects where bucket = ? and object_key = ? and state = 'STORED'",
 		String.class, bucket, "condicional/livre.txt");
+	// Um `PENDING` na chave é gravação em curso, não versão: o `sha256` dele é nulo, e o
+	// `etagNaLista` do `If-Match`/`If-None-Match` comparava com `"null"`. O defeito estava na
+	// comparação, que é estática e testável direto — o caminho HTTP já filtra o `PENDING` antes.
+	StorageObject emCurso = StorageObject.current("s3o_x", bucket, "condicional/em-curso.txt", "text/plain",
+		null, null, StorageObjectState.PENDING, "u1", Instant.now(), Instant.now(), null);
+	assertThat(S3GatewayController.etagNaLista("\"" + etagDaChave + "\"", emCurso))
+		.as("o PENDING em curso nao tem ETag: a comparacao nao pode casar").isFalse();
+	assertThat(S3GatewayController.etagNaLista("*", emCurso)).as("o asterisco vale para qualquer estado").isTrue();
+
 	MockHttpServletRequestBuilder ifNoneMatchCerto = put("/s3/" + bucket + "/condicional/livre.txt")
 		.content("troca".getBytes(StandardCharsets.UTF_8)).contentType("text/plain")
 		.header("If-None-Match", "\"" + etagDaChave + "\"");
