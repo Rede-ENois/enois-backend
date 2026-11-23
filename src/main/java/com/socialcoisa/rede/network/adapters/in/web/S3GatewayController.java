@@ -114,6 +114,9 @@ class S3GatewayController {
 	 * mensagem cita <b>um</b> subrecurso, e com dois na mesma requisição ({@code ?tagging&acl}) a ordem
 	 * de um {@code Set.of} não é contrato — a mesma requisição responderia uma coisa ou outra.
 	 */
+	/** O teto do `DeleteObjects` do S3: mais de mil chaves num POST é recusa do protocolo. */
+	private static final int MAX_DELETE_OBJECTS = 1000;
+
 	private static final List<String> SUBRECURSOS_QUE_GRAVARIAM = List.of("tagging", "acl", "retention",
 		"legal-hold", "object-lock");
 
@@ -535,6 +538,81 @@ class S3GatewayController {
 		}
 		// O bucket já "não existe" para o dono: nada vivo, nada listado. O 204 é a confirmação do S3.
 		return ResponseEntity.noContent().build();
+	}
+
+	/**
+	 * DeleteObjects: {@code POST /{bucket}?delete} apaga até 1000 chaves num único pedido.
+	 *
+	 * <p><b>Antes:</b> a rota não existia — `aws s3 rm --recursive` e o `rclone delete` mandam um POST
+	 * com o XML das chaves e o gateway respondia {@code 500 INTERNAL_ERROR} (nenhum handler para o
+	 * verbo naquele caminho). A limpeza em massa não tinha como acontecer: pagar uma requisição por
+	 * chave num bucket grande é o caminho que o protocolo evita de propósito.</p>
+	 *
+	 * <p><b>Agora:</b> cada {@code <Object><Key>} vira uma lápide pelo mesmo {@code delete} do
+	 * {@code DELETE}; chave inexistente sai como {@code <Deleted>} (apagar o que não há é sucesso no
+	 * S3); chave de outra conta sai em {@code <Error>} com {@code AccessDenied} e não é tocada;
+	 * {@code <Quiet>true</Quiet>} silencia os {@code <Deleted>}. Mais de 1000 chaves, ou nenhuma, é
+	 * {@code 400 MalformedXML}.</p>
+	 */
+	@RequestMapping(value = "/{bucket}", method = RequestMethod.POST, params = "delete")
+	ResponseEntity<String> deleteObjects(@PathVariable String bucket, HttpServletRequest request)
+			throws IOException {
+		S3Credential credential = authenticate(request, "DELETE");
+		requireBucket(credential, bucket);
+		String texto = new String(body(request).readAllBytes(), StandardCharsets.UTF_8);
+		boolean quieto = java.util.regex.Pattern.compile("<Quiet>\\s*true\\s*</Quiet>", java.util.regex.Pattern.CASE_INSENSITIVE)
+			.matcher(texto).find();
+		java.util.List<String> chaves = new java.util.ArrayList<>();
+		java.util.regex.Matcher objeto = java.util.regex.Pattern
+			.compile("<Object>(.*?)</Object>", java.util.regex.Pattern.DOTALL).matcher(texto);
+		while (objeto.find()) {
+			java.util.regex.Matcher chave = java.util.regex.Pattern
+				.compile("<Key>(.*?)</Key>", java.util.regex.Pattern.DOTALL).matcher(objeto.group(1));
+			if (chave.find()) {
+				chaves.add(decodeXml(chave.group(1)));
+			}
+		}
+		if (chaves.isEmpty()) {
+			throw s3Error(400, "MalformedXML", "DeleteObjects sem objetos.");
+		}
+		if (chaves.size() > MAX_DELETE_OBJECTS) {
+			throw s3Error(400, "MalformedXML",
+				"DeleteObjects aceita no maximo " + MAX_DELETE_OBJECTS + " chaves por pedido.");
+		}
+		S3Xml xml = new S3Xml();
+		xml.root("DeleteResult");
+		for (String chave : chaves) {
+			try {
+				// A mesma régua do DELETE de uma chave: só o objeto do dono da credencial sai.
+				StorageObject objeto_ = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, chave, "DELETE"));
+				if (!credential.ownerUserId().equals(objeto_.createdBy())) {
+					throw s3Error(403, "AccessDenied", "O objeto nao e do dono da credencial.");
+				}
+				storage.delete(credential.ownerUserId(), bucket, chave);
+				if (!quieto) {
+					xml.open("Deleted").element("Key", chave).close("Deleted");
+				}
+			}
+			catch (ApiException recusado) {
+				if (recusado.status() == 404) {
+					// Idempotência: apagar o que já não existe é sucesso, e o S3 responde assim.
+					if (!quieto) {
+						xml.open("Deleted").element("Key", chave).close("Deleted");
+					}
+					continue;
+				}
+				xml.open("Error").element("Key", chave).element("Code", "AccessDenied")
+					.element("Message", "O objeto nao pode ser apagado por esta credencial.").close("Error");
+			}
+		}
+		xml.close("DeleteResult");
+		return xml(HttpStatus.OK).body(xml.toString());
+	}
+
+	/** Desfaz o escape XML dos nomes de chave que vieram no corpo (o SDK os escapa). */
+	private static String decodeXml(String valor) {
+		return valor.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"")
+			.replace("&apos;", "'").replace("&amp;", "&");
 	}
 
 	/**
