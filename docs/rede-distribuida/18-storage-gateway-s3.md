@@ -1073,6 +1073,14 @@ valor — **2 de 2 derrubam**.
 `<ListBucketResult>` com os objetos — o cliente que pede os multiparts recebia uma lista
 **silenciosamente errada**, e as partes órfãs (processo que morreu, rede que caiu) seguiam ocupando
 disco até a varredura de lixo, sem rota para o operador vê-las.
+## 4.35 `PutBucketVersioning` / `GetBucketVersioning` (ciclo 124)
+
+O Storage **tem** versionamento por bucket desde o V352 (a política guarda `versioning`,
+`retain_superseded_days`, `expire_after_days`, e o `restore` depende dele) — mas o protocolo S3 não
+dava acesso: `PUT /{bucket}?versioning` caía no `PutObject` (`400 InvalidRequest`) e
+`GET /{bucket}?versioning` caía no `ListObjects` (`200 <ListBucketResult>`, documento do tipo
+errado). O `aws s3api put-bucket-versioning` não convencia ninguém.
+
 
 ## 4.34 `ListObjectVersions`: `?versions` mostra o histórico do bucket (ciclo 123)
 
@@ -1113,6 +1121,25 @@ bucket** não aparece; `prefix` que não casa não traz nada). Vermelho antes: `
 Mutações: tirar o filtro por dono (a primeira rodada **passou verde** porque o teste não tinha
 objeto alheio — a asserção foi tornada discriminante com a linha plantada); ignorar o `prefix`;
 listar só `version > 1` — **3 de 3 derrubam**.
+| `GET /{bucket}?versioning` | `<VersioningConfiguration>` com `<Status>Enabled</Status>` ou `<Status>Suspended</Status>` |
+| bucket nunca configurado | `<VersioningConfiguration/>` (elemento vazio, como no S3) |
+| `PUT ?versioning` com `Enabled` | `200`, liga |
+| `PUT ?versioning` com `Suspended` | `200`, desliga e zera a retenção de versão substituída |
+| qualquer outro `<Status>` | `400 MalformedXML`, configuração intacta |
+
+- Grava pela mesma `putBucketPolicy` do serviço; `expire_after_days` é **preservado** ao ligar/suspender.
+- **`Suspended` não apaga o histórico:** as versões antigas seguem listáveis (§4.34) e restauráveis —
+  "suspenso" é parar de criar versão nova, como no S3.
+
+**Verificação:** `S3GatewayTests` **+1** (`versionamento_do_bucket_liga_le_e_suspende`: vazio antes,
+liga e confere a coluna no banco, `Enabled` na leitura, `Ligado` → `400 MalformedXML` sem mudar nada,
+`Suspended` na leitura). Vermelho antes: `<ListBucketResult>`.
+Mutações: sempre emitir `<Status>`; gravar `false` sempre; gravar `true` sempre; aceitar qualquer
+`<Status>` — **4 de 4 derrubam**. *(A primeira rodada tinha duas mutações verdes: o teste não
+exercitava o `400` e o código tinha dois ramos para o mesmo comportamento. O `código` foi
+simplificado e a asserção do `MalformedXML` acrescentada; nada foi removido para "ficar verde".)*
+
+
 
 ## 4.36 `?lifecycle` fala a mesma política que o varredor (ciclo 125)
 
