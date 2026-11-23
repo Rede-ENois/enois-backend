@@ -995,6 +995,9 @@ void put_com_if_none_match_nao_sobrescreve_chave_ocupada() throws Exception {
 			.isEqualTo("max-age=60");
 		assertThat(cabecalhos.getHeader(HttpHeaders.CONTENT_DISPOSITION)).as("o nome de anexo do dono se perdeu")
 			.isEqualTo("inline; filename=eu.png");
+		// O HEAD prova os cabeçalhos; o GET prova os bytes. `restorePending` mexia no banco e deixava o
+		// arquivo com o corpo recusado: 12 bytes no HEAD e "conteudo novo" no GET.
+		assertThat(ler(chave)).as("o corpo do dono nao voltou na recusa").isEqualTo("meu conteudo");
 	}
 
 	/**

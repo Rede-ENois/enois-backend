@@ -473,6 +473,8 @@ class S3GatewayController {
 			desfazer(stored, antes, antesDeclarados);
 			throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
 		}
+		// A requisição passou: o corpo de antes não serve mais e o backup sai do disco.
+		storage.soltarBackup(stored.id());
 		return ResponseEntity.ok()
 			.eTag("\"" + stored.sha256() + "\"")
 			.header(HttpHeaders.CONTENT_LENGTH, "0")
@@ -565,6 +567,7 @@ class S3GatewayController {
 			desfazer(stored, antes, cabecalhosDeAntes);
 			throw s3Error(403, "AccessDenied", "Este bucket nao e do dono da credencial.");
 		}
+		storage.soltarBackup(stored.id());
 		S3Xml xml = new S3Xml();
 		xml.root("CopyObjectResult").element("ETag", "\"" + stored.sha256() + "\"")
 			.element("LastModified", lastModified(stored));
@@ -744,7 +747,10 @@ class S3GatewayController {
 			// A chave já tinha objeto: o que a recusa devolve é o retrato de antes — estado, conteúdo,
 			// tipo, metadado e prazo —, porque o `finishUpload` deixou ali o da gravação recusada.
 			// Apagar a linha seria apagar o objeto do dono.
-			catalog.restorePending(stored.id(), antes.contentType(), antes.bytes(), antes.sha256(),
+			// Pelo serviço, não pelo repositório: é ele que guarda o corpo de antes e o devolve ao
+			// disco. Só os metadados, o HEAD reportava o retrato do dono e o GET servia os bytes da
+			// gravação recusada.
+			storage.restorePending(stored.id(), antes.contentType(), antes.bytes(), antes.sha256(),
 				antesDeclarados.metadata(), antesDeclarados.cacheControl(), antesDeclarados.contentDisposition(),
 				antes.expiresAt());
 			return;
