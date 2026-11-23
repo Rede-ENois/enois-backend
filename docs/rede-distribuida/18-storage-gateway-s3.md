@@ -946,28 +946,29 @@ os cabeçalhos terem saído. Duas consequências:
   com os 12 bytes e sem `Content-Range`. **Verdadeiro antes da mudança** (o MockMvc não aplica o
   `Range`); fica como guarda do contrato declarado, não como prova da correção.
 
-## 4.26 `ListParts` pagina como o S3 (ciclo 114)
+## 4.27 `list-type=2` com `start-after` (ciclo 115)
 
-A rota devolvia **todas** as partes, ignorava `max-parts` e `part-number-marker` e não mandava
-`IsTruncated` nem `NextPartNumberMarker`. O SDK pagina o `ListParts` para descobrir o que já chegou num
-upload interrompido; sem `IsTruncated` ele o tratava como `false` e parava na primeira página — os
-números que ele não viu passam a não existir para ele, e o cliente reenvia tudo ou conclui uma lista
-incompleta.
+O gateway só conhecia `marker` (V1) e `continuation-token` (V2). O `start-after` — a forma do
+**ListObjectsV2** de começar a listagem depois de uma chave — era ignorado: `aws s3api
+list-objects-v2 --start-after b` e `listObjectsV2(... .startAfter("b"))` recebiam a listagem **desde o
+começo**, com `200`. Quem retoma uma varredura a partir da última chave processada relista o bucket
+inteiro, sem sinal de que o parâmetro foi descartado.
 
 ### Agora
 
-- `max-parts` (padrão e teto **1000**) e `part-number-marker` (**exclusivo**, como no S3) recortam a
-  página; a consulta pede `max-parts + 1` linha, e a extra decide o `IsTruncated`.
-- A resposta traz `PartNumberMarker` (o pedido), `MaxParts`, `IsTruncated` e, quando truncada,
-  `NextPartNumberMarker` (o número da última parte da página).
-- A página conta como `LIST` no painel: saía pelo `parts` instrumentado, e o caminho novo não pode
-  desaparecer da métrica.
+| pedido (V2) | chave de partida |
+|---|---|
+| `continuation-token` e `start-after` | o **token** (o token já diz onde continuar; o S3 ignora o `start-after`) |
+| só `start-after` | a chave pedida, **exclusiva** |
+| nenhum dos dois | começo do prefixo |
+| V1 (`marker`) | como antes; `start-after` não é parâmetro do V1 |
 
-**Verificação:** `S3MultipartTests` **+1** (`listar_partes_pagina_com_marcador_e_diz_se_ha_mais`: três
-partes; `max-parts=2` → `IsTruncated=true`, `NextPartNumberMarker=2`, sem a parte 3; a segunda página
-com o marcador → `IsTruncated=false` e só a parte 3; `max-parts=3` → página cheia, `IsTruncated=false`
-e **sem** `NextPartNumberMarker`). Mutações: marcador com `>=` (repete a parte); sem
-`NextPartNumberMarker` — **2 de 2 derrubam**.
+**Verificação:** `S3GatewayTests` **+1** (`list_v2_start_after_comeca_depois_da_chave`: três chaves,
+`start-after=inicio/b.txt` → só `c.txt`, `KeyCount=1`; com `continuation-token=inicio/a.txt` **e**
+`start-after=inicio/c.txt` → `b.txt` e `c.txt`, porque **os dois valores são diferentes** — com o mesmo
+valor o teste não distinguiria quem venceu). Mutações: ignorar o `start-after`; inverter a precedência
+para o `start-after` — **2 de 2 derrubam** (a segunda só depois de corrigir o teste, que passava verde
+com os dois parâmetros iguais).
 
 ## 5. Erros
 
