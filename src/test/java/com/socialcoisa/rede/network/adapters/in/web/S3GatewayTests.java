@@ -331,6 +331,83 @@ class S3GatewayTests {
 	}
 
 	/**
+	 * `If-None-Match: *` no PUT: grava só se a chave não existe; se existe, {@code 412}.
+	 *
+	 * <p><b>Antes:</b> o PUT ignorava {@code If-Match} e {@code If-None-Match} por completo. O
+	 * {@code aws s3api put-object --if-none-match '*'} (e o {@code .ifNoneMatch("*")} do SDK) é o
+	 * jeito de criar um objeto <b>sem sobrescrever</b> — o cliente recebia {@code 200} em silêncio
+	 * quando a chave já existia, e o objeto que estava lá era substituído (ou, aqui, recusado com
+	 * {@code 409 ObjectAlreadyStored}, que é outra resposta: o cliente pediu condição, não
+	 * sobrescrita). Num fluxo com duas fontes escrevendo o mesmo nome, o {@code If-None-Match: *}
+	 * é o que impede a segunda de perder/vencer sem saber.</p>
+	 *
+	 * <p><b>Agora:</b> a condição é conferida contra o objeto que está na chave antes de abrir
+	 * upload: chave ocupada → {@code 412 PreconditionFailed} sem tocar no objeto; chave livre →
+	 * grava como antes. {@code If-Match} divergente também responde {@code 412}.</p>
+	 */
+	@Test
+void put_com_if_none_match_nao_sobrescreve_chave_ocupada() throws Exception {
+	byte[] antigo = "versao que fica".getBytes(StandardCharsets.UTF_8);
+	gravar("condicional/ocupada.txt", "versao que fica");
+
+	MockHttpServletRequestBuilder segundo = put("/s3/" + bucket + "/condicional/ocupada.txt")
+		.content("versao que perde".getBytes(StandardCharsets.UTF_8)).contentType("text/plain")
+		.header("If-None-Match", "*");
+	assinar(segundo, SECRET, shaDe("versao que perde"));
+	var resposta = mockMvc.perform(segundo).andReturn().getResponse();
+	assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(412);
+	assertThat(resposta.getContentAsString()).contains("<Code>PreconditionFailed</Code>");
+	assertThat(ler("condicional/ocupada.txt")).isEqualTo(new String(antigo, StandardCharsets.UTF_8));
+
+	// Chave livre: a mesma condição grava, porque "não existe" é verdade.
+	MockHttpServletRequestBuilder livre = put("/s3/" + bucket + "/condicional/livre.txt")
+		.content("primeira".getBytes(StandardCharsets.UTF_8)).contentType("text/plain")
+		.header("If-None-Match", "*");
+	assinar(livre, SECRET, shaDe("primeira"));
+	mockMvc.perform(livre).andExpect(status().isOk());
+	assertThat(ler("condicional/livre.txt")).isEqualTo("primeira");
+
+	// `If-None-Match` com o ETag de OUTRA versão não casa: a condição está satisfeita e a resposta é
+	// a da sobrescrita (409), não 412 — é o que separa "confiro a lista" de "trato só o asterisco".
+	MockHttpServletRequestBuilder outroEtag = put("/s3/" + bucket + "/condicional/livre.txt")
+		.content("outra".getBytes(StandardCharsets.UTF_8)).contentType("text/plain")
+		.header("If-None-Match", "\"1111111111111111111111111111111111111111111111111111111111111111\"");
+	assinar(outroEtag, SECRET, shaDe("outra"));
+	var naoCasa = mockMvc.perform(outroEtag).andReturn().getResponse();
+	assertThat(naoCasa.getStatus()).as("Et-None-Match que nao casa nao e 412").isEqualTo(409);
+
+	// `If-Match` com o ETag CERTO passa a condição e cai na regra da sobrescrita (409): é o caso
+	// que separa "comparo a lista de ETags" de "aceito só o asterisco" — com a lista, 409; sem, 412.
+	String etagDaChave = jdbc.queryForObject(
+		"select sha256 from network_storage_objects where bucket = ? and object_key = ? and state = 'STORED'",
+		String.class, bucket, "condicional/livre.txt");
+	MockHttpServletRequestBuilder ifNoneMatchCerto = put("/s3/" + bucket + "/condicional/livre.txt")
+		.content("troca".getBytes(StandardCharsets.UTF_8)).contentType("text/plain")
+		.header("If-None-Match", "\"" + etagDaChave + "\"");
+	assinar(ifNoneMatchCerto, SECRET, shaDe("troca"));
+	var noneCasa = mockMvc.perform(ifNoneMatchCerto).andReturn().getResponse();
+	assertThat(noneCasa.getStatus()).as("If-None-Match com o etag certo recusa, como o asterisco")
+		.isEqualTo(412);
+
+	MockHttpServletRequestBuilder ifMatchCerto = put("/s3/" + bucket + "/condicional/livre.txt")
+		.content("troca".getBytes(StandardCharsets.UTF_8)).contentType("text/plain")
+		.header("If-Match", "\"" + etagDaChave + "\"");
+	assinar(ifMatchCerto, SECRET, shaDe("troca"));
+	var casa = mockMvc.perform(ifMatchCerto).andReturn().getResponse();
+	assertThat(casa.getStatus()).as("If-Match com o etag certo passa a condicao").isEqualTo(409);
+
+	// `If-Match` com outro ETag recusa; com o ETag certo, a chave confirmada continua 409 (o
+	// gateway não sobrescreve), mas a condição é avaliada antes e não mente.
+	MockHttpServletRequestBuilder ifMatchErrado = put("/s3/" + bucket + "/condicional/livre.txt")
+		.content("troca".getBytes(StandardCharsets.UTF_8)).contentType("text/plain")
+		.header("If-Match", "\"0000000000000000000000000000000000000000000000000000000000000000\"");
+	assinar(ifMatchErrado, SECRET, shaDe("troca"));
+	var recusado = mockMvc.perform(ifMatchErrado).andReturn().getResponse();
+	assertThat(recusado.getStatus()).as(recusado.getContentAsString()).isEqualTo(412);
+	assertThat(ler("condicional/livre.txt")).isEqualTo("primeira");
+}
+
+	/**
 	 * Reescrever a mesma chave é o caso normal do S3, e o dono continua dono.
 	 *
 	 * <p>Este é o caminho que a donagem pós-gravação poderia quebrar: {@code beginUpload} devolve o objeto

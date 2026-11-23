@@ -412,7 +412,17 @@ class S3GatewayController {
 		}
 		// O tipo é o que o SDK manda; sem ele, o mesmo padrão do resto do módulo.
 		String contentType = request.getContentType();
-		StorageObject antes;
+		// Refazer um PUT na mesma chave é o caso normal do S3: `beginUpload` devolve o objeto que já
+		// existe, que pode estar STORED. Guardar o estado de antes é o que permite devolvê-lo intacto
+		// se a gravação for recusada por donagem (§4.22).
+		StorageObject antes = catalog.find(bucket, key).orElse(null);
+		// `If-None-Match`/`If-Match` no PUT: o cliente pediu uma CONDIÇÃO, e a resposta de "a chave
+		// existe" é `412 PreconditionFailed`, não `409 ObjectAlreadyStored` (que é a confissão de que
+		// o gateway não sobrescreve). Antes os dois cabeçalhos eram ignorados: `--if-none-match '*'`
+		// — o jeito de criar sem sobrescrever — recebia a recusa da sobrescrita ou, com o objeto
+		// PENDING, gravava por cima. A conferência vem antes de abrir upload (§4.29).
+		exigirPrecondicoesDoPut(request, antes);
+		// O retrato do que a linha declarava, lido antes de `saveClientHeaders` trocá-lo (§4.22).
 		StorageCatalogService.ClientHeaders antesDeclarados = StorageCatalogService.ClientHeaders.NONE;
 		// Metadado e cabeçalhos declarados junto do corpo (V367): lidos ANTES da gravação, porque cabeçalho
 		// recusado não pode deixar objeto criado — nem um PENDING decorado com o que não foi aceito.
@@ -657,6 +667,31 @@ class S3GatewayController {
 		String ifNoneMatch = request.getHeader("x-amz-copy-source-if-none-match");
 		if (ifNoneMatch != null && etagNaLista(ifNoneMatch, fonte)) {
 			throw s3Error(412, "PreconditionFailed", "O ETag da origem confere com If-None-Match.");
+		}
+	}
+
+	/**
+	 * As condições do PUT contra o objeto que já está na chave (pode ser {@code null}).
+	 *
+	 * <p>{@code If-None-Match: *} é "só se não existir"; {@code If-Match} é "só se for esta versão".
+	 * As de data não são implementadas e respondem {@code 501} em vez de serem ignoradas, como as da
+	 * cópia. Chave livre com {@code If-Match} não confere: não há versão para casar.</p>
+	 */
+	private static void exigirPrecondicoesDoPut(HttpServletRequest request, StorageObject existente) {
+		if (request.getHeader("If-Modified-Since") != null || request.getHeader("If-Unmodified-Since") != null) {
+			throw s3Error(501, "NotImplemented",
+				"As condicoes de data no PUT nao sao suportadas; use If-Match ou If-None-Match.");
+		}
+		String ifMatch = request.getHeader("If-Match");
+		if (ifMatch != null && !ifMatch.isBlank()) {
+			if (existente == null || !etagNaLista(ifMatch, existente)) {
+				throw s3Error(412, "PreconditionFailed", "O objeto nao confere com If-Match.");
+			}
+		}
+		String ifNoneMatch = request.getHeader("If-None-Match");
+		if (ifNoneMatch != null && !ifNoneMatch.isBlank() && existente != null
+				&& etagNaLista(ifNoneMatch, existente)) {
+			throw s3Error(412, "PreconditionFailed", "A chave ja existe (If-None-Match).");
 		}
 	}
 
