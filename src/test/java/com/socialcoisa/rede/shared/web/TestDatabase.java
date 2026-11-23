@@ -49,6 +49,15 @@ public final class TestDatabase {
 		require().update("update users set birth_date = null where id = ?", userId);
 	}
 
+	/**
+	 * Data de cadastro da conta ({@code users.created_at}). O cadastro de teste nasce agora; cenario
+	 * de conta antiga precisa do perfil registrado numa data anterior.
+	 */
+	public static void setCreatedAt(String userId, java.time.LocalDate at) {
+		require().update("update users set created_at = ? where id = ?", java.sql.Timestamp.from(
+			at.atStartOfDay(java.time.ZoneId.of("America/Sao_Paulo")).toInstant()), userId);
+	}
+
 	/** Liga um segundo fator sem passar pelo fluxo, para cenarios que so precisam do estado final. */
 	public static void enableTwoFactor(String userId, Instant at) {
 		require().update("update users set totp_enabled_at = ? where id = ?", at, userId);

@@ -74,6 +74,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 	private final com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications;
 	private final com.socialcoisa.rede.doacoes.application.port.out.DoacaoRepository doacoes;
 	private final java.time.Clock clock;
+	private final com.socialcoisa.rede.shared.birthday.DiaDoNascimento aniversarios;
 
 	private static final Instant DEFAULT_BEFORE = Instant.parse("9999-12-31T23:59:59Z");
 
@@ -134,6 +135,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		this.postNotes = postNotes;
 		this.polls = polls;
 		this.postReposts = postReposts;
+		this.aniversarios = new com.socialcoisa.rede.shared.birthday.DiaDoNascimento(userProfileRepository, clock);
 	}
 
 	private static final long TRENDING_WINDOW_HOURS = 24;
@@ -353,6 +355,8 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		Set<String> contributorIds = userSeals.findActiveUserIds(commentAuthorIds);
 		Set<String> humanityVerified = identityVerifications.verifiedAmong(commentAuthorIds);
 		Set<String> apoiadores = doacoes.confirmedUserIds(commentAuthorIds);
+		// Aniversariante: a data vem de leitura propria, nao do perfil que a tela ja carrega.
+		Set<String> aniversariantes = aniversarios.aniversariantes(commentAuthorIds);
 		var commentAuthors = userProfileRepository.findAllByIds(commentAuthorIds).stream()
 			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
 
@@ -374,7 +378,8 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 					.withContributor(contributorIds.contains(c.authorId().value())
 						? ContributorTagView.from(p) : null)
 					.withAuthorHumanityVerified(humanityVerified.contains(c.authorId().value()))
-					.withAuthorApoiador(apoiadores.contains(c.authorId().value()));
+					.withAuthorApoiador(apoiadores.contains(c.authorId().value()))
+					.withAuthorBirthdayToday(aniversariantes.contains(c.authorId().value()));
 
 				var r = reactions.containsKey(cv.id()) ? cv.withCurrentUserReaction(reactions.get(cv.id())) : cv;
 				var summary = reactionSummaries.getOrDefault(r.id(), Map.of());
@@ -617,6 +622,7 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 		// Selo "Humanidade Comprovada": também em lote (uma consulta por página).
 		Set<String> humanityVerified = identityVerifications.verifiedAmong(profiles.keySet());
 		Set<String> apoiadores = doacoes.confirmedUserIds(profiles.keySet());
+		Set<String> aniversariantes = aniversarios.aniversariantes(profiles.keySet());
 		// A apresentação de quem assinou: post CORPORATE mostra o perfil profissional (nome, @,
 		// avatar), nunca a identidade pessoal. Uma consulta em lote para a página inteira.
 		Set<String> corporateAuthorIds = visible.stream()
@@ -715,6 +721,8 @@ public class GetFeedService implements GetFeedUseCase, GetProfilePostsUseCase, G
 					.withAuthorHumanityVerified(corporateProfile == null
 						&& humanityVerified.contains(post.authorId().value()))
 					.withAuthorApoiador(corporateProfile == null && apoiadores.contains(post.authorId().value()))
+					.withAuthorBirthdayToday(corporateProfile == null
+						&& aniversariantes.contains(post.authorId().value()))
 					.withAuthorHeadline(corporateProfile != null ? corporateProfile.headline()
 						: profile != null ? profile.headline() : null);
 				ReactionType reaction = currentUserReactions.get(post.id());

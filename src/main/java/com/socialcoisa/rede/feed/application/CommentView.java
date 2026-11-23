@@ -24,13 +24,15 @@ public record CommentView(String id, String postId, String authorId, String auth
 		/** Selo "Humanidade Comprovada" do autor — so com aprovacao confirmada no provedor. */
 		boolean authorHumanityVerified,
 		/** Selo "Apoiador" do autor: tem doacao confirmada. */
-		boolean authorApoiador) {
+		boolean authorApoiador,
+		/** Tag "Aniversariante": a pessoa faz aniversario hoje (horario de Brasilia); sinal por leitura. */
+		boolean authorBirthdayToday) {
 
 	public static CommentView from(Comment comment) {
 		return new CommentView(comment.id(), comment.postId().value(), comment.authorId().value(),
 			null, null, null, null, List.of(), comment.parentCommentId(), comment.content(), comment.mediaIds(),
 			comment.createdAt(), comment.editedAt(), null, null, 0, comment.pinned(), comment.mediaSpoiler(), null,
-			null, Map.of(), false, false, false);
+			null, Map.of(), false, false, false, false);
 	}
 
 	public static CommentView from(Comment comment, String authorName, String authorUsername, String authorAvatar,
@@ -39,46 +41,46 @@ public record CommentView(String id, String postId, String authorId, String auth
 		return new CommentView(comment.id(), comment.postId().value(), comment.authorId().value(),
 			authorName, authorUsername, authorAvatar, badges.isEmpty() ? null : badges.get(0), badges,
 			comment.parentCommentId(), comment.content(), comment.mediaIds(), comment.createdAt(),
-			comment.editedAt(), null, null, 0, comment.pinned(), comment.mediaSpoiler(), null, null, Map.of(), false, false, false);
+			comment.editedAt(), null, null, 0, comment.pinned(), comment.mediaSpoiler(), null, null, Map.of(), false, false, false, false);
 	}
 
 	public CommentView withAvatarFrame(String frame) {
 		return new CommentView(id, postId, authorId, authorName, authorUsername, authorAvatar, authorBadge,
 			authorBadges, parentCommentId, content, mediaIds, createdAt, editedAt, currentUserReaction, frame,
-			reactionCount, pinned, mediaSpoiler, authorStyle, authorContributor, reactionSummary, accepted, authorHumanityVerified, authorApoiador);
+			reactionCount, pinned, mediaSpoiler, authorStyle, authorContributor, reactionSummary, accepted, authorHumanityVerified, authorApoiador, authorBirthdayToday);
 	}
 
 	public CommentView withCurrentUserReaction(ReactionType reaction) {
 		return new CommentView(id, postId, authorId, authorName, authorUsername, authorAvatar, authorBadge,
 			authorBadges, parentCommentId, content, mediaIds, createdAt, editedAt, reaction, authorAvatarFrame,
-			reactionCount, pinned, mediaSpoiler, authorStyle, authorContributor, reactionSummary, accepted, authorHumanityVerified, authorApoiador);
+			reactionCount, pinned, mediaSpoiler, authorStyle, authorContributor, reactionSummary, accepted, authorHumanityVerified, authorApoiador, authorBirthdayToday);
 	}
 
 	/** Anexa a personalizacao do nome do autor (cosmetico) depois de carregar o perfil. */
 	public CommentView withAuthorStyle(NameStyleView style) {
 		return new CommentView(id, postId, authorId, authorName, authorUsername, authorAvatar, authorBadge,
 			authorBadges, parentCommentId, content, mediaIds, createdAt, editedAt, currentUserReaction,
-			authorAvatarFrame, reactionCount, pinned, mediaSpoiler, style, authorContributor, reactionSummary, accepted, authorHumanityVerified, authorApoiador);
+			authorAvatarFrame, reactionCount, pinned, mediaSpoiler, style, authorContributor, reactionSummary, accepted, authorHumanityVerified, authorApoiador, authorBirthdayToday);
 	}
 
 	/** Anexa a tag de contribuinte do autor (cosmetica) depois de conferir os selos ativos. */
 	public CommentView withContributor(ContributorTagView tag) {
 		return new CommentView(id, postId, authorId, authorName, authorUsername, authorAvatar, authorBadge,
 			authorBadges, parentCommentId, content, mediaIds, createdAt, editedAt, currentUserReaction,
-			authorAvatarFrame, reactionCount, pinned, mediaSpoiler, authorStyle, tag, reactionSummary, accepted, authorHumanityVerified, authorApoiador);
+			authorAvatarFrame, reactionCount, pinned, mediaSpoiler, authorStyle, tag, reactionSummary, accepted, authorHumanityVerified, authorApoiador, authorBirthdayToday);
 	}
 
 	public CommentView withReactionCount(int count) {
 		return new CommentView(id, postId, authorId, authorName, authorUsername, authorAvatar, authorBadge,
 			authorBadges, parentCommentId, content, mediaIds, createdAt, editedAt, currentUserReaction,
-			authorAvatarFrame, count, pinned, mediaSpoiler, authorStyle, authorContributor, reactionSummary, accepted, authorHumanityVerified, authorApoiador);
+			authorAvatarFrame, count, pinned, mediaSpoiler, authorStyle, authorContributor, reactionSummary, accepted, authorHumanityVerified, authorApoiador, authorBirthdayToday);
 	}
 
 	/** Anexa a contagem por tipo (pilulas de reacao do comentario, como no post). */
 	public CommentView withReactionSummary(Map<ReactionType, Long> summary) {
 		return new CommentView(id, postId, authorId, authorName, authorUsername, authorAvatar, authorBadge,
 			authorBadges, parentCommentId, content, mediaIds, createdAt, editedAt, currentUserReaction,
-			authorAvatarFrame, reactionCount, pinned, mediaSpoiler, authorStyle, authorContributor, summary, accepted, authorHumanityVerified, authorApoiador);
+			authorAvatarFrame, reactionCount, pinned, mediaSpoiler, authorStyle, authorContributor, summary, accepted, authorHumanityVerified, authorApoiador, authorBirthdayToday);
 	}
 
 	/** Anexa o selo "Humanidade Comprovada" do autor (cosmetico; lote por pagina). */
@@ -86,7 +88,7 @@ public record CommentView(String id, String postId, String authorId, String auth
 		return new CommentView(id, postId, authorId, authorName, authorUsername, authorAvatar, authorBadge,
 			authorBadges, parentCommentId, content, mediaIds, createdAt, editedAt, currentUserReaction,
 			authorAvatarFrame, reactionCount, pinned, mediaSpoiler, authorStyle, authorContributor, reactionSummary,
-			accepted, verified, authorApoiador);
+			accepted, verified, authorApoiador, authorBirthdayToday);
 	}
 
 	/** Anexa o selo "Apoiador" do autor (cosmetico; lote por pagina). */
@@ -94,13 +96,21 @@ public record CommentView(String id, String postId, String authorId, String auth
 		return new CommentView(id, postId, authorId, authorName, authorUsername, authorAvatar, authorBadge,
 			authorBadges, parentCommentId, content, mediaIds, createdAt, editedAt, currentUserReaction,
 			authorAvatarFrame, reactionCount, pinned, mediaSpoiler, authorStyle, authorContributor, reactionSummary,
-			accepted, authorHumanityVerified, apoiador);
+			accepted, authorHumanityVerified, apoiador, authorBirthdayToday);
 	}
 
 	public CommentView withAccepted(boolean value) {
 		return new CommentView(id, postId, authorId, authorName, authorUsername, authorAvatar, authorBadge,
 			authorBadges, parentCommentId, content, mediaIds, createdAt, editedAt, currentUserReaction,
 			authorAvatarFrame, reactionCount, pinned, mediaSpoiler, authorStyle, authorContributor, reactionSummary,
-			value, authorHumanityVerified, authorApoiador);
+			value, authorHumanityVerified, authorApoiador, authorBirthdayToday);
+	}
+
+	/** Anexa a tag "Aniversariante" do autor (cosmetica; lote por pagina). */
+	public CommentView withAuthorBirthdayToday(boolean birthdayToday) {
+		return new CommentView(id, postId, authorId, authorName, authorUsername, authorAvatar, authorBadge,
+			authorBadges, parentCommentId, content, mediaIds, createdAt, editedAt, currentUserReaction,
+			authorAvatarFrame, reactionCount, pinned, mediaSpoiler, authorStyle, authorContributor, reactionSummary,
+			accepted, authorHumanityVerified, authorApoiador, birthdayToday);
 	}
 }

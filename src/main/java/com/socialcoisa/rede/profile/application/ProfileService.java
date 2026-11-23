@@ -39,6 +39,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 	private final com.socialcoisa.rede.media.application.MediaPublicHost media;
 	private final int updatesPerHour;
 	private final Clock clock;
+	private final com.socialcoisa.rede.shared.birthday.DiaDoNascimento aniversarios;
 
 	public ProfileService(UserProfileRepository repository, ReputationService reputationService,
 			org.springframework.beans.factory.ObjectProvider<com.socialcoisa.rede.media.application.LazyUrlMigrationService> lazyMedia,
@@ -63,6 +64,7 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 		this.media = media;
 		this.updatesPerHour = updatesPerHour;
 		this.clock = clock;
+		this.aniversarios = new com.socialcoisa.rede.shared.birthday.DiaDoNascimento(repository, clock);
 	}
 
 	/** Foto/capa lidas no perfil: agenda a migração para o S3 (sem bloquear a resposta). */
@@ -110,7 +112,10 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 		agendarMigracaoDeMidia(profile);
 		return comSelo(UserProfileView.from(profile))
 			.withAvatarUrl(media.localize(profile.avatar()))
-			.withBioHtml(profile.bioHtml()).withBannerHtml(profile.bannerHtml());
+			.withBioHtml(profile.bioHtml()).withBannerHtml(profile.bannerHtml())
+			// Por fora do cache: a tag depende do DIA, e a entrada do cache pode ter sido montada
+			// ontem (TTL curto, mas virada de meia-noite nao e impossivel). A data ja esta no perfil.
+			.withBirthdayToday(aniversarios.fazAniversarioHoje(profile.id()));
 	}
 
 	/**
@@ -158,7 +163,8 @@ public class ProfileService implements GetMeUseCase, GetUserProfileUseCase, Upda
 			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuario nao encontrado."));
 		return comSelo(UserProfileView.from(profile))
 			.withAvatarUrl(media.localize(profile.avatar()))
-			.withBioHtml(profile.bioHtml()).withBannerHtml(profile.bannerHtml());
+			.withBioHtml(profile.bioHtml()).withBannerHtml(profile.bannerHtml())
+			.withBirthdayToday(aniversarios.fazAniversarioHoje(profile.id()));
 	}
 
 	/**

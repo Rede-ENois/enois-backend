@@ -66,6 +66,7 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 	private final com.socialcoisa.rede.identity.application.port.out.IdentityVerificationRepository identityVerifications;
 	private final com.socialcoisa.rede.coin.application.CoinService coins;
 	private final NewAccountCooldown newAccountCooldown;
+	private final com.socialcoisa.rede.shared.birthday.DiaDoNascimento aniversarios;
 	/**
 	 * Nome de exibição de conta banida (issue #1021): o comentário fica, a identidade não.
 	 * Mesma convenção do feed (GetFeedService#BANNED_DISPLAY_NAME).
@@ -119,6 +120,7 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 		this.identityVerifications = identityVerifications;
 		this.coins = coins;
 		this.newAccountCooldown = newAccountCooldown;
+		this.aniversarios = new com.socialcoisa.rede.shared.birthday.DiaDoNascimento(userProfileRepository, clock);
 		this.userRateLimiter = userRateLimiter;
 		this.duplicationGuard = duplicationGuard;
 		this.behavioralTimingGuard = behavioralTimingGuard;
@@ -161,7 +163,8 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 			.withAuthorStyle(NameStyleView.from(profile))
 			.withContributor(userSeals.hasActiveSeal(command.authorId().value())
 				? ContributorTagView.from(profile) : null)
-			.withAuthorHumanityVerified(identityVerifications.isVerified(command.authorId().value()));
+			.withAuthorHumanityVerified(identityVerifications.isVerified(command.authorId().value()))
+			.withAuthorBirthdayToday(aniversarios.fazAniversarioHoje(profile.id()));
 	}
 
 	/**
@@ -223,6 +226,7 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 		// Banido vira "Usuário" (issue #1021): o comentário continua — sumir deixava o fio
 		// desconexo — mas sem nome, @, avatar nem badges. Uma consulta por página.
 		Set<String> bannedAuthors = sanctionGateReader.bannedAmong(commentAuthorIds);
+		Set<String> aniversariantes = aniversarios.aniversariantes(commentAuthorIds);
 		var comments = allComments.stream()
 			.filter(c -> !hidden.contains(c.authorId().value()))
 			.map(c -> {
@@ -238,6 +242,7 @@ public class PostInteractionService implements CommentOnPostUseCase, GetComments
 									.withContributor(!hiddenAuthor && contributorIds.contains(c.authorId().value())
 											? ContributorTagView.from(p) : null)
 									.withAuthorHumanityVerified(!hiddenAuthor && humanityVerified.contains(c.authorId().value()))
+									.withAuthorBirthdayToday(!hiddenAuthor && aniversariantes.contains(c.authorId().value()))
 					.withAccepted(c.id().equals(acceptedCommentId));
 			})
 			.toList();
