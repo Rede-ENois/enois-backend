@@ -230,9 +230,18 @@ class S3GatewayController {
 					"Este gateway nao aplica <" + naoHonrada + ">; a politica nao foi alterada.");
 			}
 		}
-		if (texto.contains("<Expiration><Date>") || texto.contains("<Expiration>\n  <Date>")) {
-			throw s3Error(400, "InvalidRequest",
-				"Prazo por data absoluta nao e suportado; use <Expiration><Days>.");
+		// Por varredura do elemento, não por string literal: qualquer indentação (`\t`, 6 espaços,
+		// `\r\n`) escapava da comparação byte-exata, `diasDoXml` voltava `null` e o `UPSERT` gravava
+		// `null` por cima do prazo que o varredor segue aplicando — apagar em silêncio.
+		for (String bloco : List.of("Expiration", "NoncurrentVersionExpiration", "NoncurrentVersionTransition")) {
+			for (String trecho : trechosDe(texto, bloco)) {
+				boolean temData = trecho.contains("<Date>");
+				boolean temDias = trecho.contains("<Days>") || trecho.contains("<NoncurrentDays>");
+				if (temData || !temDias) {
+					throw s3Error(400, "InvalidRequest",
+						"Prazo em <" + bloco + "> sem <Days> nao e suportado; a politica nao foi alterada.");
+				}
+			}
 		}
 		Integer dias = diasDoXml(texto, "Expiration", "Days");
 		Integer diasNaoCorrente = diasDoXml(texto, "NoncurrentVersionExpiration", "NoncurrentDays");
@@ -247,11 +256,43 @@ class S3GatewayController {
 
 	/** O inteiro de {@code <Bloco><Campo>N</Campo></Bloco>} no XML, ou {@code null} se ausente. */
 	private static Integer diasDoXml(String texto, String bloco, String campo) {
-		java.util.regex.Matcher m = java.util.regex.Pattern
-			.compile("<" + bloco + ">.*?<" + campo + ">\\s*(\\d+)\\s*</" + campo + ">.*?</" + bloco + ">",
-				java.util.regex.Pattern.DOTALL)
-			.matcher(texto);
-		return m.find() ? Integer.parseInt(m.group(1)) : null;
+		for (String trecho : trechosDe(texto, bloco)) {
+			String valor = entre(trecho, "<" + campo + ">", "</" + campo + ">");
+			if (valor != null) {
+				try {
+					return Integer.parseInt(valor.trim());
+				}
+				catch (NumberFormatException naoENumero) {
+					return null;
+				}
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Os trechos de cada {@code <Bloco>…</Bloco>} do XML, na ordem.
+	 *
+	 * <p>Varredura linear, como o parser do `CompleteMultipartUpload`: a versão anterior era uma
+	 * expressão com {@code .*?} dos dois lados sobre o corpo inteiro, que o CodeQL marca e que erra
+	 * em qualquer formatação que não a esperada.</p>
+	 */
+	private static List<String> trechosDe(String texto, String bloco) {
+		List<String> trechos = new java.util.ArrayList<>();
+		int cursor = 0;
+		while (true) {
+			int abre = texto.indexOf("<" + bloco + ">", cursor);
+			if (abre < 0) {
+				break;
+			}
+			int fecha = texto.indexOf("</" + bloco + ">", abre);
+			if (fecha < 0) {
+				break;
+			}
+			trechos.add(texto.substring(abre + bloco.length() + 2, fecha));
+			cursor = fecha + bloco.length() + 3;
+		}
+		return trechos;
 	}
 
 	/** ListObjectsV2 ({@code ?list-type=2}) e ListObjects v1. */
