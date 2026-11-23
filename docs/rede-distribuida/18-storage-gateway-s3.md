@@ -113,10 +113,15 @@ catálogo:
 - `discardPending(id)` — **apaga a linha** (e as localizações) do objeto **que esta gravação criou**;
   é a inversão de um `createPending`. Um objeto plantado por outra conta no bucket alheio é exatamente
   esse caso: se ficasse, passaria a "dar" o bucket ao invasor.
-- `restorePending(id)` — devolve `STORED → PENDING` na chave que **já existia**. O `beginUpload`
-  devolve o objeto existente, então reler a chave depois de gravar daria o objeto recém-gravado do
-  próprio dono e a donagem passaria sempre; por isso a pergunta é sobre **o bucket**, e por isso o
-  objeto anterior é guardado antes do upload.
+- `restorePending(id, retrato…)` — devolve à chave que **já existia** o retrato que ela tinha antes
+  da gravação: estado, conteúdo, digest, tipo, metadado, `Cache-Control`, `Content-Disposition` e
+  prazo (§4.22). O `beginUpload` devolve a linha que o `finishUpload` vai gravar, então reler a chave
+  *depois* de gravar daria o objeto recém-gravado e a donagem passaria sempre; por isso a pergunta é
+  sobre **o bucket**, e por isso o retrato é lido **antes** do `saveClientHeaders` — que troca o que a
+  linha declarava pelos cabeçalhos desta requisição.
+
+Uma lápide de outra conta é recusa **antes** de abrir a chave (`recusarChaveDeOutraConta`): a chave
+apagada não volta para quem não a apagou (§4.22).
 
 **403 em vez de 404.** O S3 responde 404 a um bucket que o chamador não pode ver; aqui a resposta é 403
 com `AccessDenied`. Quem tem credencial válida e recebe 404 acha que o bucket é dele e o objeto sumiu —
@@ -834,6 +839,75 @@ A guarda roda **antes** do desvio para o `CopyObject` (§4.19): um `PUT ?tagging
 cópia que o ciclo 90 tinha no `PUT` foi substituída pela operação de verdade (§4.19); a do
 `UploadPartCopy` ficou só no caminho da parte.
 
+## 4.22 A recusa por donagem devolve o objeto de antes (ciclo 110)
+
+O `PUT` recusa gravar num bucket que tem objeto de outra conta — a conferência é feita **depois** da
+gravação (é a gravação que dá dono ao bucket) e, quando recusa, desfaz. A desfeita tinha três furos:
+
+1. **O objeto do dono ficava sem corpo.** A volta era só `STORED → PENDING` com `bytes` e `sha256`
+   apagados, e o tipo, o metadado e o nome de anexo ficavam os da gravação recusada. O objeto saía da
+   listagem, respondia `404` no `GET` e no `HEAD`, e o `PENDING` que sobrava não era reescrevível —
+   a gravação seguinte devolvia `409 ObjectAlreadyStored`.
+2. **O metadado do dono era apagado antes da recusa.** O `saveClientHeaders` da nova gravação troca o
+   que a linha declarava pelo desta requisição; um `PUT` sem `x-amz-meta-*` apagava o do dono.
+3. **A lápide não ocupava a chave.** Depois de um `DELETE` do dono, um `PUT` de outra conta na mesma
+   chave passava pela conferência (a lápide não conta como objeto vivo, e o bucket passava a "ser sem
+   dono"): a chave ficava **inteira** com o objeto do intruso — tipo, metadado e nome de anexo — e a
+   resposta era `200`. O `DELETE` não entregava o nome da chave.
+
+### Agora
+
+- A devolução usa o **retrato da linha antes do `saveClientHeaders`**: estado, conteúdo, digest, tipo,
+  metadado, `Cache-Control`, `Content-Disposition` e prazo. Um objeto que tinha corpo volta a `STORED`
+  e é servido de novo com o `ETag` de antes; uma linha sem corpo volta a `PENDING`. A linha é apagada
+  só quando não tinha corpo — a chave nova de outra conta, que não deve ficar (é ela que daria o
+  bucket ao intruso).
+- A lápide é uma **tomada de posse da chave**: escrever numa chave apagada por outra conta é
+  **`403 AccessDenied`**, conferido **antes** de abrir a chave — nem linha criada, nem corpo medido.
+  A guarda é da escrita: o `GET` de uma lápide continua `404 NoSuchKey`.
+
+**Verificação:** `S3GatewayTests` **+2**.
+
+- `put_recusado_por_donagem_devolve_o_objeto_que_ja_estava_na_chave` — linha `STORED` do dono
+  estacionada como `PENDING`, outra conta no bucket, o dono regrava: `403 AccessDenied` e o `HEAD`
+  devolve `200` com o tamanho, o `ETag`, o tipo, o metadado, o `Cache-Control` e o nome de anexo de
+  antes. Mutações que a derrubam (todas verificadas): estado devolvido sempre `PENDING`; corpo zerado
+  na devolução (`409 ObjectAlreadyStored` no reenvio); cabeçalhos de antes não devolvidos.
+- `chave_apagada_por_um_dono_nao_aceita_escrita_de_outra_conta` — o dono do bucket apaga a chave,
+  outra conta grava a própria chave nele e tenta a chave apagada: `403 AccessDenied`, e a lápide fica
+  com o autor, o digest, o tipo e o metadado de antes, sem o nome de anexo de quem tentou. Mutação que
+  a derruba: sem a guarda da lápide a resposta é `200` e a chave fica do intruso.
+
+## 4.23 A lápide própria lê `404`, não `403` (ciclo 111)
+
+O `GET` e o `HEAD` provavam donagem por `bucketsOf`, que filtra `state <> 'DELETED'`. O `DELETE`
+grava **lápide** (`DELETED`), então apagar a **última** chave viva do bucket tirava o bucket do dono
+para a leitura dele mesmo: o `GET` e o `HEAD` da chave apagada respondiam
+**`403 AccessDenied` — "Este bucket nao e do dono da credencial"**, como se o bucket fosse de outra
+conta. O dono perdia o próprio objeto pelo nome errado, e só o `DeleteBucket` (ciclo 100) usava a régua
+certa. O teste que existia aceitava `403` **e** `404` (`isIn(403, 404)`), então a regressão passava.
+
+### Agora
+
+`requireBucketDoDono` aceita o bucket do dono (`bucketsOf`, só vivo) **ou** o bucket em que ele tem
+linha no catálogo, vivo ou lápide (`bucketHasObjectsOf`) — a mesma régua do `DeleteBucket` (§4.15).
+
+| situação | resposta |
+|---|---|
+| leitura de chave **viva** do dono | `200` |
+| leitura de **lápide** do dono | `404 NoSuchKey` |
+| leitura em bucket que o dono **nunca** gravou | `403 AccessDenied` |
+| `PUT` na lápide **de outra conta** | `403 AccessDenied` (§4.22, quando mergeado) |
+
+A lápide é de quem a criou: a régua nova não abre bucket alheio, e o dono continua regravando a chave
+que ele mesmo apagou.
+
+**Verificação:** `S3GatewayTests` **+1** (`lapide_propria_le_404_e_nao_403`: grava, apaga a única
+chave, e exige `404 NoSuchKey` no `GET` e no `HEAD`, `200` com `<KeyCount>0</KeyCount>` na listagem e o
+regrave funcionando). O `delete_vira_lapide`, que aceitava `isIn(403, 404)`, passa a exigir `404`.
+Mutações: voltar à régua só de vivos (`403`); aceitar qualquer bucket
+(`escopo_nulo_nao_alcanca_bucket_de_outra_conta_por_cabecalho` cai) — **2 de 2 derrubam**.
+
 ## 4.24 Objeto cuja cópia está em outro nó: `503 SlowDown` (ciclo 112)
 
 A cópia era procurada **dentro** do corpo da resposta (`StreamingResponseBody`), depois de os `200` e
@@ -872,28 +946,29 @@ os cabeçalhos terem saído. Duas consequências:
   com os 12 bytes e sem `Content-Range`. **Verdadeiro antes da mudança** (o MockMvc não aplica o
   `Range`); fica como guarda do contrato declarado, não como prova da correção.
 
-## 4.26 `ListParts` pagina como o S3 (ciclo 114)
+## 4.28 A URL pré-assinada assina o caminho que ela carrega (ciclo 116)
 
-A rota devolvia **todas** as partes, ignorava `max-parts` e `part-number-marker` e não mandava
-`IsTruncated` nem `NextPartNumberMarker`. O SDK pagina o `ListParts` para descobrir o que já chegou num
-upload interrompido; sem `IsTruncated` ele o tratava como `false` e parava na primeira página — os
-números que ele não viu passam a não existir para ele, e o cliente reenvia tudo ou conclui uma lista
-incompleta.
+O emissor assinava `"/" + bucket + "/" + key` com a chave **crua** e emitia a URL com cada segmento
+passado por `uriEncode`. Numa chave com espaço, acento, `+` ou `%`, a assinatura não era a da URL
+emitida: o portador recebia, numa URL recém-emitida,
+
+```
+GET /s3/<bucket>/fotos/meu%20arquivo%20%C3%A7%C3%A3o.jpg?X-Amz-Signature=…
+403 AccessDenied "A URL pre-assinada expirou ou a assinatura nao confere."
+```
+
+A mensagem manda o cliente procurar relógio ou validade; o defeito era a codificação. Nome de arquivo
+com espaço é o caso comum, e todos os testes de URL usavam `fotos/url.jpg`, que não tem caractere a
+codificar.
 
 ### Agora
 
-- `max-parts` (padrão e teto **1000**) e `part-number-marker` (**exclusivo**, como no S3) recortam a
-  página; a consulta pede `max-parts + 1` linha, e a extra decide o `IsTruncated`.
-- A resposta traz `PartNumberMarker` (o pedido), `MaxParts`, `IsTruncated` e, quando truncada,
-  `NextPartNumberMarker` (o número da última parte da página).
-- A página conta como `LIST` no painel: saía pelo `parts` instrumentado, e o caminho novo não pode
-  desaparecer da métrica.
+O caminho assinado é montado com o mesmo `uriEncode` por segmento que a URL carrega — e é o mesmo
+texto que o `canonicalUri` do verificador produz ao recodificar o caminho recebido.
 
-**Verificação:** `S3MultipartTests` **+1** (`listar_partes_pagina_com_marcador_e_diz_se_ha_mais`: três
-partes; `max-parts=2` → `IsTruncated=true`, `NextPartNumberMarker=2`, sem a parte 3; a segunda página
-com o marcador → `IsTruncated=false` e só a parte 3; `max-parts=3` → página cheia, `IsTruncated=false`
-e **sem** `NextPartNumberMarker`). Mutações: marcador com `>=` (repete a parte); sem
-`NextPartNumberMarker` — **2 de 2 derrubam**.
+**Verificação:** `S3GatewayTests` **+1** (`url_pre_assinada_abre_chave_com_espaco_e_acento`: grava e
+emite para `fotos/meu arquivo ção.jpg`, confere `%20`/`%C3%A7` na URL e abre → `200` com o corpo).
+Mutação: voltar a assinar a chave crua — **derruba**.
 
 ## 5. Erros
 
