@@ -538,8 +538,11 @@ class S3GatewayController {
 		// ignorado, e o cliente que retomava a partir de uma chave relistava tudo o que já tinha.
 		// Quando há `continuation-token`, ele manda: o token já diz onde continuar, e o S3 ignora o
 		// `start-after` nesse caso.
+		// O token é opaco e assinado com o segredo da credencial e o bucket (§4.53): só vale o que este
+		// gateway emitiu para este bucket. Lixo (ou token de outro bucket) é `400`, não "acabou".
 		String after = v2
-			? (query.get("continuation-token") != null ? query.get("continuation-token") : query.get("start-after"))
+			? (query.get("continuation-token") != null
+				? tokenDeContinuacao(credential, bucket, query.get("continuation-token")) : query.get("start-after"))
 			: query.get("marker");
 		String prefix = query.get("prefix");
 		String delimiter = query.get("delimiter");
@@ -599,7 +602,8 @@ class S3GatewayController {
 		}
 		xml.element("MaxKeys", maxKeys).element("KeyCount", contados).element("IsTruncated", truncated);
 		if (truncated && ultimoEmitido != null) {
-			xml.element(v2 ? "NextContinuationToken" : "NextMarker", ultimoEmitido);
+			xml.element(v2 ? "NextContinuationToken" : "NextMarker",
+				v2 ? emitirTokenDeContinuacao(credential, bucket, ultimoEmitido) : ultimoEmitido);
 		}
 		for (StorageObject object : chaves) {
 			xml.open("Contents").element("Key", object.key())
@@ -834,6 +838,79 @@ class S3GatewayController {
 		}
 		throw s3Error(501, "NotImplemented", "A classe de armazenamento '" + classe.trim()
 			+ "' nao e suportada: este gateway so guarda STANDARD, e o objeto nao foi gravado.");
+	}
+
+	/**
+	 * Emite o {@code NextContinuationToken}: a última chave emitida, assinada com o segredo da
+	 * credencial e o bucket (§4.53).
+	 *
+	 * <p><b>Antes:</b> o token era a última chave <b>em claro</b>, usada como posição sem conferência
+	 * nenhuma. Qualquer string virava posição: {@code continuation-token=lixo} respondia {@code 200}
+	 * com lista vazia, e o cliente concluía que o bucket acabou; o token de um bucket servia no outro.</p>
+	 *
+	 * <p><b>Agora:</b> {@code base64(posição)} + {@code "."} + HMAC-SHA-256 de "bucket posição"
+	 * truncado. O que não confere é {@code 400 InvalidArgument}. Não é um MAC de segurança de dados —
+	 * é a prova de que o token veio daqui, para este bucket, com esta credencial.</p>
+	 */
+	private String emitirTokenDeContinuacao(S3Credential credential, String bucket, String ultimaChave) {
+		String segredo = segredoDoToken(credential);
+		String corpo = java.util.Base64.getUrlEncoder().withoutPadding()
+			.encodeToString(ultimaChave.getBytes(StandardCharsets.UTF_8));
+		return corpo + "." + assinaturaDoToken(segredo, bucket, ultimaChave);
+	}
+
+	/**
+	 * O segredo que assina o token: o mesmo com que a requisição foi verificada.
+	 *
+	 * <p>A requisição de listagem passou pela SigV4 com este segredo; chegar aqui sem ele é a
+	 * credencial inconsistente na base, não o cliente. Devolver um token que o leitor recusa seria
+	 * uma paginação que morre na segunda página.</p>
+	 */
+	private String segredoDoToken(S3Credential credential) {
+		String segredo = credentials.secretFor(credential.id());
+		if (segredo == null) {
+			throw s3Error(403, "SignatureDoesNotMatch",
+				"Credencial sem segredo guardado nao pode assinar; gere uma nova.");
+		}
+		return segredo;
+	}
+
+	/** A posição de uma `continuation-token`, ou {@code 400} se o token não foi emitido aqui. */
+	private String tokenDeContinuacao(S3Credential credential, String bucket, String token) {
+		String segredo = segredoDoToken(credential);
+		int ponto = token.lastIndexOf('.');
+		if (ponto <= 0 || ponto == token.length() - 1) {
+			throw s3Error(400, "InvalidArgument",
+				"O continuation-token nao foi emitido por este gateway para este bucket.");
+		}
+		String chave;
+		try {
+			chave = new String(java.util.Base64.getUrlDecoder().decode(token.substring(0, ponto)), StandardCharsets.UTF_8);
+		}
+		catch (IllegalArgumentException naoEhBase64) {
+			throw s3Error(400, "InvalidArgument",
+				"O continuation-token nao foi emitido por este gateway para este bucket.");
+		}
+		// Comparação em tempo fixo: o token é público, mas comparar sem curto-circuito é a regra.
+		if (!java.security.MessageDigest.isEqual(assinaturaDoToken(segredo, bucket, chave).getBytes(StandardCharsets.US_ASCII),
+				token.substring(ponto + 1).getBytes(StandardCharsets.US_ASCII))) {
+			throw s3Error(400, "InvalidArgument",
+				"O continuation-token nao foi emitido por este gateway para este bucket.");
+		}
+		return chave;
+	}
+
+	/** HMAC-SHA-256 de {@code bucket + "\n" + chave}, hexadecimal. */
+	private static String assinaturaDoToken(String segredo, String bucket, String chave) {
+		try {
+			javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+			mac.init(new javax.crypto.spec.SecretKeySpec(segredo.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+			return java.util.HexFormat.of().formatHex(
+				mac.doFinal((bucket + "\n" + chave).getBytes(StandardCharsets.UTF_8)));
+		}
+		catch (java.security.GeneralSecurityException semHmac) {
+			throw new IllegalStateException("HmacSHA256 nao disponivel", semHmac);
+		}
 	}
 
 	/**
