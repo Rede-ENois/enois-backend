@@ -820,7 +820,6 @@ class S3GatewayController {
 		"x-amz-server-side-encryption-customer-algorithm", "x-amz-server-side-encryption-aws-kms-key-id");
 
 	/**
-<<<<<<< HEAD
 	 * {@code x-amz-storage-class} além de {@code STANDARD}, que é a única classe que o gateway faz.
 	 *
 	 * <p><b>Antes:</b> o cabeçalho era ignorado e todo {@code PUT} respondia {@code 200}. Quem manda
@@ -838,7 +837,9 @@ class S3GatewayController {
 		}
 		throw s3Error(501, "NotImplemented", "A classe de armazenamento '" + classe.trim()
 			+ "' nao e suportada: este gateway so guarda STANDARD, e o objeto nao foi gravado.");
-=======
+	}
+
+	/**
 	 * Emite o {@code NextContinuationToken}: a última chave emitida, assinada com o segredo da
 	 * credencial e o bucket (§4.53).
 	 *
@@ -909,7 +910,6 @@ class S3GatewayController {
 		catch (java.security.GeneralSecurityException semHmac) {
 			throw new IllegalStateException("HmacSHA256 nao disponivel", semHmac);
 		}
->>>>>>> 8cb2b5db (fix(storage): continuation-token opaco e assinado (doc 18 §4.53))
 	}
 
 	/**

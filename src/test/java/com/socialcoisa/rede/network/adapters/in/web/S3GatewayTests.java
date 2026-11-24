@@ -1452,8 +1452,11 @@ void put_com_if_none_match_nao_sobrescreve_chave_ocupada() throws Exception {
 
 		var doc = javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder()
 			.parse(new java.io.ByteArrayInputStream(xml1.getBytes(StandardCharsets.UTF_8)));
+		// O token é opaco e assinado (§4.53): a posição `p/sub/` vai em base64 e com HMAC, nunca em
+		// claro. Antes desta rota, o token era a chave crua; conferir o valor literal aqui seria a
+		// asserção que o ciclo 143 existe para invalidar.
 		String token = doc.getElementsByTagName("NextContinuationToken").item(0).getTextContent();
-		assertThat(token).isEqualTo("p/sub/");
+		assertThat(token).isNotEqualTo("p/sub/").contains(".");
 
 		MockHttpServletRequestBuilder segundo = get("/s3/" + bucket).queryParam("list-type", "2")
 			.queryParam("prefix", "p/").queryParam("delimiter", "/").queryParam("max-keys", "2")
@@ -1657,7 +1660,7 @@ void put_com_if_none_match_nao_sobrescreve_chave_ocupada() throws Exception {
 		// não distingue "token venceu" de "start-after venceu": seria a mesma chave de partida.
 		MockHttpServletRequestBuilder comToken = get("/s3/" + bucket).queryParam("list-type", "2")
 			.queryParam("prefix", "inicio/").queryParam("start-after", "inicio/c.txt")
-			.queryParam("continuation-token", "inicio/a.txt");
+			.queryParam("continuation-token", tokenQueDiz("inicio/a.txt"));
 		assinar(comToken, SECRET, shaVazio());
 		var comTokenResposta = mockMvc.perform(comToken).andReturn().getResponse();
 		assertThat(comTokenResposta.getStatus()).isEqualTo(200);
@@ -3162,6 +3165,26 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 			+ java.net.URLEncoder.encode(tokenDoB, StandardCharsets.UTF_8));
 		assinar(p2, SECRET, shaVazio());
 		assertThat(mockMvc.perform(p2).andReturn().getResponse().getStatus()).isEqualTo(400);
+	}
+
+	/**
+	 * Um {@code continuation-token} válido para a chave, com a assinatura que o gateway confere.
+	 *
+	 * <p>Desde o §4.53 o token carrega HMAC do bucket e da chave: o valor em claro é recusado com
+	 * {@code 400}. Para testar "o token vence o start-after" o token precisa ser legítimo.</p>
+	 */
+	private String tokenQueDiz(String chave) {
+		try {
+			String corpo = java.util.Base64.getUrlEncoder().withoutPadding()
+				.encodeToString(chave.getBytes(StandardCharsets.UTF_8));
+			javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+			mac.init(new javax.crypto.spec.SecretKeySpec(SECRET.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+			return corpo + "." + java.util.HexFormat.of().formatHex(
+				mac.doFinal((bucket + "\n" + chave).getBytes(StandardCharsets.UTF_8)));
+		}
+		catch (java.security.GeneralSecurityException semHmac) {
+			throw new IllegalStateException(semHmac);
+		}
 	}
 
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
