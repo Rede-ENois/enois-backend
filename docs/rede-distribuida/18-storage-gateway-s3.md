@@ -1628,6 +1628,7 @@ URL emitida pelo gateway como controle, re-assinada para `ec2` e recusada), mais
 URL pré-assinada sem a guarda (mutações 1–4 sobreviveram até o teste de integração da URL existir);
 cabeçalho sem a guarda.
 
+
 ## 4.57 Metadado de objeto que o gateway não guarda é `501` (ciclo 141)
 
 Três cabeçalhos declarados no upload eram aceitos e descartados — não há coluna para eles na linha do
