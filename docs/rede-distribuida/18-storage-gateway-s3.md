@@ -1552,6 +1552,42 @@ volta literal no `HEAD`; tipo em branco vira `application/octet-stream`; cópia 
 inválido → `400`. Vermelho antes: `200` no tipo com `\r\n`. Mutações **4/4**: sem a validação; sem o
 teto de tamanho; sem a recusa de controle; tipo em branco não virando o padrão.
 
+## 4.49 Classe de armazenamento além de `STANDARD` é `501` (ciclo 139)
+
+`x-amz-storage-class` era ignorado e todo `PUT` respondia `200`:
+
+```
+PUT /s3/<b>/x.txt   x-amz-storage-class: GLACIER        → 200, objeto em disco quente
+PUT /s3/<b>/x.txt   x-amz-storage-class: DEEP_ARCHIVE   → 200, idem
+```
+
+O SDK de arquivamento manda `GLACIER`/`DEEP_ARCHIVE`. Quem obedece ao `200` acha que o objeto está
+na classe fria: espera dias para restaurá-lo, conta o preço de arquivo e trata a `GET` lenta como
+normal. O objeto estava em disco quente, servido na hora. A §3 já declarava que a classe não é
+escolhida por requisição — o `200` dizia o contrário.
+
+### Agora
+
+| `x-amz-storage-class` | antes | agora |
+|---|---|---|
+| `STANDARD`, `standard`, ` STANDARD ` | `200` (caixa/espaço ignorados) | `200` |
+| `GLACIER` / `DEEP_ARCHIVE` / `STANDARD_IA` / `ONEZONE_IA` / outra | `200`, gravado | `501 NotImplemented` nomeando a classe |
+| `PUT ?partNumber&uploadId` com classe não suportada | parte aceita | não muda nada (a classe vem do `CreateMultipartUpload`) |
+| `CreateMultipartUpload` com classe não suportada | upload aberto | `501`, nenhum upload aberto |
+| `PUT` com `x-amz-copy-source` e classe não suportada | cópia gravada | `501`, cópia não gravada |
+
+- A comparação é sem caixa e sem espaço das pontas — o valor de classe HTTP não é case-sensitive, e um
+  cliente cru manda `standard`.
+- A recusa vem **antes** de abrir upload e antes do `requireBucket` do multipart (mesma ordem do SSE,
+  §4.48): com a recusa a chave não existe e a donagem responderia `403`.
+- A `ListObjectsV2` continua sem `<StorageClass>`: a classe real é `STANDARD` para tudo (§8).
+
+**Verificação:** `S3GatewayTests` **+1** (`classe_de_armazenamento_nao_implementada_e_recusada`):
+`GLACIER`/`DEEP_ARCHIVE`/`STANDARD_IA`/`ONEZONE_IA` → `501` nomeando a classe; `STANDARD`, `standard`
+e ` STANDARD ` (chaves distintas) → `200`; cópia e multipart com classe → `501` e a `ListObjectsV2`
+só mostra o que foi gravado. Vermelho antes: `200` no `GLACIER`. Mutações **4/4**: sem a guarda no
+`PUT`; sem a guarda no multipart; guarda que aceita tudo; comparação sem caixa/espaço.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:

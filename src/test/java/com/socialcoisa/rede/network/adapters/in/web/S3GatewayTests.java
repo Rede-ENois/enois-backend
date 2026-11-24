@@ -2800,6 +2800,79 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		assertThat(mockMvc.perform(copia).andReturn().getResponse().getStatus()).isEqualTo(400);
 	}
 
+	/**
+	 * `x-amz-storage-class` que o gateway não implementa é `501`, não `200`.
+	 *
+	 * <p><b>Antes:</b> o cabeçalho era ignorado e todo `PUT` respondia `200`. O cliente que manda
+	 * `GLACIER` ou `DEEP_ARCHIVE` — o que o SDK de arquivamento manda — ficava com a certeza de que o
+	 * objeto estava na classe fria: esperaria dias para restaurá-lo, contaria o preço de arquivo e
+	 * trataria a `GET` lenta como normal. O objeto estava em disco quente, servido na hora. A doc do
+	 * gateway já declarava que a classe não é escolhida por requisição, mas o `200` dizia o contrário.</p>
+	 *
+	 * <p><b>Agora:</b> `STANDARD` (a única classe que o gateway realmente faz) continua `200`; as
+	 * demais são `501 NotImplemented` nomeando a classe, antes de abrir upload — a chave não aparece.
+	 * É a mesma escolha do SSE (§4.48): não aplicar e responder sucesso é mentir sobre onde o dado
+	 * está.</p>
+	 */
+	@Test
+	void classe_de_armazenamento_nao_implementada_e_recusada() throws Exception {
+		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		String b = "cls" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		for (String classe : new String[] { "GLACIER", "DEEP_ARCHIVE", "STANDARD_IA", "ONEZONE_IA" }) {
+			MockHttpServletRequestBuilder r = put("/s3/" + b + "/" + classe + ".txt").content(corpo)
+				.header("x-amz-storage-class", classe);
+			assinar(r, SECRET, shaDe("abc"));
+			var recusa = mockMvc.perform(r).andReturn().getResponse();
+			assertThat(recusa.getStatus()).as(classe + ": " + recusa.getContentAsString()).isEqualTo(501);
+			assertThat(recusa.getContentAsString()).contains("<Code>NotImplemented</Code>");
+			assertThat(recusa.getContentAsString()).contains(classe);
+		}
+
+		// `STANDARD` é o que o gateway faz de fato: grava — inclusive com a caixa e o espaço que um
+		// cliente cru manda (`standard`, ` STANDARD `): a classe HTTP não é sensível a caixa.
+		String[] variantes = { "STANDARD", "standard", " STANDARD " };
+		for (int i = 0; i < variantes.length; i++) {
+			String variante = variantes[i];
+			MockHttpServletRequestBuilder v = put("/s3/" + b + "/v" + i + ".txt").content(corpo)
+				.header("x-amz-storage-class", variante);
+			assinar(v, SECRET, shaDe("abc"));
+			assertThat(mockMvc.perform(v).andReturn().getResponse().getStatus()).as(variante).isEqualTo(200);
+		}
+		MockHttpServletRequestBuilder padrao = put("/s3/" + b + "/padrao.txt").content(corpo)
+			.header("x-amz-storage-class", "STANDARD");
+		assinar(padrao, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(padrao).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder g = get("/s3/" + b + "/padrao.txt");
+		assinar(g, SECRET, shaVazio());
+		var lido = mockMvc.perform(g).andReturn();
+		var doLido = lido.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lido)).andReturn().getResponse() : lido.getResponse();
+		assertThat(doLido.getStatus()).isEqualTo(200);
+		assertThat(doLido.getContentAsString()).isEqualTo("abc");
+
+		// A cópia e o multipart também prometeriam uma classe que o gateway não faz.
+		MockHttpServletRequestBuilder copia = put("/s3/" + b + "/copia.txt").content(new byte[0])
+			.header("x-amz-copy-source", "/" + b + "/padrao.txt")
+			.header("x-amz-storage-class", "GLACIER");
+		assinar(copia, SECRET, shaVazio());
+		var recusaCopia = mockMvc.perform(copia).andReturn().getResponse();
+		assertThat(recusaCopia.getStatus()).as(recusaCopia.getContentAsString()).isEqualTo(501);
+		MockHttpServletRequestBuilder multi = MockMvcRequestBuilders.post("/s3/" + b + "/multi.bin?uploads")
+			.header("x-amz-storage-class", "DEEP_ARCHIVE");
+		assinar(multi, SECRET, shaVazio());
+		assertThat(mockMvc.perform(multi).andReturn().getResponse().getStatus()).isEqualTo(501);
+
+		// Nenhuma das recusadas existe: o bucket só tem o objeto `STANDARD`.
+		MockHttpServletRequestBuilder lista = get("/s3/" + b + "?list-type=2");
+		assinar(lista, SECRET, shaVazio());
+		var lr = mockMvc.perform(lista).andReturn();
+		var doLista = lr.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lr)).andReturn().getResponse() : lr.getResponse();
+		assertThat(doLista.getContentAsString()).contains("padrao.txt");
+		assertThat(doLista.getContentAsString()).doesNotContain("GLACIER.txt");
+		assertThat(doLista.getContentAsString()).doesNotContain("copia.txt");
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {

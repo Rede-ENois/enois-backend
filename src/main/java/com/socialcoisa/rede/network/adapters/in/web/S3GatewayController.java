@@ -816,6 +816,26 @@ class S3GatewayController {
 		"x-amz-server-side-encryption-customer-algorithm", "x-amz-server-side-encryption-aws-kms-key-id");
 
 	/**
+	 * {@code x-amz-storage-class} além de {@code STANDARD}, que é a única classe que o gateway faz.
+	 *
+	 * <p><b>Antes:</b> o cabeçalho era ignorado e todo {@code PUT} respondia {@code 200}. Quem manda
+	 * {@code GLACIER} (o SDK de arquivamento) levava a certeza de que o objeto estava na classe fria,
+	 * e o objeto estava em disco quente, servido na hora.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 501 NotImplemented} nomeando a classe, antes de abrir upload — como o
+	 * subrecurso não implementado (§4.21). Recusar diz onde o dado está; responder sucesso com outro
+	 * rótulo seria a mentira que este gateway evita (§4.49).</p>
+	 */
+	private static void recusarClasseDeArmazenamentoNaoImplementada(HttpServletRequest request) {
+		String classe = request.getHeader("x-amz-storage-class");
+		if (classe == null || classe.isBlank() || "STANDARD".equalsIgnoreCase(classe.trim())) {
+			return;
+		}
+		throw s3Error(501, "NotImplemented", "A classe de armazenamento '" + classe.trim()
+			+ "' nao e suportada: este gateway so guarda STANDARD, e o objeto nao foi gravado.");
+	}
+
+	/**
 	 * Subrecurso da consulta que o gateway não implementa e que, sem esta guarda, seria gravado.
 	 *
 	 * <p><b>Antes:</b> o {@code PUT} era despachado pela chave da rota, sem olhar a consulta. Um
@@ -922,6 +942,8 @@ class S3GatewayController {
 		recusarChaveDeOutraConta(credential, bucket, key);
 		// SSE pedido e não aplicado é sucesso falso: recusa antes de abrir, no PUT e na cópia (§4.48).
 		recusarSseNaoAplicavel(request);
+		// Classe além de STANDARD é recusa antes de abrir, no PUT e na cópia (§4.49).
+		recusarClasseDeArmazenamentoNaoImplementada(request);
 		String origemDaCopia = request.getHeader(COPY_SOURCE);
 		if (origemDaCopia != null && !origemDaCopia.isBlank()) {
 			return copiarObjeto(credential, bucket, key, origemDaCopia, request);
@@ -1320,6 +1342,8 @@ class S3GatewayController {
 		// O multipart também prometeria cifra que o gateway não faz (§4.48). Antes do
 		// `requireBucket`: com a recusa a chave nunca existe, e a donagem responderia `403`.
 		recusarSseNaoAplicavel(request);
+		// O multipart também prometeria uma classe que o gateway não faz (§4.49).
+		recusarClasseDeArmazenamentoNaoImplementada(request);
 		requireBucket(credential, bucket);
 		String key = keyOf(request);
 		String expires = query(request).get("expires");
