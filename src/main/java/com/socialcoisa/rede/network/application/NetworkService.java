@@ -76,8 +76,12 @@ public class NetworkService {
 			notificationService.create(receiverUserId, "CONNECTION_REQUEST", requesterUserId,
 				"Solicitação de conexão",
 				requester.name() + " quer se conectar com você.",
-				"/api/network/connections/" + requesterUserId + "/accept", "Aceitar")
+				requestNoticeHref(requesterUserId), "Aceitar")
 		);
+	}
+
+	private static String requestNoticeHref(String requesterUserId) {
+		return "/api/network/connections/" + requesterUserId + "/accept";
 	}
 
 	@Transactional
@@ -106,6 +110,7 @@ public class NetworkService {
 			}
 			return current;
 		}
+		notificationService.markReadByHref(currentUserId, requestNoticeHref(targetUserId));
 		userProfileRepository.findById(currentUserId).ifPresent(accepter ->
 			notificationService.create(targetUserId, "CONNECTION_ACCEPTED", currentUserId,
 				"Conexão aceita",
@@ -122,6 +127,10 @@ public class NetworkService {
 			.orElseThrow(() -> new ApiException(404, "CONNECTION_NOT_FOUND", "Conexao nao encontrada."));
 		if (connection.status() == ConnectionStatus.REMOVED) {
 			return;
+		}
+		if (connection.status() == ConnectionStatus.PENDING) {
+			notificationService.markReadByHref(connection.receiverUserId(),
+				requestNoticeHref(connection.requesterUserId()));
 		}
 		connectionRepository.markRemoved(connection.id(), clock.instant());
 	}

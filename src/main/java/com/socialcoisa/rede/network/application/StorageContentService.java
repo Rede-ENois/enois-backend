@@ -87,7 +87,7 @@ public class StorageContentService {
 		return respond(object, rangeHeader, ifNoneMatch, ifModifiedSince, null);
 	}
 
-	/** O {@code GET} com {@code If-Match} (§4.57). */
+	/** O {@code GET} com {@code If-Match} (§4.63). */
 	public ResponseEntity<StreamingResponseBody> respond(StorageObject object, String rangeHeader, String ifNoneMatch,
 			String ifModifiedSince, String ifRange, String ifMatch) {
 		return respond(object, rangeHeader, ifNoneMatch, ifModifiedSince, ifRange, ifMatch, true);
@@ -102,9 +102,10 @@ public class StorageContentService {
 	 * cliente recomeça. Aqui ele recebia {@code 206} com o pedaço da versão nova na posição da velha,
 	 * e o arquivo remontado ficava com metade de cada versão — sem nenhum erro.</p>
 	 *
-	 * <p><b>Agora:</b> validador em ETag vale só quando é o ETag da versão servida; em data, só com
-	 * {@code Last-Modified <=} aquela data. Sem bater (ou sem ser nem um nem outro, como
-	 * {@code lixo}) o {@code Range} é ignorado e o corpo inteiro sai com {@code 200} (§4.47).</p>
+	 * <p><b>Agora:</b> validador em ETag vale só quando é o ETag da versão servida, em comparação
+	 * forte ({@code W/} não casa com o ETag forte); em data, só com a data exata do
+	 * {@code Last-Modified}. Sem bater (ou sem ser nem um nem outro, como {@code lixo}) o
+	 * {@code Range} é ignorado e o corpo inteiro sai com {@code 200} (§4.47).</p>
 	 */
 	public ResponseEntity<StreamingResponseBody> respond(StorageObject object, String rangeHeader, String ifNoneMatch,
 			String ifModifiedSince, String ifRange) {
@@ -120,14 +121,14 @@ public class StorageContentService {
 	 * {@code If-Match} ao {@code GET} e ao {@code HEAD}.</p>
 	 *
 	 * <p><b>Agora:</b> na ordem do HTTP, {@code If-Match} vem antes de {@code If-None-Match}: o que
-	 * não casa é {@code 412} com o ETag e sem corpo; o que casa deixa o resto do fluxo igual (§4.57).
+	 * não casa é {@code 412} com o ETag e sem corpo; o que casa deixa o resto do fluxo igual (§4.63).
 	 * {@code paraGet=false} é o {@code HEAD}, que não abre a cópia só para o 412.</p>
 	 */
 	private ResponseEntity<StreamingResponseBody> respond(StorageObject object, String rangeHeader, String ifNoneMatch,
 			String ifModifiedSince, String ifRange, String ifMatch, boolean abrirCopia) {
-		// `If-Match` antes de abrir a cópia (§4.57): a pergunta é sobre a versão do catálogo, e o
+		// `If-Match` antes de abrir a cópia (§4.63): a pergunta é sobre a versão do catálogo, e o
 		// 412 não precisa do corpo. O ETag é o mesmo que a resposta devolve.
-		if (ifMatch != null && !ifMatch.isBlank() && !matches(etag(object), ifMatch)) {
+		if (ifMatch != null && !ifMatch.isBlank() && !matchesForte(etag(object), ifMatch)) {
 			return resposta(412).header(HttpHeaders.ETAG, etag(object)).build();
 		}
 		List<StoragePlacement> location = storage.location(object.id());
@@ -196,10 +197,10 @@ public class StorageContentService {
 		return head(object, ifNoneMatch, ifModifiedSince, null);
 	}
 
-	/** O {@code HEAD} com {@code If-Match} (§4.57): a mesma pergunta do {@code GET}, sem corpo. */
+	/** O {@code HEAD} com {@code If-Match} (§4.63): a mesma pergunta do {@code GET}, sem corpo. */
 	public ResponseEntity<StreamingResponseBody> head(StorageObject object, String ifNoneMatch, String ifModifiedSince,
 			String ifMatch) {
-		if (ifMatch != null && !ifMatch.isBlank() && !matches(etag(object), ifMatch)) {
+		if (ifMatch != null && !ifMatch.isBlank() && !matchesForte(etag(object), ifMatch)) {
 			return resposta(412).header(HttpHeaders.ETAG, etag(object)).build();
 		}
 		List<StoragePlacement> location = storage.location(object.id());
@@ -242,9 +243,10 @@ public class StorageContentService {
 	/**
 	 * O validador do {@code If-Range} corresponde à versão que vai ser servida?
 	 *
-	 * <p>ETag comparado exatamente, como o cliente o recebeu; data comparada em segundos — a
-	 * granularidade do HTTP-date — do mesmo jeito que {@link #notModified}. O que não for nenhum dos
-	 * dois não corresponde, e o pedido vira o do arquivo inteiro: é o que o S3 faz (§4.47).</p>
+	 * <p>ETag comparado com a regra FORTE do RFC 9110 §13.1.5: um ETag fraco ({@code W/}) nunca
+	 * corresponde ao ETag forte da representação. Data comparada por igualdade, em segundos — a
+	 * granularidade do HTTP-date; uma data futura não valida o recurso. O que não for nenhum dos dois
+	 * não corresponde, e o pedido vira o do arquivo inteiro: é o que o S3 faz (§4.47).</p>
 	 */
 	private static boolean ifRangeVale(String ifRange, String etag, java.time.Instant atualizado) {
 		if (ifRange == null || ifRange.isBlank()) {
@@ -253,7 +255,7 @@ public class StorageContentService {
 		}
 		String valor = ifRange.trim();
 		if (valor.startsWith("\"") || valor.startsWith("W/")) {
-			return valor.replace("W/", "").equals(etag.replace("W/", ""));
+			return !valor.startsWith("W/") && valor.equals(etag);
 		}
 		if (atualizado == null) {
 			return false;
@@ -266,8 +268,8 @@ public class StorageContentService {
 		catch (java.time.format.DateTimeParseException naoEhData) {
 			return false;
 		}
-		return !atualizado.truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
-			.isAfter(pedido.truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
+		return atualizado.truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
+			.equals(pedido.truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
 	}
 
 	/**
@@ -351,6 +353,32 @@ public class StorageContentService {
 		}
 		return !object.updatedAt().truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
 			.isAfter(pedido.truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
+	}
+
+	/**
+	 * {@code If-Match} contra o ETag, na comparação FORTE do RFC 9110 §13.1.1.
+	 *
+	 * <p>A comparação do {@code If-Match} é a forte: o ETag tem de ser o da representação, byte a
+	 * byte — o prefixo {@code W/} (validador fraco) não casa com um ETag forte, e a lista separada
+	 * por vírgula casa quando <b>qualquer</b> item casa. O {@code *} casa porque a representação
+	 * existe. O {@code If-None-Match} é o oposto: o dele é o fraco, e o `matches` continua sendo
+	 * ele.</p>
+	 */
+	static boolean matchesForte(String etag, String ifMatch) {
+		if (ifMatch == null || ifMatch.isBlank()) {
+			return false;
+		}
+		for (String candidate : ifMatch.split(",")) {
+			String item = candidate.trim();
+			if ("*".equals(item)) {
+				return true;
+			}
+			// `W/` não é removido: um validador fraco não casa com o ETag forte da representação.
+			if (!item.startsWith("W/") && item.equals(etag)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** {@code If-None-Match} contra o ETag; {@code *} e a lista separada por vírgula valem. */

@@ -1462,22 +1462,25 @@ corrupção só aparecia ao abrir.
 | `If-Range` | antes | agora |
 |---|---|---|
 | ausente | `206` | `206` |
-| ETag da versão servida | `206` | `206` |
+| ETag forte da versão servida | `206` | `206` |
 | ETag de outra versão | `206` (pedaço errado) | `200`, corpo inteiro, sem `Content-Range` |
+| ETag fraco do atual (`W/"..."`) | `206` | `200`, corpo inteiro: a comparação é forte (RFC 9110 §13.1.5) |
 | data anterior ao `Last-Modified` | `206` | `200`, corpo inteiro |
 | data no mesmo segundo do `Last-Modified` | `206` | `206` (HTTP-date tem granularidade de segundo) |
-| data posterior | `206` | `206` |
+| data posterior | `206` | `200`, corpo inteiro |
 | valor que não é ETag nem data (`lixo`) | `206` | `200`, corpo inteiro |
 
-- A data é comparada em segundos, como o `If-Modified-Since` (o `304` condicional): o `updated_at` tem
-  milissegundos e o cliente devolve o `Last-Modified` que recebeu, truncado.
+- A data é comparada por **igualdade**, em segundos — a granularidade do HTTP-date. Não é `<=`: uma
+  data futura não valida o recurso (o cliente devolve o `Last-Modified` que recebeu, truncado).
+- O ETag é comparado com a regra **forte**: `W/"..."` nunca corresponde ao ETag forte da representação.
 - A regra vive no serviço de conteúdo, não no gateway: o parâmetro novo de `respond` tem a
   sobrecarga antiga para o chamador que não passa `If-Range`.
 
 **Verificação:** `S3GatewayTests` **+1** (`if_range_validador_que_nao_bate_devolve_o_corpo_inteiro`):
-ETag certo → `206` com `01234`; ETag de outra versão, data antiga, data futura e `lixo` → `200` com
-`0123456789` e sem `Content-Range`. Vermelho antes: `206` nos quatro. Mutações **3/3**: gateway sem
-passar o cabeçalho; comparação de data desligada; comparação de ETag desligada.
+ETag forte certo e data exata → `206` com `01234`; ETag de outra versão, ETag fraco do atual, data
+antiga, data futura (`Fri, 01 Jan 2100`) e `lixo` → `200` com `0123456789` e sem `Content-Range`.
+Vermelho antes: `206` no ETag fraco e na data futura. A classe passa a ter `@Tag("critico")`: o gate
+de PR roda os 77 testes do gateway em vez de ficar cego para eles. Sem migração.
 
 ## 4.48 SSE declarado é recusado, não ignorado (ciclo 138)
 
@@ -1628,6 +1631,7 @@ URL emitida pelo gateway como controle, re-assinada para `ec2` e recusada), mais
 URL pré-assinada sem a guarda (mutações 1–4 sobreviveram até o teste de integração da URL existir);
 cabeçalho sem a guarda.
 
+
 ## 4.57 Metadado de objeto que o gateway não guarda é `501` (ciclo 141)
 
 Três cabeçalhos declarados no upload eram aceitos e descartados — não há coluna para eles na linha do
@@ -1666,7 +1670,212 @@ Vermelho antes: `200` no `Expires`. Mutações **4/4**: sem a guarda no `PUT`; s
 (o teste passou a cobri-la depois que a mutação sobreviveu); guarda que aceita tudo; lista reduzida só
 ao `Expires`.
 
-## 4.60 `If-Match` no `GET` e no `HEAD` (ciclo 147)
+## 4.58 Nome de bucket fora do alfabeto do S3 é `400 InvalidBucketName` (ciclo 145)
+
+A criação de bucket conferia só o tamanho (≤ 63) e a maiúscula:
+
+```
+PUT /s3/com_underline      → 200, bucket criado
+PUT /s3/com espaço         → 200
+PUT /s3/traco-no-fim-      → 200
+PUT /s3/-traco-no-inicio   → 200
+PUT /s3/dois..pontos       → 200
+```
+
+O S3 recusa os cinco, e por um motivo de protocolo: o nome do bucket vira **host** no caminho
+virtual-host (`<bucket>.s3.<host>`), e rótulo DNS não aceita `_`, espaço, ponto consecutivo, hífen ou
+ponto nas pontas. O bucket criado assim funcionava no caminho path-style, então o defeito só aparecia
+quando alguém apontava um cliente de verdade para ele — com erro de DNS, longe da causa.
+
+### Agora
+
+| nome | antes | agora |
+|---|---|---|
+| `com_underline`, `com espaço` | `200` | `400 InvalidBucketName` |
+| `traco-no-fim-`, `-traco-no-inicio`, `ponto-hifen.-x` | `200` | `400 InvalidBucketName` |
+| `dois..pontos` | `200` | `400 InvalidBucketName` |
+| `10.0.0.1` (forma de IPv4) | `200` | `400 InvalidBucketName` |
+| `ab` (menos de 3) | `400` | `400 InvalidBucketName` |
+| `A-maiusculo`, nome com 64 | `400` | `400 InvalidBucketName` |
+| `abc`, `a-b-c`, `a.b.c`, `1-2-3`, 63 caracteres | `200` | `200` |
+
+Regras (as do caminho path-style do S3): 3 a 63 caracteres; começa e termina com letra ou dígito;
+só minúscula, dígito, hífen e ponto; sem `..` nem `.-`; não pode ter forma de IPv4 (o S3 reserva
+endereço para o TLS do caminho virtual-host). A mensagem diz qual regra foi violada.
+
+- A conferência vale no **`CreateBucket`** e no primeiro `PUT` de objeto (o bucket nasce no primeiro
+  upload) — `PutBucketPolicy`, `DeleteBucket` e as demais rotas que passam por `validateBucket`
+  herdam a regra.
+- O código do erro é o do S3, **`InvalidBucketName`**, não o interno `STORAGE_BUCKET_INVALID` do Énóis:
+  a tradução em `noVocabularioDoS3` é a única exceção à regra de repassar o código interno, porque o
+  SDK procura `InvalidBucketName` para mostrar a mensagem.
+- Nome no estado antigo (criado antes desta versão com `_` ou espaço) continua **listável e legível**;
+  só a criação é recusada. Não há migração.
+
+**Verificação:** `S3GatewayTests` **+1** (`nome_de_bucket_fora_do_alfabeto_do_s3_e_400`): oito nomes
+inválidos recusados na criação e no `PUT` de objeto, com `InvalidBucketName`, e nenhuma linha criada;
+cinco nomes válidos (inclusive os limites de 3 e 63) aceitos. Vermelho antes: `200` em
+`com_underline`. Mutações **5/5**: alfabeto aceitando `_` e espaço; sem a regra das pontas; sem a dos
+pontos; sem a do IPv4; sem a tradução para `InvalidBucketName`.
+## 4.59 `<MaxParts>` do `ListParts` é o valor aplicado, não o pedido (ciclo 144)
+
+O `<MaxParts>` da resposta era o `max-parts` **cru** da consulta, enquanto o corte da página usava o
+valor normalizado:
+
+```
+GET ...?uploadId=<id>&max-parts=0      → <MaxParts>0</MaxParts>    e a página traz as partes (até 1000)
+GET ...?uploadId=<id>&max-parts=5000   → <MaxParts>5000</MaxParts> e a página traz no máximo 1000
+```
+
+Nos dois o XML se contradiz. Com `MaxParts 0` e partes dentro, o cliente conclui que a resposta está
+quebrada; com `MaxParts 5000` numa página de 1000, quem soma o que a resposta promete conta errado
+quantas páginas faltam e para cedo.
+
+### Agora
+
+| `max-parts` | página | antes `<MaxParts>` | agora |
+|---|---|---|---|
+| ausente | até 1000 | 1000 | 1000 |
+| `2` | até 2 | 2 | 2 |
+| `0`, `-1` | até 1000 (piso) | 0, -1 | **1000** |
+| `abc` (ilegível) | até 1000 | 1000 | 1000 |
+| `5000` | até 1000 (teto) | 5000 | **1000** |
+
+O `<MaxParts>` é o mesmo número que corta a página — calculado uma vez, em `tetoDePartes`, e usado nos
+dois lugares. Paginação, `part-number-marker`, `IsTruncated` e `NextPartNumberMarker` não mudam.
+
+**Verificação:** `S3GatewayTests` **+1** (`list_parts_ecoa_o_max_parts_aplicado_nao_o_pedido`): cinco
+valores de `max-parts`, cada um conferindo o `<MaxParts>` ecoado **e** que a página não entrega mais
+partes do que ele diz; e a página com marcador. Vermelho antes: `MaxParts 0` com 3 partes. Mutações
+**4/4**: ecoando o pedido cru; sem o teto de 1000; sem o piso de zero/negativo; página cortada em 1000
+com o eco dizendo outro número.
+## 4.60 `continuation-token` é opaco e assinado (ciclo 143)
+
+O token era o **último nome emitido**, em claro, usado como posição sem conferência:
+
+```
+GET /s3/<b>?list-type=2&max-keys=1      → <NextContinuationToken>a1.txt</NextContinuationToken>
+GET /s3/<b>?list-type=2&continuation-token=lixo    → 200, KeyCount 0
+GET /s3/<b>?list-type=2&continuation-token=a1.txt  → 200, a partir de a1.txt
+```
+
+O `200` com lista vazia é o pior dos casos: o cliente que retoma a paginação com um token corrompido
+(novo upload entre páginas, token de outra sessão, string truncada) conclui que **o bucket acabou** e
+para de listar, sem erro. O token de um bucket também servia de posição em outro.
+
+### Agora
+
+| `continuation-token` | antes | agora |
+|---|---|---|
+| emitido por esta listagem, neste bucket | `200`, continua | `200`, continua |
+| `lixo`, `AAA`, `%41%41`, nome inventado | `200` vazio | `400 InvalidArgument` |
+| token deste bucket com um caractere da assinatura trocado | `200` | `400 InvalidArgument` |
+| token emitido para **outro** bucket | usado como posição | `400 InvalidArgument` |
+| token antigo (nome em claro, sem `.`) | `200` | `400 InvalidArgument` |
+
+- Forma: `base64url(posição)` + `.` + HMAC-SHA-256 de `bucket + "\n" + posição`, em hexadecimal, com o
+  **segredo da credencial** que assinou a listagem (`credentials.secretFor`, o mesmo do URL
+  pré-assinado). Expira junto com a credencial porque o segredo é dela.
+- O `NextContinuationToken` deixa de coincidir com o nome do objeto — é o que o S3 faz (o token dele é
+  opaco). O `NextMarker` do V1 **não** muda: no V1 o marcador é a chave, por contrato.
+- Confere também o **bucket**: token de um bucket em outro é recusa, e o cliente relista do zero com
+  `400` visível em vez de receber uma página vazia.
+- Comparação com `MessageDigest.isEqual` (tempo fixo). Não é confidencialidade — o token continua
+  público —, é a prova de que veio daqui.
+
+**Efeito declarado:** tokens emitidos por versões anteriores (o nome em claro) passam a ser `400`; o
+cliente que guardou um token entre deploys refaz a listagem. Vale só para o `list-type=2`; o `marker` do
+V1 e o `start-after` seguem aceitando a chave.
+
+**Verificação:** `S3GatewayTests` **+1** (`continuation_token_que_o_gateway_nao_emitiu_e_400`): quatro
+tokens inválidos → `400 InvalidArgument`; paginação de três páginas com `max-keys=1` devolvendo
+`a1,a2,a3`; token forjado (forma certa, assinatura trocada) → `400`; token deste bucket em outro → `400`.
+Dois testes existentes usavam o nome como token e foram atualizados para o contrato novo. Vermelho antes:
+`200` em `lixo`. Mutações **4/4**: sem verificar a assinatura; emitindo o nome em claro; assinatura que
+não amarra o bucket; conferindo só a forma hexadecimal da assinatura.
+## 4.61 A chave gravada é o nome declarado, não a forma da URI (ciclo 142)
+
+A chave era gravada **como vinha na URI**, percent-encoded:
+
+```
+PUT /s3/<b>/café.txt        → linha com object_key = caf%C3%A9.txt
+GET /s3/<b>?list-type=2     → <Key>caf%C3%A9.txt</Key>
+```
+
+O `GET` com a chave listada até funcionava (o caminho volta codificado e casa com a linha), então o
+defeito não aparecia num teste de ida e volta. O nome do objeto, porém, era outro: quem compara a
+`<Key>` com o nome do arquivo local, monta URL a partir dela ou usa a chave numa **cópia por
+cabeçalho** — que decodifica — apontava para um objeto que não existe. E não havia como gravar
+`caf%C3%A9.txt` de propósito: todo `%` do nome virava outra chave.
+
+### Agora
+
+| chave na URI | antes (`object_key`) | agora |
+|---|---|---|
+| `café.txt` (URI `caf%C3%A9.txt`) | `caf%C3%A9.txt` | `café.txt` |
+| `com espaço.txt` | `com%20espa%C3%A7o.txt` | `com espaço.txt` |
+| `a&b<c>.txt` (URI `a&b%3Cc%3E.txt`) | `a&b%3Cc%3E.txt` | `a&b<c>.txt` |
+| `plus+1.txt` | `plus+1.txt` | `plus+1.txt` (`+` **não** é espaço em caminho) |
+| `sinal%40literal.txt` | `sinal%40literal.txt` | `sinal%40literal.txt` (`%25` é o escape do `%`) |
+| `ja%20codado.txt` | `ja%20codado.txt` | `ja%20codado.txt` |
+| percent-encoding inválido (`%zz`) | `%zz` | `%zz`, sem decodificar (recusa) |
+
+- A decodificação é a do **caminho**, não a de formulário: `+` fica `+`. Passa pela mesma regra do
+  `x-amz-copy-source`, que já decodificava.
+- Vale para o `PUT`, o multipart e o `DELETE` (todos por `keyOf`); a listagem, o `HEAD` e o `GET`
+  passam a usar o mesmo nome, então a `<Key>` listada **é** alcançável.
+- A chave que já existia codificada na base continua acessível pelo caminho codificado: a URI que
+  gera `caf%C3%A9.txt` decodifica para `café.txt`, e quem manda `%25` obtém o literal — a linha
+  antiga `caf%C3%A9.txt` deixa de ser a mesma chave. Objetos gravados antes desta versão com
+  caractere especial passam a pedir a URI com `%25` para serem lidos.
+
+**Verificação:** `S3GatewayTests` **+1** (`chave_gravada_e_o_nome_declarado_nao_a_forma_da_uri`): a
+coluna `object_key` tem exatamente os sete nomes declarados (inclusive `%` e `+`); a listagem traz o
+mesmo nome com `&amp;`/`&lt;` só como XML; o `GET` com a chave listada devolve o corpo. Vermelho antes:
+as linhas com `%C3%A9`, `%20` e `%3C`. Mutações **4/4**: sem decodificar; `+` virando espaço;
+decodificar duas vezes (`%25`→`%`→outra coisa); `%25` único tratado à parte.
+
+## 4.62 `OPTIONS` autentica e o verbo errado é XML (ciclo 149)
+
+O `OPTIONS` nunca chegava ao gateway:
+
+```
+OPTIONS /s3/<b>/x.txt   (sem credencial)   → 200   Allow: PUT,GET,HEAD,DELETE,POST,OPTIONS
+OPTIONS /s3/<b>/x.txt   (credencial só de leitura) → 200   Allow: PUT,GET,HEAD,DELETE,POST,OPTIONS
+PATCH   /s3/<b>/x.txt                      → 405 {"code":"METHOD_NOT_ALLOWED"}   ← JSON
+```
+
+O preflight de CORS do Control Plane responder todo `OPTIONS` é correto para a API do app, mas no
+gateway S3 a lista é a do **servidor**: uma credencial que só lê ouvindo que pode `PUT`/`DELETE` é o
+cliente montando a estratégia de upload errada. Quando aquele filtro não respondia, o
+`DispatcherServlet` montava o `Allow` com os métodos mapeados — inclusive `TRACE` e `PATCH`, que
+nenhuma rota atende.
+
+### Agora
+
+| pedido | antes | agora |
+|---|---|---|
+| `OPTIONS` sem assinatura | `200` com a lista do servidor | `403 AccessDenied` em XML, sem `Allow` |
+| `OPTIONS` com credencial de leitura | `Allow` com `PUT, DELETE` | `200`, `Allow: GET, HEAD, OPTIONS` |
+| `OPTIONS` com credencial completa | igual | `200`, `Allow: GET, HEAD, PUT, DELETE, OPTIONS` |
+| `OPTIONS` de navegador (`Origin` + `Access-Control-Request-Method`) | CORS | CORS (o navegador pergunta antes de ter credencial) |
+| `PATCH`, `TRACE` | `405` JSON | `405 MethodNotAllowed` em XML, com `Allow` da rota |
+
+- O `S3OptionsFilter` intercepta `OPTIONS` (sem preflight) e os verbos desconhecidos em `/s3/**`,
+  **antes** do `DispatcherServlet` — que responderia o `OPTIONS` sozinho. Ele chama a autenticação
+  do gateway, então a regra de credencial, dono do bucket e chave existente é a mesma dos outros
+  verbos.
+- `LIST` no escopo da credencial não vira método HTTP (é operação de bucket); `GET` vira `GET` e
+  `HEAD`, porque `HEAD` é o `GET` sem corpo.
+
+**Verificação:** `S3GatewayTests` **+1** (`options_autentica_e_o_verbo_invalido_e_xml`): `OPTIONS`
+sem credencial → `403` XML sem `Allow`; com credencial só de leitura → `200` e o `Allow` **sem**
+`PUT`/`DELETE`/`POST`; com a completa → com `GET`/`PUT`/`DELETE` e sem `LIST`/`POST`; preflight com
+`Origin` real → `< 300`; `PATCH` e `TRACE` → `405` XML com `Allow`. Mutações **4/4**: sem a isenção
+de origem; `Allow` da lista do servidor (sobreviveu até o teste diferenciar a credencial de leitura);
+`Allow` de leitura sem `HEAD`; 405 em JSON.
+
+## 4.63 `If-Match` no `GET` e no `HEAD` (ciclo 147)
 
 O `GET` avaliava `If-None-Match` e `If-Modified-Since`; `If-Match` era **ignorado** (só o `PUT` o
 conferia, §4.29):
@@ -1687,6 +1896,7 @@ para evitar, por outra porta.
 |---|---|---|
 | `If-Match` com o ETag atual | `200` | `200` (fluxo normal) |
 | `If-Match` com `"velho"`, `W/"velho"` ou lista sem o atual | `200` / `206` | `412 PreconditionFailed`, sem corpo, com `ETag` |
+| `If-Match` com `W/<etag atual>` (validador fraco) | `200` / `206` | `412 PreconditionFailed` (comparação forte) |
 | `If-Match: *` | `200` | `200` (o objeto existe) |
 | `If-Match` com lista que **contém** o atual | `200` | `200` |
 | `If-Match` atual + `If-None-Match` atual | `200` | `304` (o `If-Match` não engole o 304) |
@@ -1694,16 +1904,21 @@ para evitar, por outra porta.
 
 - A ordem é a do HTTP: `If-Match` antes de `If-None-Match`, e antes de abrir a cópia — o `412` não
   precisa do corpo, e um objeto sem cópia registrada responde `412` antes de `409`.
-- Vale no `GET` e no `HEAD`; a mesma rotina (`StorageContentService.matches`) usada pelo
-  `If-None-Match`. `*` casa porque a chave existe — o objeto desta rota sempre existe.
+- Vale no `GET` e no `HEAD`. A comparação do `If-Match` é a **forte** (RFC 9110 §13.1.1), em
+  `StorageContentService.matchesForte`: o `W/<etag atual>` não casa — validador fraco não é o da
+  representação — e a lista separada por vírgula casa quando qualquer item casa. O `If-None-Match`
+  continua com a comparação fraca, que é a dele (`StorageContentService.matches`).
 - `If-Range` continua com a semântica dele (§4.47): sem casar, o corpo inteiro sai com `200`.
 
-**Verificação:** `S3GatewayTests` **+1** (`get_e_head_com_if_match_divergente_sao_412`): quatro
-divergentes × com e sem `Range`, no `GET` e no `HEAD` → `412` com o `ETag` e sem corpo; quatro formas
-que casam (ETag, `*`, lista com o atual) → `200` com o corpo; `If-Match` + `Range` válido → `206`;
-`If-Match` atual + `If-None-Match` atual → `304`. Vermelho antes: `200` em `"velho"`. Mutações
-**5/5**: `GET` sem a condição; `HEAD` sem a condição; `GET` sem repassar o cabeçalho; `HEAD` sem
-repassar; aceitando qualquer ETag "parecido".
+**Verificação:** `S3GatewayTests` **+1** (`get_e_head_com_if_match_divergente_sao_412`): cinco
+divergentes × com e sem `Range`, no `GET` e no `HEAD` → `412` com o `ETag` e sem corpo — o quinto é o
+`W/<etag atual>`, que a comparação forte recusa; três formas que casam (ETag, `*`, lista com o atual)
+→ `200` com o corpo; `If-Match` + `Range` válido → `206`; `If-Match` atual + `If-None-Match` atual →
+`304`. Vermelho antes: `200` em `"velho"`. Mutações **6/6**: `GET` sem a condição; `HEAD` sem a
+condição; `GET` sem repassar o cabeçalho; `HEAD` sem repassar; aceitando qualquer ETag "parecido";
+aceitando o validador fraco do ETag atual.
+
+
 
 ## 5. Erros
 
