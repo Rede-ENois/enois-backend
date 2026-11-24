@@ -3016,6 +3016,70 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		assertThat(recusa.getResponse().getContentAsString()).contains("ec2").doesNotContain("objeto do dono");
 	}
 
+	/**
+	 * `Expires`, `Content-Language` e `x-amz-website-redirect-location` declarados são `501`.
+	 *
+	 * <p><b>Antes:</b> os três eram aceitos com `200` e descartados — não havia coluna para eles, e o
+	 * `HEAD` e o `GET` não os devolviam. O cliente que manda {@code Expires} acredita que o objeto
+	 * apaga sozinho; quem manda o redirecionamento acredita que {@code GET} devolve um {@code 301} na
+	 * URL do site; quem manda o idioma acredita que o navegador vai usar a fonte certa. Nenhum dos
+	 * três acontecia, e a ausência do eco na leitura não é aviso: um cliente que não relê o `HEAD`
+	 * nunca descobre. A §3 lista o que volta — os três nunca estiveram lá.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 501 NotImplemented} nomeando o cabeçalho, antes de abrir upload, no
+	 * `PUT` e no `CopyObject` (com ou sem {@code REPLACE}): recusar é dizer que não faz (§4.4.57).</p>
+	 */
+	@Test
+	void metadado_de_objeto_nao_suportado_e_recusado_e_nao_grava() throws Exception {
+		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		String b = "md" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		for (String cabecalho : new String[] { "Expires", "Content-Language", "x-amz-website-redirect-location" }) {
+			MockHttpServletRequestBuilder r = put("/s3/" + b + "/" + cabecalho + ".txt").content(corpo)
+				.header(cabecalho, cabecalho.startsWith("Expires") ? "Wed, 21 Oct 2099 07:28:00 GMT" : "/outro");
+			assinar(r, SECRET, shaDe("abc"));
+			var recusa = mockMvc.perform(r).andReturn().getResponse();
+			assertThat(recusa.getStatus()).as(cabecalho + ": " + recusa.getContentAsString()).isEqualTo(501);
+			assertThat(recusa.getContentAsString()).contains("<Code>NotImplemented</Code>");
+			assertThat(recusa.getContentAsString()).contains(cabecalho);
+		}
+		// Nada foi criado: o primeiro PUT do bucket foi recusado, então ele não tem dono.
+		MockHttpServletRequestBuilder g = get("/s3/" + b + "/Expires.txt");
+		assinar(g, SECRET, shaVazio());
+		assertThat(mockMvc.perform(g).andReturn().getResponse().getStatus()).isNotEqualTo(200);
+
+		// O que a §3 promete continua gravando e voltando.
+		String ok = "mdo" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		MockHttpServletRequestBuilder bom = put("/s3/" + ok + "/bom.txt").content(corpo)
+			.header("x-amz-meta-dono", "luna").header("Cache-Control", "public, max-age=60")
+			.header("Content-Disposition", "attachment; filename=\"bom.txt\"");
+		assinar(bom, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(bom).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder h = MockMvcRequestBuilders.head("/s3/" + ok + "/bom.txt");
+		assinar(h, SECRET, shaVazio());
+		var doHead = mockMvc.perform(h).andReturn().getResponse();
+		assertThat(doHead.getHeader("x-amz-meta-dono")).isEqualTo("luna");
+		assertThat(doHead.getHeader("Cache-Control")).isEqualTo("public, max-age=60");
+		assertThat(doHead.getHeader("Content-Disposition")).isEqualTo("attachment; filename=\"bom.txt\"");
+
+		// O multipart também não abre upload para um metadado que nunca seria guardado.
+		MockHttpServletRequestBuilder multi = MockMvcRequestBuilders.post("/s3/" + ok + "/multi.bin?uploads")
+			.header("Content-Language", "pt-BR");
+		assinar(multi, SECRET, shaVazio());
+		assertThat(mockMvc.perform(multi).andReturn().getResponse().getStatus()).isEqualTo(501);
+
+		// A cópia também recusa, com COPY e com REPLACE.
+		for (String diretiva : new String[] { "COPY", "REPLACE" }) {
+			MockHttpServletRequestBuilder cp = put("/s3/" + ok + "/copia-" + diretiva + ".txt")
+				.content(new byte[0])
+				.header("x-amz-copy-source", "/" + ok + "/bom.txt")
+				.header("x-amz-metadata-directive", diretiva)
+				.header("Content-Language", "pt-BR");
+			assinar(cp, SECRET, shaVazio());
+			var recusaCopia = mockMvc.perform(cp).andReturn().getResponse();
+			assertThat(recusaCopia.getStatus()).as(diretiva).isEqualTo(501);
+		}
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {

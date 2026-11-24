@@ -835,6 +835,30 @@ class S3GatewayController {
 			+ "' nao e suportada: este gateway so guarda STANDARD, e o objeto nao foi gravado.");
 	}
 
+	 * Cabeçalhos de objeto que o cliente declara e que o gateway não guarda.
+	 *
+	 * <p><b>Antes:</b> {@code Expires}, {@code Content-Language} e
+	 * {@code x-amz-website-redirect-location} eram aceitos com {@code 200} e descartados — não há
+	 * coluna para eles, e o {@code HEAD}/{@code GET} não os devolviam. Quem manda {@code Expires}
+	 * acredita que o objeto apaga sozinho; quem manda o redirecionamento acredita que o {@code GET}
+	 * devolve um {@code 301}; quem manda o idioma espera a fonte certa no navegador. Nada disso
+	 * acontecia, e a falta do eco não avisa quem não relê o {@code HEAD}.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 501 NotImplemented} nomeando o cabeçalho, antes de abrir upload — no
+	 * {@code PUT}, na cópia e no multipart (§4.51). Os que a §3 promete ({@code x-amz-meta-*},
+	 * {@code Cache-Control}, {@code Content-Disposition}) continuam voltando.</p>
+	 */
+	private static void recusarMetadadoDeObjetoNaoGuardado(HttpServletRequest request) {
+		for (String cabecalho : METADADOS_DE_OBJETO_NAO_GUARDADOS) {
+			if (request.getHeader(cabecalho) != null) {
+				throw s3Error(501, "NotImplemented", "O cabecalho '" + cabecalho
+					+ "' nao e suportado: este gateway nao guarda esse metadado, e o objeto nao foi gravado.");
+			}
+		}
+	}
+
+	/** Metadado de objeto declarado no upload que o catálogo não tem onde guardar (§4.51). */
+	private static final List<String> METADADOS_DE_OBJETO_NAO_GUARDADOS = List.of("Expires",
 	/**
 	 * Subrecurso da consulta que o gateway não implementa e que, sem esta guarda, seria gravado.
 	 *

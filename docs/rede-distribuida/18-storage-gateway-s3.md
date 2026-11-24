@@ -1628,6 +1628,44 @@ URL emitida pelo gateway como controle, re-assinada para `ec2` e recusada), mais
 URL pré-assinada sem a guarda (mutações 1–4 sobreviveram até o teste de integração da URL existir);
 cabeçalho sem a guarda.
 
+## 4.51 Metadado de objeto que o gateway não guarda é `501` (ciclo 141)
+
+Três cabeçalhos declarados no upload eram aceitos e descartados — não há coluna para eles na linha do
+objeto:
+
+```
+PUT /s3/<b>/x.txt   Expires: Wed, 21 Oct 2099 07:28:00 GMT          → 200, HEAD sem Expires
+PUT /s3/<b>/x.txt   Content-Language: pt-BR                         → 200, HEAD sem Content-Language
+PUT /s3/<b>/x.txt   x-amz-website-redirect-location: /outro         → 200, GET não redireciona
+```
+
+Cada um promete um comportamento: o `Expires` apaga o objeto sozinho, o redirecionamento faz o `GET`
+devolver `301` (site estático), o idioma escolhe a fonte no navegador. Nenhum acontecia. A ausência do
+eco no `HEAD` não avisa: o cliente que não relê a `HEAD` nunca descobre. A §3 nunca listou os três
+entre o que volta — a resposta `200` era a única coisa a dizer o contrário.
+
+### Agora
+
+| declarado no `PUT` / `CreateMultipartUpload` / `CopyObject` | antes | agora |
+|---|---|---|
+| `Expires` | `200`, descartado | `501 NotImplemented` nomeando o cabeçalho |
+| `Content-Language` | `200`, descartado | `501` |
+| `x-amz-website-redirect-location` | `200`, descartado | `501` |
+| `x-amz-meta-*`, `Cache-Control`, `Content-Disposition` | gravado e ecoado | idem (é o que a §3 promete) |
+
+- A guarda roda **antes** de abrir upload, no `PUT` (antes do desvio para o `CopyObject`, então vale
+  para `COPY` e `REPLACE`), no `CreateMultipartUpload` e, pelo mesmo ponto, na cópia.
+- **Recusar em vez de guardar:** guardar o `Expires` exige coluna e migração e a varrer do objeto;
+  fazer o redirecionamento é uma feature de site estático; o idioma só vale como cabeçalho servido.
+  Enquanto nenhum dos três existe, `501` é o mesmo contrato do SSE (§4.48) e da classe (§4.49).
+
+**Verificação:** `S3GatewayTests` **+1** (`metadado_de_objeto_nao_suportado_e_recusado_e_nao_grava`):
+os três → `501` nomeando o cabeçalho e nada criado; `x-amz-meta-*` + `Cache-Control` +
+`Content-Disposition` gravam e voltam iguais no `HEAD`; multipart e cópia (`COPY` e `REPLACE`) → `501`.
+Vermelho antes: `200` no `Expires`. Mutações **4/4**: sem a guarda no `PUT`; sem a guarda no multipart
+(o teste passou a cobri-la depois que a mutação sobreviveu); guarda que aceita tudo; lista reduzida só
+ao `Expires`.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
