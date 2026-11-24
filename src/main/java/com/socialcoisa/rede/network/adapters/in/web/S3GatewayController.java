@@ -121,6 +121,18 @@ class S3GatewayController {
 		"legal-hold", "object-lock");
 
 	/**
+	 * Subrecursos do {@code DELETE} de objeto que <b>apagariam a chave</b> sem fazer o que o cliente
+	 * pediu.
+	 *
+	 * <p>{@code versionId} é a versão específica; os outros são as operações que o gateway não
+	 * endereça e que o {@code PUT} já recusa (§4.21). Sem a guarda, o {@code DELETE} despachava pela
+	 * rota e ignorava a consulta: quem pedia "apague as tags" ou "apague a versão 1" perdia o objeto
+	 * inteiro — o mesmo defeito que o {@code DELETE} do bucket tinha com {@code ?cors} (§4.38).</p>
+	 */
+	private static final List<String> SUBRECURSOS_NAO_APAGAVEIS = List.of("versionId", "tagging", "acl",
+		"retention", "legal-hold", "object-lock");
+
+	/**
 	 * Subrecursos de <b>leitura</b> do objeto que este gateway nao endereca.
 	 *
 	 * <p>{@code versionId} e a versao especifica (o gateway so serve a corrente, e devolver outra
@@ -803,6 +815,22 @@ class S3GatewayController {
 				drenarCorpo(request);
 				throw s3Error(501, "NotImplemented", "O subrecurso '" + naoImplementado + "' nao e suportado; "
 					+ chaveDoObjeto + " nao foi alterado.");
+			}
+		}
+	}
+
+	/**
+	 * Subrecurso que o {@code DELETE} de objeto não endereça: {@code 501} com a chave <b>intacta</b>.
+	 *
+	 * <p>A resposta é a mesma do {@code PUT} para os subrecursos que gravariam (§4.21). O
+	 * {@code ?uploadId=} fica de fora: é o {@code AbortMultipartUpload}, outra operação.</p>
+	 */
+	private static void recusarSubrecursoNaoApagavel(HttpServletRequest request, String chaveDoObjeto) {
+		Set<String> pedidos = query(request).keySet();
+		for (String naoApagavel : SUBRECURSOS_NAO_APAGAVEIS) {
+			if (pedidos.contains(naoApagavel)) {
+				throw s3Error(501, "NotImplemented", "O subrecurso '" + naoApagavel + "' nao e suportado; "
+					+ chaveDoObjeto + " nao foi apagado.");
 			}
 		}
 	}
@@ -1652,6 +1680,9 @@ class S3GatewayController {
 		requireBucket(credential, bucket);
 		requireBucketDoDono(credential, bucket);
 		String key = keyOf(request);
+		// O DELETE não olhava a consulta: `?versionId=1` apagava a chave inteira, e `?tagging`/`?acl`
+		// respondiam 204 com o objeto apagado em vez de mexer no subrecurso (§4.45).
+		recusarSubrecursoNaoApagavel(request, "/" + bucket + "/" + key);
 		Optional<StorageObject> object = catalog.find(bucket, key);
 		if (object.isPresent()) {
 			storage.delete(credential.ownerUserId(), bucket, key);
