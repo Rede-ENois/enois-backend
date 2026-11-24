@@ -62,6 +62,7 @@ import com.socialcoisa.rede.shared.security.SecretCipher;
 @SpringBootTest
 @AutoConfigureMockMvc
 @Tag("critico")
+@Tag("critico")
 class S3GatewayTests {
 
 	private static final String ACCESS_KEY_PREFIX = "AKIAENOIS";
