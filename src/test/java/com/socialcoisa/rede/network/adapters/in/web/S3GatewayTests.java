@@ -2687,6 +2687,54 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		assertThat(mockMvc.perform(sem).andReturn().getResponse().getStatus()).isEqualTo(200);
 	}
 
+	/**
+	 * `If-Range` decide se o `Range` vale: validador que não bate devolve o corpo **inteiro**.
+	 *
+	 * <p><b>Antes:</b> o cabeçalho era ignorado e o `Range` valia sempre. O cliente que retoma um
+	 * download em pedaços manda {@code If-Range} com o ETag da versão que começou a baixar; se o
+	 * objeto foi substituído no meio, o S3 responde {@code 200} com o arquivo novo <b>completo</b> e o
+	 * cliente recomeça do zero. Aqui ele recebia {@code 206} com o pedaço do arquivo <b>novo</b> na
+	 * posição do antigo: o remendo montado no disco do cliente tinha os primeiros bytes de uma versão
+	 * e o resto de outra, e a corrupção só aparecia ao abrir o arquivo.</p>
+	 *
+	 * <p><b>Agora:</b> com {@code If-Range} em ETag, a faixa é aplicada só quando o ETag é o da versão
+	 * servida; senão {@code 200} com o corpo inteiro. Com data, vale {@code Last-Modified} &lt;=
+	 * aquela data. Validador que não é nem ETag nem data ({@code lixo}) cai no corpo inteiro, como no
+	 * S3.</p>
+	 */
+	@Test
+	void if_range_validador_que_nao_bate_devolve_o_corpo_inteiro() throws Exception {
+		gravar("ifr/a.txt", "0123456789");
+		MockHttpServletRequestBuilder h = MockMvcRequestBuilders.head("/s3/" + bucket + "/ifr/a.txt");
+		assinar(h, SECRET, shaVazio());
+		String etag = mockMvc.perform(h).andReturn().getResponse().getHeader("ETag");
+		assertThat(etag).isNotNull();
+
+		// ETag da versão servida: a faixa vale.
+		MockHttpServletRequestBuilder bate = get("/s3/" + bucket + "/ifr/a.txt")
+			.header("Range", "bytes=0-4").header("If-Range", etag);
+		assinar(bate, SECRET, shaVazio());
+		var rr = mockMvc.perform(bate).andReturn();
+		var doBate = rr.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(rr)).andReturn().getResponse() : rr.getResponse();
+		assertThat(doBate.getStatus()).isEqualTo(206);
+		assertThat(doBate.getContentAsString()).isEqualTo("01234");
+
+		// ETag de outra versão, data antiga, data futura e lixo: corpo inteiro com 200.
+		for (String validador : new String[] { "\"outro\"", "Wed, 01 Jan 2020 00:00:00 GMT",
+				"Wed, 01 Jan 2100 00:00:00 GMT", "lixo" }) {
+			MockHttpServletRequestBuilder naoBate = get("/s3/" + bucket + "/ifr/a.txt")
+				.header("Range", "bytes=0-4").header("If-Range", validador);
+			assinar(naoBate, SECRET, shaVazio());
+			var rn = mockMvc.perform(naoBate).andReturn();
+			var doNao = rn.getRequest().isAsyncStarted()
+				? mockMvc.perform(asyncDispatch(rn)).andReturn().getResponse() : rn.getResponse();
+			assertThat(doNao.getStatus()).as("If-Range " + validador).isEqualTo(200);
+			assertThat(doNao.getContentAsString()).as("If-Range " + validador).isEqualTo("0123456789");
+			assertThat(doNao.getHeader("Content-Range")).as("If-Range " + validador).isNull();
+		}
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {
