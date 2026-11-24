@@ -1670,170 +1670,47 @@ Vermelho antes: `200` no `Expires`. Mutações **4/4**: sem a guarda no `PUT`; s
 (o teste passou a cobri-la depois que a mutação sobreviveu); guarda que aceita tudo; lista reduzida só
 ao `Expires`.
 
-## 4.58 Nome de bucket fora do alfabeto do S3 é `400 InvalidBucketName` (ciclo 145)
+## 4.64 `ListMultipartUploads` honra `max-uploads` e pagina (ciclo 151)
 
-A criação de bucket conferia só o tamanho (≤ 63) e a maiúscula:
+A rota listava **todos** os uploads abertos do dono e respondia `IsTruncated=false` sempre:
 
 ```
-PUT /s3/com_underline      → 200, bucket criado
-PUT /s3/com espaço         → 200
-PUT /s3/traco-no-fim-      → 200
-PUT /s3/-traco-no-inicio   → 200
-PUT /s3/dois..pontos       → 200
+GET /s3/<b>?uploads&max-uploads=1     (três uploads abertos)
+→ 200 <IsTruncated>false</IsTruncated>
+      <Upload>zeta.bin</Upload><Upload>alfa.bin</Upload><Upload>meio.bin</Upload>
+      (sem <MaxUploads>, sem <NextKeyMarker>)
 ```
 
-O S3 recusa os cinco, e por um motivo de protocolo: o nome do bucket vira **host** no caminho
-virtual-host (`<bucket>.s3.<host>`), e rótulo DNS não aceita `_`, espaço, ponto consecutivo, hífen ou
-ponto nas pontas. O bucket criado assim funcionava no caminho path-style, então o defeito só aparecia
-quando alguém apontava um cliente de verdade para ele — com erro de DNS, longe da causa.
+Dois defeitos de uma vez. O teto não era honrado — quem pediu 1 não tem como saber que a resposta
+veio maior —, e o `IsTruncated` fixo em `false` mentia sobre a completude. Como o `<NextKeyMarker>`
+nunca existia, um cliente que pagina por ele **nunca** tem próxima página e conclui que viu tudo. O
+`aws s3api list-multipart-uploads`, que é a ferramenta de quem vai limpar uploads abortados, não
+conseguia varrer um bucket com muitos.
 
 ### Agora
 
-| nome | antes | agora |
+| parâmetro | antes | agora |
 |---|---|---|
-| `com_underline`, `com espaço` | `200` | `400 InvalidBucketName` |
-| `traco-no-fim-`, `-traco-no-inicio`, `ponto-hifen.-x` | `200` | `400 InvalidBucketName` |
-| `dois..pontos` | `200` | `400 InvalidBucketName` |
-| `10.0.0.1` (forma de IPv4) | `200` | `400 InvalidBucketName` |
-| `ab` (menos de 3) | `400` | `400 InvalidBucketName` |
-| `A-maiusculo`, nome com 64 | `400` | `400 InvalidBucketName` |
-| `abc`, `a-b-c`, `a.b.c`, `1-2-3`, 63 caracteres | `200` | `200` |
+| `max-uploads=1` (três abertos) | os três, `IsTruncated=false` | um, `IsTruncated=true`, `NextKeyMarker`/`NextUploadIdMarker` |
+| `max-uploads=0`, `-1`, `abc` | os três | os três (teto 1000), `<MaxUploads>1000</MaxUploads>` |
+| sem `max-uploads` | os três, sem `<MaxUploads>` | os três, `<MaxUploads>1000</MaxUploads>` |
+| `key-marker` + `upload-id-marker` | ignorados | posição na ordem `(key, upload_id)` |
+| `prefix` | filtrava | filtra (igual) |
 
-Regras (as do caminho path-style do S3): 3 a 63 caracteres; começa e termina com letra ou dígito;
-só minúscula, dígito, hífen e ponto; sem `..` nem `.-`; não pode ter forma de IPv4 (o S3 reserva
-endereço para o TLS do caminho virtual-host). A mensagem diz qual regra foi violada.
+- O teto é 1000, como o do `ListParts` (§4.54), e o `<MaxUploads>` ecoa o **valor aplicado**, não o
+  pedido — a mesma regra do `<MaxParts>`.
+- A paginação é na ordem do S3, `(key, upload_id)`: no marcador de uma chave, a próxima página traz o
+  resto das chaves maiores e, na mesma chave, só os uploads com id maior. Paginar com
+  `max-uploads=1` viu os três, sem repetir e sem perder.
+- O banco faz `limit teto + 1` para saber se há próxima página sem uma segunda contagem.
 
-- A conferência vale no **`CreateBucket`** e no primeiro `PUT` de objeto (o bucket nasce no primeiro
-  upload) — `PutBucketPolicy`, `DeleteBucket` e as demais rotas que passam por `validateBucket`
-  herdam a regra.
-- O código do erro é o do S3, **`InvalidBucketName`**, não o interno `STORAGE_BUCKET_INVALID` do Énóis:
-  a tradução em `noVocabularioDoS3` é a única exceção à regra de repassar o código interno, porque o
-  SDK procura `InvalidBucketName` para mostrar a mensagem.
-- Nome no estado antigo (criado antes desta versão com `_` ou espaço) continua **listável e legível**;
-  só a criação é recusada. Não há migração.
-
-**Verificação:** `S3GatewayTests` **+1** (`nome_de_bucket_fora_do_alfabeto_do_s3_e_400`): oito nomes
-inválidos recusados na criação e no `PUT` de objeto, com `InvalidBucketName`, e nenhuma linha criada;
-cinco nomes válidos (inclusive os limites de 3 e 63) aceitos. Vermelho antes: `200` em
-`com_underline`. Mutações **5/5**: alfabeto aceitando `_` e espaço; sem a regra das pontas; sem a dos
-pontos; sem a do IPv4; sem a tradução para `InvalidBucketName`.
-## 4.59 `<MaxParts>` do `ListParts` é o valor aplicado, não o pedido (ciclo 144)
-
-O `<MaxParts>` da resposta era o `max-parts` **cru** da consulta, enquanto o corte da página usava o
-valor normalizado:
-
-```
-GET ...?uploadId=<id>&max-parts=0      → <MaxParts>0</MaxParts>    e a página traz as partes (até 1000)
-GET ...?uploadId=<id>&max-parts=5000   → <MaxParts>5000</MaxParts> e a página traz no máximo 1000
-```
-
-Nos dois o XML se contradiz. Com `MaxParts 0` e partes dentro, o cliente conclui que a resposta está
-quebrada; com `MaxParts 5000` numa página de 1000, quem soma o que a resposta promete conta errado
-quantas páginas faltam e para cedo.
-
-### Agora
-
-| `max-parts` | página | antes `<MaxParts>` | agora |
-|---|---|---|---|
-| ausente | até 1000 | 1000 | 1000 |
-| `2` | até 2 | 2 | 2 |
-| `0`, `-1` | até 1000 (piso) | 0, -1 | **1000** |
-| `abc` (ilegível) | até 1000 | 1000 | 1000 |
-| `5000` | até 1000 (teto) | 5000 | **1000** |
-
-O `<MaxParts>` é o mesmo número que corta a página — calculado uma vez, em `tetoDePartes`, e usado nos
-dois lugares. Paginação, `part-number-marker`, `IsTruncated` e `NextPartNumberMarker` não mudam.
-
-**Verificação:** `S3GatewayTests` **+1** (`list_parts_ecoa_o_max_parts_aplicado_nao_o_pedido`): cinco
-valores de `max-parts`, cada um conferindo o `<MaxParts>` ecoado **e** que a página não entrega mais
-partes do que ele diz; e a página com marcador. Vermelho antes: `MaxParts 0` com 3 partes. Mutações
-**4/4**: ecoando o pedido cru; sem o teto de 1000; sem o piso de zero/negativo; página cortada em 1000
-com o eco dizendo outro número.
-## 4.60 `continuation-token` é opaco e assinado (ciclo 143)
-
-O token era o **último nome emitido**, em claro, usado como posição sem conferência:
-
-```
-GET /s3/<b>?list-type=2&max-keys=1      → <NextContinuationToken>a1.txt</NextContinuationToken>
-GET /s3/<b>?list-type=2&continuation-token=lixo    → 200, KeyCount 0
-GET /s3/<b>?list-type=2&continuation-token=a1.txt  → 200, a partir de a1.txt
-```
-
-O `200` com lista vazia é o pior dos casos: o cliente que retoma a paginação com um token corrompido
-(novo upload entre páginas, token de outra sessão, string truncada) conclui que **o bucket acabou** e
-para de listar, sem erro. O token de um bucket também servia de posição em outro.
-
-### Agora
-
-| `continuation-token` | antes | agora |
-|---|---|---|
-| emitido por esta listagem, neste bucket | `200`, continua | `200`, continua |
-| `lixo`, `AAA`, `%41%41`, nome inventado | `200` vazio | `400 InvalidArgument` |
-| token deste bucket com um caractere da assinatura trocado | `200` | `400 InvalidArgument` |
-| token emitido para **outro** bucket | usado como posição | `400 InvalidArgument` |
-| token antigo (nome em claro, sem `.`) | `200` | `400 InvalidArgument` |
-
-- Forma: `base64url(posição)` + `.` + HMAC-SHA-256 de `bucket + "\n" + posição`, em hexadecimal, com o
-  **segredo da credencial** que assinou a listagem (`credentials.secretFor`, o mesmo do URL
-  pré-assinado). Expira junto com a credencial porque o segredo é dela.
-- O `NextContinuationToken` deixa de coincidir com o nome do objeto — é o que o S3 faz (o token dele é
-  opaco). O `NextMarker` do V1 **não** muda: no V1 o marcador é a chave, por contrato.
-- Confere também o **bucket**: token de um bucket em outro é recusa, e o cliente relista do zero com
-  `400` visível em vez de receber uma página vazia.
-- Comparação com `MessageDigest.isEqual` (tempo fixo). Não é confidencialidade — o token continua
-  público —, é a prova de que veio daqui.
-
-**Efeito declarado:** tokens emitidos por versões anteriores (o nome em claro) passam a ser `400`; o
-cliente que guardou um token entre deploys refaz a listagem. Vale só para o `list-type=2`; o `marker` do
-V1 e o `start-after` seguem aceitando a chave.
-
-**Verificação:** `S3GatewayTests` **+1** (`continuation_token_que_o_gateway_nao_emitiu_e_400`): quatro
-tokens inválidos → `400 InvalidArgument`; paginação de três páginas com `max-keys=1` devolvendo
-`a1,a2,a3`; token forjado (forma certa, assinatura trocada) → `400`; token deste bucket em outro → `400`.
-Dois testes existentes usavam o nome como token e foram atualizados para o contrato novo. Vermelho antes:
-`200` em `lixo`. Mutações **4/4**: sem verificar a assinatura; emitindo o nome em claro; assinatura que
-não amarra o bucket; conferindo só a forma hexadecimal da assinatura.
-## 4.61 A chave gravada é o nome declarado, não a forma da URI (ciclo 142)
-
-A chave era gravada **como vinha na URI**, percent-encoded:
-
-```
-PUT /s3/<b>/café.txt        → linha com object_key = caf%C3%A9.txt
-GET /s3/<b>?list-type=2     → <Key>caf%C3%A9.txt</Key>
-```
-
-O `GET` com a chave listada até funcionava (o caminho volta codificado e casa com a linha), então o
-defeito não aparecia num teste de ida e volta. O nome do objeto, porém, era outro: quem compara a
-`<Key>` com o nome do arquivo local, monta URL a partir dela ou usa a chave numa **cópia por
-cabeçalho** — que decodifica — apontava para um objeto que não existe. E não havia como gravar
-`caf%C3%A9.txt` de propósito: todo `%` do nome virava outra chave.
-
-### Agora
-
-| chave na URI | antes (`object_key`) | agora |
-|---|---|---|
-| `café.txt` (URI `caf%C3%A9.txt`) | `caf%C3%A9.txt` | `café.txt` |
-| `com espaço.txt` | `com%20espa%C3%A7o.txt` | `com espaço.txt` |
-| `a&b<c>.txt` (URI `a&b%3Cc%3E.txt`) | `a&b%3Cc%3E.txt` | `a&b<c>.txt` |
-| `plus+1.txt` | `plus+1.txt` | `plus+1.txt` (`+` **não** é espaço em caminho) |
-| `sinal%40literal.txt` | `sinal%40literal.txt` | `sinal%40literal.txt` (`%25` é o escape do `%`) |
-| `ja%20codado.txt` | `ja%20codado.txt` | `ja%20codado.txt` |
-| percent-encoding inválido (`%zz`) | `%zz` | `%zz`, sem decodificar (recusa) |
-
-- A decodificação é a do **caminho**, não a de formulário: `+` fica `+`. Passa pela mesma regra do
-  `x-amz-copy-source`, que já decodificava.
-- Vale para o `PUT`, o multipart e o `DELETE` (todos por `keyOf`); a listagem, o `HEAD` e o `GET`
-  passam a usar o mesmo nome, então a `<Key>` listada **é** alcançável.
-- A chave que já existia codificada na base continua acessível pelo caminho codificado: a URI que
-  gera `caf%C3%A9.txt` decodifica para `café.txt`, e quem manda `%25` obtém o literal — a linha
-  antiga `caf%C3%A9.txt` deixa de ser a mesma chave. Objetos gravados antes desta versão com
-  caractere especial passam a pedir a URI com `%25` para serem lidos.
-
-**Verificação:** `S3GatewayTests` **+1** (`chave_gravada_e_o_nome_declarado_nao_a_forma_da_uri`): a
-coluna `object_key` tem exatamente os sete nomes declarados (inclusive `%` e `+`); a listagem traz o
-mesmo nome com `&amp;`/`&lt;` só como XML; o `GET` com a chave listada devolve o corpo. Vermelho antes:
-as linhas com `%C3%A9`, `%20` e `%3C`. Mutações **4/4**: sem decodificar; `+` virando espaço;
-decodificar duas vezes (`%25`→`%`→outra coisa); `%25` único tratado à parte.
+**Verificação:** `S3GatewayTests` **+1** (`list_multipart_uploads_honra_max_uploads_e_pagina`): sem
+parâmetro → três, `<MaxUploads>1000</MaxUploads>` e sem marcador; `max-uploads=1` paginando até o fim
+→ uma linha por página, `IsTruncated=true` com marcador, e as três chaves na ordem `alfa`,
+`meio`, `zeta`; `max-uploads=0/-1/abc` → três e `<MaxUploads>1000</MaxUploads>`. Vermelho antes: sem
+`<MaxUploads>` e os três com `max-uploads=1`. Mutações **5/5**: teto ignorado (o bug);
+`IsTruncated` fixo em `false`; sem os marcadores; marcador só pela chave; `max-uploads=0` cortando
+tudo em vez de cair no teto.
 
 ## 4.62 `OPTIONS` autentica e o verbo errado é XML (ciclo 149)
 
