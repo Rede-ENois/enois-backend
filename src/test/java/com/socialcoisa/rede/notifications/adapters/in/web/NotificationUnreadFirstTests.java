@@ -224,12 +224,16 @@ class NotificationUnreadFirstTests {
 			.andExpect(status().isBadRequest());
 	}
 
+	/** No modo dos nao lidos o cursor e a posicao: posicao negativa e lixo nao viram pagina 1. */
 	@Test
 	void rejectsACursorThatIsNotAPosition() throws Exception {
 		var session = auth.authenticate("notif_unread_cursor_param");
-		mockMvc.perform(get("/notifications").param("unreadFirst", "true").param("cursor", "o:-1")
-				.header("X-Session-Token", session.token()))
-			.andExpect(status().isBadRequest());
+		for (String cursor : new String[] { "o:-1", "o:abc" }) {
+			mockMvc.perform(get("/notifications").param("unreadFirst", "true").param("cursor", cursor)
+					.header("X-Session-Token", session.token()))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("INVALID_CURSOR"));
+		}
 	}
 
 	private JsonNode page(String token, int limit, String context, String cursor, Boolean unreadFirst)
