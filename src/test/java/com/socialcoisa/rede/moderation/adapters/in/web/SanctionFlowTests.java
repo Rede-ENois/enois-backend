@@ -32,6 +32,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import com.socialcoisa.rede.moderation.application.AiVerdictApplicationService;
 import com.socialcoisa.rede.moderation.application.port.out.ReportRepository;
+import org.junit.jupiter.api.Tag;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
 /**
@@ -39,6 +40,7 @@ import com.socialcoisa.rede.shared.web.TestAuthHelper;
  * -> usuario recorre -> humano aprova (libera) OU nega (ban com sessoes revogadas e login travado).
  * A IA nunca bana: ban so por recurso negado.
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class SanctionFlowTests {

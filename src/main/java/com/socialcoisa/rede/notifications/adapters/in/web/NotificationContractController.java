@@ -68,20 +68,30 @@ class NotificationContractController {
 		this.blockedUsersReader = blockedUsersReader;
 	}
 
+	/**
+	 * {@code unreadFirst=true} entrega os nao lidos antes dos lidos (issue #1147, aba Novas do
+	 * painel); sem ele a ordem e a de chegada, como sempre foi.
+	 */
 	@GetMapping
 	PageResponse<NotificationView> notifications(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") int limit,
-			@RequestParam(required = false) String context) {
+			@RequestParam(required = false) String context, @RequestParam(required = false) Boolean unreadFirst) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		// Teto de página: sem ele, `limit` vinha do cliente sem limite nenhum e uma aba aberta
 		// pedia a lista inteira de uma vez. A lista carrega aos poucos, como o feed e as mensagens.
 		limit = Math.clamp(limit, 1, MAX_PAGE_SIZE);
-		Instant before = cursorCodec.decode(cursor).orElse(null);
+		boolean unreadFirstMode = Boolean.TRUE.equals(unreadFirst);
+		// Modo dos nao lidos: pagina pela posicao (quantas linhas desta ordem ja foram entregues); no
+		// modo de sempre, pelo instante da ultima linha.
+		long offset = unreadFirstMode ? cursorCodec.decodeOffset(cursor).orElse(0L) : 0L;
+		Instant before = unreadFirstMode ? null : cursorCodec.decode(cursor).orElse(null);
 		// Bloqueio: notificacao de quem foi bloqueado (ou de quem bloqueou) nao aparece mais.
 		Set<String> hidden = blockedUsersReader.hiddenIdsFor(user.id().value());
 		// O cursor sai da pagina LIDA, antes do filtro de bloqueio: senao a pagina que perde itens
 		// para o filtro parecia a ultima e as notificacoes seguintes ficavam inalcancaveis.
-		List<Notification> page = notificationService.list(user.id().value(), before, parseContext(context), limit);
+		List<Notification> page = unreadFirstMode
+			? notificationService.listUnreadFirst(user.id().value(), offset, parseContext(context), limit)
+			: notificationService.list(user.id().value(), before, parseContext(context), limit);
 		List<Notification> notifications = page.stream()
 			.filter(n -> n.actorId() == null || !hidden.contains(n.actorId()))
 			.toList();
@@ -112,8 +122,11 @@ class NotificationContractController {
 					target.eventDate() != null ? target.eventDate().toString() : null);
 			})
 			.toList();
-		String nextCursor = page.size() == limit
-			? cursorCodec.encode(page.get(page.size() - 1).createdAt()) : null;
+		// Modo dos nao lidos: a posicao anda pelo tamanho LIDO, entao o filtro de bloqueio nao repete
+		// nem pula a linha seguinte; no modo de sempre, o instante da ultima linha, como antes.
+		String nextCursor = page.size() < limit ? null
+			: unreadFirstMode ? cursorCodec.encodeOffset(offset + page.size())
+				: cursorCodec.encode(page.get(page.size() - 1).createdAt());
 		return new PageResponse<>(items, nextCursor);
 	}
 

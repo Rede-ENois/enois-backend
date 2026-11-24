@@ -26,12 +26,14 @@ import com.socialcoisa.rede.moderation.domain.Appeal;
 import com.socialcoisa.rede.moderation.domain.UserSanction;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
+import org.junit.jupiter.api.Tag;
 import tools.jackson.databind.ObjectMapper;
 
 /**
  * A suspensao com prazo limita o login a decisao e recurso; sem recurso no prazo vira BAN com purga
  * sozinha, e com recurso pendente a conversao espera a decisao humana.
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class SuspensionFlowTests {

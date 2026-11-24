@@ -18,6 +18,7 @@ import org.springframework.test.web.servlet.MvcResult;
 import com.socialcoisa.rede.shared.web.TestDatabase;
 
 import tools.jackson.databind.JsonNode;
+import org.junit.jupiter.api.Tag;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -33,6 +34,7 @@ import tools.jackson.databind.ObjectMapper;
  * Este teste trava a origem no corpo da resposta: a interna vem como "enois" e a externa (vaga
  * agregada de plataforma) vem como "externa".
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class CompanyDirectoryOriginTests {

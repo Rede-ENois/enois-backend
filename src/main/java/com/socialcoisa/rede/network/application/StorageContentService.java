@@ -84,6 +84,24 @@ public class StorageContentService {
 	 */
 	public ResponseEntity<StreamingResponseBody> respond(StorageObject object, String rangeHeader, String ifNoneMatch,
 			String ifModifiedSince) {
+		return respond(object, rangeHeader, ifNoneMatch, ifModifiedSince, null);
+	}
+
+	/**
+	 * O mesmo GET, com {@code If-Range}.
+	 *
+	 * <p><b>Antes:</b> o gateway ignorava o {@code If-Range} e a faixa valia sempre. O cliente que
+	 * retoma um download em pedaços manda {@code If-Range} com o ETag da versão que começou a baixar;
+	 * se o objeto foi substituído no meio, o S3 responde {@code 200} com o arquivo novo inteiro e o
+	 * cliente recomeça. Aqui ele recebia {@code 206} com o pedaço da versão nova na posição da velha,
+	 * e o arquivo remontado ficava com metade de cada versão — sem nenhum erro.</p>
+	 *
+	 * <p><b>Agora:</b> validador em ETag vale só quando é o ETag da versão servida; em data, só com
+	 * {@code Last-Modified <=} aquela data. Sem bater (ou sem ser nem um nem outro, como
+	 * {@code lixo}) o {@code Range} é ignorado e o corpo inteiro sai com {@code 200} (§4.47).</p>
+	 */
+	public ResponseEntity<StreamingResponseBody> respond(StorageObject object, String rangeHeader, String ifNoneMatch,
+			String ifModifiedSince, String ifRange) {
 		List<StoragePlacement> location = storage.location(object.id());
 		if (location.isEmpty()) {
 			throw new ApiException(409, "STORAGE_PLACEMENT_MISSING",
@@ -106,10 +124,14 @@ public class StorageContentService {
 			return respostaEncontrada(object, etag, policy).build();
 		}
 
+		// `If-Range` decide se a faixa vale; sem correspondência o pedido é o do arquivo inteiro.
+		java.time.Instant atualizado = object.updatedAt() == null ? object.createdAt() : object.updatedAt();
+		// `If-Range`: data comparada em segundo, como `notModified`; ETag exato.
+		String faixaEfetiva = ifRangeVale(ifRange, etag, atualizado) ? rangeHeader : null;
 		ResponseEntity.BodyBuilder response;
 		Optional<ByteRange> range;
 		try {
-			range = ByteRange.parse(rangeHeader, total);
+			range = ByteRange.parse(faixaEfetiva, total);
 		}
 		catch (ByteRange.Unsatisifiable impossible) {
 			return resposta(416).header(HttpHeaders.CONTENT_RANGE, "bytes */" + total)
@@ -178,6 +200,37 @@ public class StorageContentService {
 			// guardou, e o que voltou no PUT é o que ele procura no HEAD.
 			builder.header("x-amz-meta-" + meta.getKey(), meta.getValue());
 		}
+	}
+
+	/**
+	 * O validador do {@code If-Range} corresponde à versão que vai ser servida?
+	 *
+	 * <p>ETag comparado exatamente, como o cliente o recebeu; data comparada em segundos — a
+	 * granularidade do HTTP-date — do mesmo jeito que {@link #notModified}. O que não for nenhum dos
+	 * dois não corresponde, e o pedido vira o do arquivo inteiro: é o que o S3 faz (§4.47).</p>
+	 */
+	private static boolean ifRangeVale(String ifRange, String etag, java.time.Instant atualizado) {
+		if (ifRange == null || ifRange.isBlank()) {
+			// Sem `If-Range` a faixa vale, como sempre valeu.
+			return true;
+		}
+		String valor = ifRange.trim();
+		if (valor.startsWith("\"") || valor.startsWith("W/")) {
+			return valor.replace("W/", "").equals(etag.replace("W/", ""));
+		}
+		if (atualizado == null) {
+			return false;
+		}
+		java.time.Instant pedido;
+		try {
+			pedido = java.time.ZonedDateTime.parse(valor,
+				java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.withLocale(java.util.Locale.ENGLISH)).toInstant();
+		}
+		catch (java.time.format.DateTimeParseException naoEhData) {
+			return false;
+		}
+		return !atualizado.truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
+			.isAfter(pedido.truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
 	}
 
 	/**

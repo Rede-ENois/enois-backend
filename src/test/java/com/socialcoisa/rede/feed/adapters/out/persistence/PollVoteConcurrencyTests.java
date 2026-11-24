@@ -35,8 +35,10 @@ import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.feed.domain.PostId;
 import com.socialcoisa.rede.feed.domain.PostType;
 import com.socialcoisa.rede.feed.domain.UserId;
+import org.junit.jupiter.api.Tag;
 import com.socialcoisa.rede.shared.web.TestDatabaseSupport;
 
+@Tag("critico")
 @SpringBootTest
 @TestPropertySource(properties =
 	"spring.datasource.url=jdbc:h2:mem:poll_vote_concurrency;MODE=MySQL;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=20000")

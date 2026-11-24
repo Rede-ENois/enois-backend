@@ -29,8 +29,11 @@ import com.socialcoisa.rede.shared.sanctions.SanctionGateReader;
 import com.socialcoisa.rede.shared.security.ClientIpResolver;
 import com.socialcoisa.rede.shared.security.RateLimitSessions;
 
+import org.junit.jupiter.api.Tag;
 import jakarta.servlet.FilterChain;
 
+
+@Tag("critico")
 class SessaoLimitadaAuditoriaTests {
 
 	private static final Instant AGORA = Instant.parse("2026-11-16T12:00:00Z");

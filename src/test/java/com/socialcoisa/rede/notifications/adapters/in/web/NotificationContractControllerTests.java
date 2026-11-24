@@ -22,8 +22,10 @@ import org.springframework.test.web.servlet.MockMvc;
 import tools.jackson.databind.ObjectMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import org.junit.jupiter.api.Tag;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class NotificationContractControllerTests {

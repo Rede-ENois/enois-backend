@@ -9,12 +9,14 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.junit.jupiter.api.Tag;
 import org.springframework.test.web.servlet.MockMvc;
 
 /**
  * Emitir o desafio de cadastro é o passo anterior ao cadastro, então tem teto próprio: sem ele, o
  * cliente podia pedir desafios à vontade dentro da cota de cadastro e guardar vários resolvidos.
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class SignupChallengeRateLimitTests {

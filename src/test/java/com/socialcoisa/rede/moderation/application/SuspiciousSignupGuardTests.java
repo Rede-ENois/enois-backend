@@ -6,12 +6,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.Test;
 
+import org.junit.jupiter.api.Tag;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 /**
  * Um nome suspeito não cala uma rede inteira: a pausa acompanha o aparelho que repetiu, e a rede
  * só entra depois de várias ocorrências.
  */
+
+@Tag("critico")
 class SuspiciousSignupGuardTests {
 
 	private static final String NETWORK = "198.51.100.7";

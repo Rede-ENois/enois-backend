@@ -14,6 +14,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
+import org.junit.jupiter.api.Tag;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -30,6 +31,7 @@ import tools.jackson.databind.ObjectMapper;
  * - **a janela expira**: passado o tempo, o IP volta a poder tentar (sem isso, um pico viraria
  *   bloqueio permanente).
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class IdentityRateLimitTests {

@@ -790,6 +790,52 @@ class S3GatewayController {
 	}
 
 	/**
+	 * Os cabeçalhos de SSE que o cliente pede e este gateway não aplica.
+	 *
+	 * <p><b>Antes:</b> eram ignorados. O {@code PUT} com {@code x-amz-server-side-encryption: AES256}
+	 * — o que o SDK manda quando SSE está configurado — respondia {@code 200}, gravava em claro e não
+	 * devolvia o cabeçalho nem no {@code HEAD}. O cliente ficava com a certeza de que a borda cifra o
+	 * objeto; quem lê a cópia em disco vê o conteúdo.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 501 NotImplemented} antes de abrir upload, como o subrecurso não
+	 * implementado: a recusa diz qual cabeçalho e que nada foi gravado (§4.48). A cifra em repouso é
+	 * do sistema de arquivos do nó, não de uma opção por requisição — aceitar o pedido seria prometer
+	 * uma garantia que o gateway não cumpre.</p>
+	 */
+	private static void recusarSseNaoAplicavel(HttpServletRequest request) {
+		for (String cabecalho : CABECALHOS_DE_SSE) {
+			if (request.getHeader(cabecalho) != null) {
+				throw s3Error(501, "NotImplemented", "O cabecalho '" + cabecalho
+					+ "' nao e suportado: este gateway nao cifra por requisicao, e o objeto nao foi gravado.");
+			}
+		}
+	}
+
+	/** Os cabeçalhos de Server-Side Encryption que o gateway recusa (§4.48). */
+	private static final List<String> CABECALHOS_DE_SSE = List.of("x-amz-server-side-encryption",
+		"x-amz-server-side-encryption-customer-algorithm", "x-amz-server-side-encryption-aws-kms-key-id");
+
+	/**
+	 * {@code x-amz-storage-class} além de {@code STANDARD}, que é a única classe que o gateway faz.
+	 *
+	 * <p><b>Antes:</b> o cabeçalho era ignorado e todo {@code PUT} respondia {@code 200}. Quem manda
+	 * {@code GLACIER} (o SDK de arquivamento) levava a certeza de que o objeto estava na classe fria,
+	 * e o objeto estava em disco quente, servido na hora.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 501 NotImplemented} nomeando a classe, antes de abrir upload — como o
+	 * subrecurso não implementado (§4.21). Recusar diz onde o dado está; responder sucesso com outro
+	 * rótulo seria a mentira que este gateway evita (§4.49).</p>
+	 */
+	private static void recusarClasseDeArmazenamentoNaoImplementada(HttpServletRequest request) {
+		String classe = request.getHeader("x-amz-storage-class");
+		if (classe == null || classe.isBlank() || "STANDARD".equalsIgnoreCase(classe.trim())) {
+			return;
+		}
+		throw s3Error(501, "NotImplemented", "A classe de armazenamento '" + classe.trim()
+			+ "' nao e suportada: este gateway so guarda STANDARD, e o objeto nao foi gravado.");
+	}
+
+	/**
 	 * Subrecurso da consulta que o gateway não implementa e que, sem esta guarda, seria gravado.
 	 *
 	 * <p><b>Antes:</b> o {@code PUT} era despachado pela chave da rota, sem olhar a consulta. Um
@@ -894,6 +940,10 @@ class S3GatewayController {
 		recusarSubrecurso(request, "/" + bucket + "/" + key);
 		// A chave apagada por outra conta é recusa antes de abrir: a lápide é tomada de posse (§4.22).
 		recusarChaveDeOutraConta(credential, bucket, key);
+		// SSE pedido e não aplicado é sucesso falso: recusa antes de abrir, no PUT e na cópia (§4.48).
+		recusarSseNaoAplicavel(request);
+		// Classe além de STANDARD é recusa antes de abrir, no PUT e na cópia (§4.49).
+		recusarClasseDeArmazenamentoNaoImplementada(request);
 		String origemDaCopia = request.getHeader(COPY_SOURCE);
 		if (origemDaCopia != null && !origemDaCopia.isBlank()) {
 			return copiarObjeto(credential, bucket, key, origemDaCopia, request);
@@ -1289,6 +1339,11 @@ class S3GatewayController {
 	@RequestMapping(value = "/{bucket}/{*key}", method = RequestMethod.POST, params = "uploads")
 	ResponseEntity<String> createMultipart(@PathVariable String bucket, HttpServletRequest request) {
 		S3Credential credential = authenticate(request, "PUT");
+		// O multipart também prometeria cifra que o gateway não faz (§4.48). Antes do
+		// `requireBucket`: com a recusa a chave nunca existe, e a donagem responderia `403`.
+		recusarSseNaoAplicavel(request);
+		// O multipart também prometeria uma classe que o gateway não faz (§4.49).
+		recusarClasseDeArmazenamentoNaoImplementada(request);
 		requireBucket(credential, bucket);
 		String key = keyOf(request);
 		String expires = query(request).get("expires");
@@ -1660,7 +1715,8 @@ class S3GatewayController {
 		recusarLeituraDeSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		StorageObject object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, keyOf(request)));
 		return comVocabularioDoS3(() -> content.respond(object, request.getHeader(HttpHeaders.RANGE),
-			request.getHeader(HttpHeaders.IF_NONE_MATCH), request.getHeader(HttpHeaders.IF_MODIFIED_SINCE)));
+			request.getHeader(HttpHeaders.IF_NONE_MATCH), request.getHeader(HttpHeaders.IF_MODIFIED_SINCE),
+			request.getHeader("If-Range")));
 	}
 
 	/** HeadObject: mesmos cabeçalhos do GetObject, sem corpo. */

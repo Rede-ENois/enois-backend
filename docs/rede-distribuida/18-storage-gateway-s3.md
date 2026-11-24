@@ -1443,6 +1443,151 @@ errado mantém o conteúdo anterior. Vermelho antes: `200` em todos os casos. Mu
 conferência do digest; algoritmo não conferido aceito; sem a normalização de maiúsculas; comparação
 desligada.
 
+## 4.47 `If-Range` decide se o `Range` vale (ciclo 137)
+
+O cabeçalho que protege um download retomado era ignorado:
+
+```
+GET /s3/<b>/a.txt   Range: bytes=0-4   If-Range: "ETag de OUTRA versão"   → 206, "01234"
+```
+
+O cliente que retoma um download manda `If-Range` com o ETag da versão que começou a baixar. Se o
+objeto foi substituído no meio, o S3 responde `200` com o arquivo **novo e inteiro**, e o cliente
+recomeça. Aqui ele recebia `206` com o pedaço da versão **nova** na posição da velha: o arquivo
+remontado no disco do cliente ficava com os primeiros bytes de uma versão e o resto de outra, e a
+corrupção só aparecia ao abrir.
+
+### Agora
+
+| `If-Range` | antes | agora |
+|---|---|---|
+| ausente | `206` | `206` |
+| ETag da versão servida | `206` | `206` |
+| ETag de outra versão | `206` (pedaço errado) | `200`, corpo inteiro, sem `Content-Range` |
+| data anterior ao `Last-Modified` | `206` | `200`, corpo inteiro |
+| data no mesmo segundo do `Last-Modified` | `206` | `206` (HTTP-date tem granularidade de segundo) |
+| data posterior | `206` | `206` |
+| valor que não é ETag nem data (`lixo`) | `206` | `200`, corpo inteiro |
+
+- A data é comparada em segundos, como o `If-Modified-Since` (o `304` condicional): o `updated_at` tem
+  milissegundos e o cliente devolve o `Last-Modified` que recebeu, truncado.
+- A regra vive no serviço de conteúdo, não no gateway: o parâmetro novo de `respond` tem a
+  sobrecarga antiga para o chamador que não passa `If-Range`.
+
+**Verificação:** `S3GatewayTests` **+1** (`if_range_validador_que_nao_bate_devolve_o_corpo_inteiro`):
+ETag certo → `206` com `01234`; ETag de outra versão, data antiga, data futura e `lixo` → `200` com
+`0123456789` e sem `Content-Range`. Vermelho antes: `206` nos quatro. Mutações **3/3**: gateway sem
+passar o cabeçalho; comparação de data desligada; comparação de ETag desligada.
+
+## 4.48 SSE declarado é recusado, não ignorado (ciclo 138)
+
+O SDK manda `x-amz-server-side-encryption` quando SSE está configurado. Aqui ele era ignorado:
+
+```
+PUT /s3/<b>/x.txt   x-amz-server-side-encryption: AES256   → 200, objeto gravado em claro
+HEAD /s3/<b>/x.txt                                         → sem x-amz-server-side-encryption
+```
+
+Quem configurou SSE tinha a certeza de que a borda cifrava o objeto; quem lê a cópia em disco vê o
+conteúdo. A `HEAD` não devolvia nem o eco do cabeçalho, então nem havia como descobrir pela leitura.
+
+### Agora
+
+| pedido | antes | agora |
+|---|---|---|
+| `PUT` com `x-amz-server-side-encryption: AES256` | `200`, gravado | `501 NotImplemented`, nomeia o cabeçalho |
+| `PUT` com `x-amz-server-side-encryption: aws:kms` (+ chave) | `200`, gravado | `501` |
+| `POST ?uploads` com SSE | `200`, upload aberto | `501`, nenhum upload aberto |
+| `PUT` com `x-amz-copy-source` e SSE | `200`, cópia gravada | `501`, cópia não gravada |
+| `x-amz-server-side-encryption-customer-algorithm` | ignorado | `501` |
+| `PUT` sem SSE | `200` | `200` |
+
+- A guarda roda **antes** de abrir upload e antes do `requireBucket` do multipart: com a recusa a
+  chave nunca existe, e a donagem responderia `403` em vez de dizer o que não é suportado. Num bucket
+  cujo dono só nasce do primeiro `PUT`, a leitura depois da recusa é `403` — o contrato do "não
+  gravado" é "não veio `200` com o conteúdo".
+- **Recusar em vez de cifrar:** cifrar por requisição exigiria guardar a chave na linha e decifrar no
+  `GET`; a cifra em repouso aqui é a do sistema de arquivos do nó. Responder `200` a um pedido de
+  cifra que ninguém aplicou é a mesma escolha do subrecurso não implementado (§4.21).
+
+**Verificação:** `S3GatewayTests` **+1** (`sse_declarado_no_put_e_recusado_e_nao_grava`): `PUT` com
+`AES256` → `501` e a leitura não devolve o corpo; `aws:kms` + chave → `501`; `POST ?uploads` → `501`;
+cópia com SSE → `501` e a cópia não aparece; `PUT` sem o cabeçalho, num bucket novo, → `200`.
+Vermelho antes: `200` no `PUT`. Mutações **4/4**: sem a guarda no `PUT`; sem a guarda no multipart;
+guarda que aceita tudo; lista reduzida só ao KMS.
+
+## 4.50 `Content-Type` com controle ou gigante é `400` (ciclo 140)
+
+O tipo declarado no `PUT` era gravado como veio — e voltado como veio no `HEAD`/`GET`:
+
+```
+PUT /s3/<b>/x.txt   Content-Type: text/plain\r\nX-Injetado: 1   → 200
+HEAD /s3/<b>/x.txt  → Content-Type: text/plain
+                      X-Injetado: 1                    ← segunda linha do valor
+```
+
+A injeção só não virava cabeçalho novo porque o Tomcat descarta o que não é nome de campo válido; a
+linha extra ia junto com o valor. Um tipo de 300 caracteres também era gravado e devolvido inteiro.
+O `Cache-Control` e o `Content-Disposition` já tinham a mesma regra; o tipo — que é o que o
+navegador usa para decidir o que fazer com o arquivo — não tinha.
+
+### Agora
+
+| `Content-Type` | antes | agora |
+|---|---|---|
+| `text/plain; charset=utf-8` | `200`, literal | `200`, literal |
+| com `\r\n` / `\n` / `\0` | `200`, gravado | `400 InvalidArgument` |
+| acima de 200 caracteres | `200`, gravado | `400 InvalidArgument` |
+| em branco | `application/octet-stream` | `application/octet-stream` |
+| `PUT` com `x-amz-copy-source` e `REPLACE` | gravado | mesma regra, `400` |
+
+- A regra é a mesma função do `Cache-Control`/`Content-Disposition` (`validateHeaderValue`), aplicada
+  no `beginUpload` — o multipart e a cópia passam pelo mesmo ponto, então a recusa vale para os três
+  caminhos sem guarda duplicada.
+- A recusa vem **antes** de abrir upload: nada é criado nem substituído.
+
+**Verificação:** `S3GatewayTests` **+1** (`content_type_com_controle_ou_gigante_e_recusado_e_nao_grava`):
+`\r\n`, `\n`, `\0` e 300 caracteres → `400 InvalidArgument`; `text/plain; charset=utf-8` grava e
+volta literal no `HEAD`; tipo em branco vira `application/octet-stream`; cópia com `REPLACE` e tipo
+inválido → `400`. Vermelho antes: `200` no tipo com `\r\n`. Mutações **4/4**: sem a validação; sem o
+teto de tamanho; sem a recusa de controle; tipo em branco não virando o padrão.
+
+## 4.49 Classe de armazenamento além de `STANDARD` é `501` (ciclo 139)
+
+`x-amz-storage-class` era ignorado e todo `PUT` respondia `200`:
+
+```
+PUT /s3/<b>/x.txt   x-amz-storage-class: GLACIER        → 200, objeto em disco quente
+PUT /s3/<b>/x.txt   x-amz-storage-class: DEEP_ARCHIVE   → 200, idem
+```
+
+O SDK de arquivamento manda `GLACIER`/`DEEP_ARCHIVE`. Quem obedece ao `200` acha que o objeto está
+na classe fria: espera dias para restaurá-lo, conta o preço de arquivo e trata a `GET` lenta como
+normal. O objeto estava em disco quente, servido na hora. A §3 já declarava que a classe não é
+escolhida por requisição — o `200` dizia o contrário.
+
+### Agora
+
+| `x-amz-storage-class` | antes | agora |
+|---|---|---|
+| `STANDARD`, `standard`, ` STANDARD ` | `200` (caixa/espaço ignorados) | `200` |
+| `GLACIER` / `DEEP_ARCHIVE` / `STANDARD_IA` / `ONEZONE_IA` / outra | `200`, gravado | `501 NotImplemented` nomeando a classe |
+| `PUT ?partNumber&uploadId` com classe não suportada | parte aceita | não muda nada (a classe vem do `CreateMultipartUpload`) |
+| `CreateMultipartUpload` com classe não suportada | upload aberto | `501`, nenhum upload aberto |
+| `PUT` com `x-amz-copy-source` e classe não suportada | cópia gravada | `501`, cópia não gravada |
+
+- A comparação é sem caixa e sem espaço das pontas — o valor de classe HTTP não é case-sensitive, e um
+  cliente cru manda `standard`.
+- A recusa vem **antes** de abrir upload e antes do `requireBucket` do multipart (mesma ordem do SSE,
+  §4.48): com a recusa a chave não existe e a donagem responderia `403`.
+- A `ListObjectsV2` continua sem `<StorageClass>`: a classe real é `STANDARD` para tudo (§8).
+
+**Verificação:** `S3GatewayTests` **+1** (`classe_de_armazenamento_nao_implementada_e_recusada`):
+`GLACIER`/`DEEP_ARCHIVE`/`STANDARD_IA`/`ONEZONE_IA` → `501` nomeando a classe; `STANDARD`, `standard`
+e ` STANDARD ` (chaves distintas) → `200`; cópia e multipart com classe → `501` e a `ListObjectsV2`
+só mostra o que foi gravado. Vermelho antes: `200` no `GLACIER`. Mutações **4/4**: sem a guarda no
+`PUT`; sem a guarda no multipart; guarda que aceita tudo; comparação sem caixa/espaço.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:

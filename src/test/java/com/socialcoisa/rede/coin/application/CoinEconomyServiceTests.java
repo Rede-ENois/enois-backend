@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.coin.application.port.out.CoinLedgerRepository;
 import com.socialcoisa.rede.coin.domain.CoinEntry;
+import org.junit.jupiter.api.Tag;
 import com.socialcoisa.rede.coin.domain.CoinRate;
 
 /**
@@ -28,6 +29,8 @@ import com.socialcoisa.rede.coin.domain.CoinRate;
  * clique — no histórico da QA isso virou uma publicação por segundo, mexendo no mercado. Agora a
  * publicação é, no máximo, uma por período (24h): spam no botão não move o preço.
  */
+
+@Tag("critico")
 class CoinEconomyServiceTests {
 
 	private static final Instant START = Instant.parse("2026-10-01T03:10:00Z");

@@ -28,6 +28,8 @@
 	</scm>
 	<properties>
 		<java.version>25</java.version>
+		<!-- Vazio = nenhum filtro de tag: `./mvnw test` roda a suite inteira. -->
+		<test.groups></test.groups>
 		<resilience4j.version>2.4.0</resilience4j.version>
 		<jsoup.version>1.24.1</jsoup.version>
 		<!-- O parent do Spring Boot 4 nao gerencia o SDK do AWS, entao a versao e fixada aqui.
@@ -305,7 +307,31 @@
 					</execution>
 				</executions>
 			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<!-- Por padrao a suite inteira roda: `./mvnw test`. O profile `criticos` filtra
+					     pelo @Tag("critico") das classes de area de risco. -->
+					<groups>${test.groups}</groups>
+					<systemPropertyVariables>
+						<test.groups>${test.groups}</test.groups>
+					</systemPropertyVariables>
+				</configuration>
+			</plugin>
 		</plugins>
 	</build>
+
+	<profiles>
+		<!-- Testes criticos: so as classes @Tag("critico"), as que podem quebrar a aplicacao
+		     (autenticacao, autorizacao, dinheiro, moderacao, migracao, idempotencia/concorrencia,
+		     contrato de API). E o gate do PR; a suite completa continua em `./mvnw test`. -->
+		<profile>
+			<id>criticos</id>
+			<properties>
+				<test.groups>critico</test.groups>
+			</properties>
+		</profile>
+	</profiles>
 
 </project>

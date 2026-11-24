@@ -15,9 +15,11 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
+import org.junit.jupiter.api.Tag;
 import com.socialcoisa.rede.shared.web.TestDatabaseSupport;
 
 /** O relógio da máquina não pode publicar uma cotação entre cenários de integração. */
+@Tag("critico")
 @SpringBootTest
 @TestPropertySource(properties = {
 		"spring.datasource.url=jdbc:h2:mem:coin_economy_test_isolation;MODE=MySQL;DB_CLOSE_DELAY=-1" })

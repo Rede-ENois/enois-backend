@@ -20,6 +20,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 import com.socialcoisa.rede.shared.web.TestDatabase;
 
+import org.junit.jupiter.api.Tag;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -30,6 +31,7 @@ import tools.jackson.databind.ObjectMapper;
  * conta; este prova que a requisição HTTP de fato para de chegar à comparação de hash depois do
  * teto, e que o vizinho (outro nó) não paga pelo erro de quem atacou.</p>
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class NetworkNodeAuthRateLimitTests {

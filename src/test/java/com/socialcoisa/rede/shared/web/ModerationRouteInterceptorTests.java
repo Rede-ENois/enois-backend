@@ -17,12 +17,14 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
+import org.junit.jupiter.api.Tag;
 import tools.jackson.databind.ObjectMapper;
 
 /**
  * The central route lock covers `/moderation/**` like `/admin/**`: a moderation route is closed to
  * plain members before any controller runs, so a new handler there cannot forget the check.
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class ModerationRouteInterceptorTests {

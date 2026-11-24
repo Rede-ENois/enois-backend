@@ -735,6 +735,11 @@ Status: `PENDING`, `ACCEPTED`, `REMOVED`, `BLOCKED`, `NONE`
 quem consulta, `false` quando foi recebido e em qualquer outro status. O `status` é o mesmo para os
 dois lados da conexão; é esse campo que diferencia "cancelar" de "aceitar".
 
+Pedir conexão cria, para quem recebe, o aviso `CONNECTION_REQUEST` com `href`
+`/api/network/connections/{quem pediu}/accept`. Ele continua não lido enquanto o convite está
+pendente e fica lido quando o convite é aceito, recusado ou cancelado. Avisos de convites resolvidos
+antes desta regra não são alterados.
+
 Pedir conexão a uma conta que não existe responde `404 USER_NOT_FOUND`.
 
 ---
@@ -1255,7 +1260,7 @@ controle de acesso.
 
 | Método | Rota | Descrição | Autenticação |
 |---|---|---|---|
-| GET | `/api/notifications` | Listar notificações (`?context=SOCIAL\|PROFESSIONAL`) | Sim |
+| GET | `/api/notifications` | Listar notificações (`?context=SOCIAL\|PROFESSIONAL`, `?unreadFirst=true`) | Sim |
 | POST | `/api/notifications/{notificationId}/read` | Marcar como lida | Sim |
 | POST | `/api/notifications/read-all` | Marcar todas como lidas | Sim |
 | GET | `/api/notifications/unread-summary` | Unread count per area for menu indicators (`?context=SOCIAL\|PROFESSIONAL`) | Sim |
@@ -1284,6 +1289,24 @@ publicados pela primeira aprovação da moderação. A entrega é assíncrona e 
 o autor não recebe o próprio aviso, bloqueios nos dois sentidos são respeitados e a adesão é
 conferida na entrega. Edição e restauração de suspensão não são novos lançamentos.
 O aviso tem `context: "SOCIAL"`, `module: "COMMUNITY_PROJECTS"` e `href: "/projetos/{username}/{slug}"`.
+
+Sem `unreadFirst`, a lista de `GET /api/notifications` vem só na ordem de chegada (mais recente
+primeiro), lidas ou não. Com `unreadFirst=true`, os avisos **não lidos** vêm primeiro, também na ordem
+de chegada, e depois os lidos: assim a aba Novas acha na primeira página o não lido que o
+`unread-summary` conta. O ator bloqueado (em qualquer direção) sai da página nos dois modos.
+
+O cursor muda só nesse modo. No default ele continua sendo o instante da última linha. Com
+`unreadFirst=true` ele é a **posição** na ordem (`o:<n>`: quantas linhas daquela ordem já foram
+entregues), porque a ordenação troca de grupo no meio da paginação e um cursor de instante repetiria
+ou pularia linha na troca. O `nextCursor` do modo novo sai pela mesma regra de sempre, sobre a página
+lida do banco (`page.size() == limit`) — o filtro de ator bloqueado roda depois. Por isso uma página
+que só tinha atores bloqueados vem com `items` vazio e **com** `nextCursor`: o cliente pede a próxima
+em vez de parar. O cursor avança pelo tamanho lido, então nenhuma linha é repetida nem pulada. Um
+cursor de posição inválido responde `400 INVALID_CURSOR`.
+
+```json
+{ "items": [ { "id": "notification_...", "read": false, ... } ], "nextCursor": "o:20" }
+```
 
 Each item of `GET /api/notifications` carries `module`, the interface area of its kind (same
 `NotificationModule` names as below, e.g. `EVENTS`, `OTHER`), so the app hides or flags notifications

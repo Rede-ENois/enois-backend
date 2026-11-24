@@ -15,6 +15,13 @@ public interface NotificationRepository {
 	List<Notification> findByUserId(String userId, java.time.Instant before,
 			com.socialcoisa.rede.notifications.domain.NotificationContext context, int limit);
 
+	/**
+	 * Page with the unread first, in arrival order, then the read ones; {@code offset} is how many
+	 * rows of that same order were already delivered.
+	 */
+	List<Notification> findUnreadFirstByUserId(String userId, long offset,
+			com.socialcoisa.rede.notifications.domain.NotificationContext context, int limit);
+
 	/** Unread notifications per kind, actor and href (a null context keeps every kind). */
 	List<UnreadCount> countUnreadByKindAndActor(String userId,
 			com.socialcoisa.rede.notifications.domain.NotificationContext context);

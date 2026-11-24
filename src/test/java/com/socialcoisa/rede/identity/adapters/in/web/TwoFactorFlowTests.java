@@ -28,12 +28,14 @@ import com.socialcoisa.rede.shared.security.Totp;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
 import tools.jackson.databind.JsonNode;
+import org.junit.jupiter.api.Tag;
 import tools.jackson.databind.ObjectMapper;
 
 /**
  * Segundo fator de ponta a ponta: ativacao por aplicativo, login com desafio, codigo por e-mail,
  * codigo de recuperacao e a regra de credibilidade (sem verificacao, reputacao zerada).
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class TwoFactorFlowTests {

@@ -2618,6 +2618,261 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		assertThat(mockMvc.perform(troca).andReturn().getResponse().getStatus()).isEqualTo(400);
 	}
 
+	/**
+	 * `x-amz-server-side-encryption` é recusado, não aceito em silêncio.
+	 *
+	 * <p><b>Antes:</b> o cabeçalho era ignorado e o `PUT` respondia `200`. O cliente que manda
+	 * `AES256` (ou o SDK com SSE configurado, que manda por padrão) ficava com a certeza de que o
+	 * objeto estava cifrado na rede: a `HEAD` não devolvia nem o cabeçalho, e o objeto estava em claro.
+	 * O objeto era servido sem cifra e a única prova do contrário era a ausência do eco na leitura.</p>
+	 *
+	 * <p><b>Agora:</b> `501 NotImplemented` antes de abrir upload, no `PUT`, no
+	 * `CreateMultipartUpload` e no `CopyObject` — a chave não aparece. É a mesma regra do subrecurso
+	 * não implementado: prometer uma garantia que o gateway não cumpre é pior que dizer que não
+	 * cumpre. `x-amz-server-side-encryption-aws-kms-key-id` junto do pedido cai na mesma recusa.</p>
+	 */
+	@Test
+	void sse_declarado_no_put_e_recusado_e_nao_grava() throws Exception {
+		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		MockHttpServletRequestBuilder r = put("/s3/" + bucket + "/sse/x.txt").content(corpo)
+			.header("x-amz-server-side-encryption", "AES256");
+		assinar(r, SECRET, shaDe("abc"));
+		var resposta = mockMvc.perform(r).andReturn().getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(501);
+		assertThat(resposta.getContentAsString()).contains("<Code>NotImplemented</Code>");
+		assertThat(resposta.getContentAsString()).contains("x-amz-server-side-encryption");
+		MockHttpServletRequestBuilder g = get("/s3/" + bucket + "/sse/x.txt");
+		assinar(g, SECRET, shaVazio());
+		var lido = mockMvc.perform(g).andReturn();
+		var doLido = lido.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lido)).andReturn().getResponse() : lido.getResponse();
+		// O bucket não ganhou dono porque a recusa vem antes de abrir: a leitura é `403`, não `200`.
+		assertThat(doLido.getStatus()).as("objeto gravado com SSE pedido e nao aplicado").isNotEqualTo(200);
+		assertThat(doLido.getContentAsString()).doesNotContain("abc");
+
+		// `aws:kms` com a chave: mesma recusa, e o multipart também.
+		MockHttpServletRequestBuilder kms = put("/s3/" + bucket + "/sse/y.txt").content(corpo)
+			.header("x-amz-server-side-encryption", "aws:kms")
+			.header("x-amz-server-side-encryption-aws-kms-key-id", "chave-1");
+		assinar(kms, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(kms).andReturn().getResponse().getStatus()).isEqualTo(501);
+		// E a cópia: o `PUT` com `x-amz-copy-source` também não pode prometer cifra.
+		String origemBucket = "sseo" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		MockHttpServletRequestBuilder origem = put("/s3/" + origemBucket + "/origem.txt").content(corpo);
+		assinar(origem, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(origem).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder copia = put("/s3/" + origemBucket + "/copia.txt").content(new byte[0])
+			.header("x-amz-copy-source", "/" + origemBucket + "/origem.txt")
+			.header("x-amz-server-side-encryption", "AES256");
+		assinar(copia, SECRET, shaVazio());
+		var recusaCopia = mockMvc.perform(copia).andReturn().getResponse();
+		assertThat(recusaCopia.getStatus()).as(recusaCopia.getContentAsString()).isEqualTo(501);
+		MockHttpServletRequestBuilder gCopia = get("/s3/" + origemBucket + "/copia.txt");
+		assinar(gCopia, SECRET, shaVazio());
+		var lidaCopia = mockMvc.perform(gCopia).andReturn();
+		var doCopia = lidaCopia.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lidaCopia)).andReturn().getResponse() : lidaCopia.getResponse();
+		assertThat(doCopia.getStatus()).as("copia gravada com SSE pedido").isNotEqualTo(200);
+
+		MockHttpServletRequestBuilder mp = MockMvcRequestBuilders.post("/s3/" + bucket + "/sse/multi.bin?uploads")
+			.header("x-amz-server-side-encryption", "AES256");
+		assinar(mp, SECRET, shaVazio());
+		assertThat(mockMvc.perform(mp).andReturn().getResponse().getStatus()).isEqualTo(501);
+
+		// Sem o cabeçalho, o PUT continua gravando — num bucket novo, porque o `bucket` do teste nunca
+		// ganhou dono: todos os `PUT` acima foram recusados antes de abrir.
+		String outroBucket = "sse" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		MockHttpServletRequestBuilder sem = put("/s3/" + outroBucket + "/sse/z.txt").content(corpo);
+		assinar(sem, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(sem).andReturn().getResponse().getStatus()).isEqualTo(200);
+	}
+
+	/**
+	 * `If-Range` decide se o `Range` vale: validador que não bate devolve o corpo **inteiro**.
+	 *
+	 * <p><b>Antes:</b> o cabeçalho era ignorado e o `Range` valia sempre. O cliente que retoma um
+	 * download em pedaços manda {@code If-Range} com o ETag da versão que começou a baixar; se o
+	 * objeto foi substituído no meio, o S3 responde {@code 200} com o arquivo novo <b>completo</b> e o
+	 * cliente recomeça do zero. Aqui ele recebia {@code 206} com o pedaço do arquivo <b>novo</b> na
+	 * posição do antigo: o remendo montado no disco do cliente tinha os primeiros bytes de uma versão
+	 * e o resto de outra, e a corrupção só aparecia ao abrir o arquivo.</p>
+	 *
+	 * <p><b>Agora:</b> com {@code If-Range} em ETag, a faixa é aplicada só quando o ETag é o da versão
+	 * servida; senão {@code 200} com o corpo inteiro. Com data, vale {@code Last-Modified} &lt;=
+	 * aquela data. Validador que não é nem ETag nem data ({@code lixo}) cai no corpo inteiro, como no
+	 * S3.</p>
+	 */
+	@Test
+	void if_range_validador_que_nao_bate_devolve_o_corpo_inteiro() throws Exception {
+		gravar("ifr/a.txt", "0123456789");
+		MockHttpServletRequestBuilder h = MockMvcRequestBuilders.head("/s3/" + bucket + "/ifr/a.txt");
+		assinar(h, SECRET, shaVazio());
+		String etag = mockMvc.perform(h).andReturn().getResponse().getHeader("ETag");
+		assertThat(etag).isNotNull();
+
+		// ETag da versão servida: a faixa vale.
+		MockHttpServletRequestBuilder bate = get("/s3/" + bucket + "/ifr/a.txt")
+			.header("Range", "bytes=0-4").header("If-Range", etag);
+		assinar(bate, SECRET, shaVazio());
+		var rr = mockMvc.perform(bate).andReturn();
+		var doBate = rr.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(rr)).andReturn().getResponse() : rr.getResponse();
+		assertThat(doBate.getStatus()).isEqualTo(206);
+		assertThat(doBate.getContentAsString()).isEqualTo("01234");
+
+		// ETag de outra versão, data antiga, data futura e lixo: corpo inteiro com 200.
+		for (String validador : new String[] { "\"outro\"", "Wed, 01 Jan 2020 00:00:00 GMT",
+				"Wed, 01 Jan 2100 00:00:00 GMT", "lixo" }) {
+			MockHttpServletRequestBuilder naoBate = get("/s3/" + bucket + "/ifr/a.txt")
+				.header("Range", "bytes=0-4").header("If-Range", validador);
+			assinar(naoBate, SECRET, shaVazio());
+			var rn = mockMvc.perform(naoBate).andReturn();
+			var doNao = rn.getRequest().isAsyncStarted()
+				? mockMvc.perform(asyncDispatch(rn)).andReturn().getResponse() : rn.getResponse();
+			assertThat(doNao.getStatus()).as("If-Range " + validador).isEqualTo(200);
+			assertThat(doNao.getContentAsString()).as("If-Range " + validador).isEqualTo("0123456789");
+			assertThat(doNao.getHeader("Content-Range")).as("If-Range " + validador).isNull();
+		}
+	}
+
+	/**
+	 * `Content-Type` com caractere de controle ou gigante é `400` antes de gravar.
+	 *
+	 * <p><b>Antes:</b> o tipo era gravado como veio. {@code Content-Type: text/plain\r\nX-Injetado: 1}
+	 * ficava na linha e voltava no {@code HEAD}/{@code GET} como <b>dois</b> campos do cabeçalho — só
+	 * não virava cabeçalho novo porque o Tomcat descarta o que não é nome de campo válido; a linha
+	 * extra ia junto com o valor. Um tipo de 300 caracteres também era gravado e devolvido inteiro. O
+	 * {@code Cache-Control} e o {@code Content-Disposition} já tinham essa regra; o tipo, que é o que
+	 * o navegador usa para decidir o que fazer com o arquivo, não tinha.</p>
+	 *
+	 * <p><b>Agora:</b> valor com caractere de controle ou acima do teto do cabeçalho é {@code 400
+	 * InvalidArgument} antes de abrir upload — a chave não aparece. Vazio continua virando
+	 * {@code application/octet-stream}, e {@code text/plain; charset=utf-8} é gravado e ecoado
+	 * literalmente.</p>
+	 */
+	@Test
+	void content_type_com_controle_ou_gigante_e_recusado_e_nao_grava() throws Exception {
+		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		String b = "ct" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		String[] invalidos = { "text/plain\r\nX-Injetado: 1", "text/plain\nX-Injetado: 1",
+			"text/plain\u0000", "a/" + "b".repeat(300) };
+		for (int i = 0; i < invalidos.length; i++) {
+			MockHttpServletRequestBuilder r = put("/s3/" + b + "/inv" + i + ".txt").content(corpo)
+				.contentType(invalidos[i]);
+			assinar(r, SECRET, shaDe("abc"));
+			var recusa = mockMvc.perform(r).andReturn().getResponse();
+			assertThat(recusa.getStatus()).as(invalidos[i]).isEqualTo(400);
+			assertThat(recusa.getContentAsString()).contains("<Code>InvalidArgument</Code>");
+		}
+		// Nenhuma das recusadas existe: o bucket ainda não tem dono (o primeiro PUT foi recusado).
+		String outro = "cto" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+
+		// Sem `Content-Type` (cliente cru) o tipo é o mesmo padrão do resto do módulo; com parâmetro,
+		// volta literal.
+		// Tipo em branco (o que o SDK manda quando o cliente não escolhe um) vira o padrão do módulo.
+		MockHttpServletRequestBuilder semTipo = put("/s3/" + outro + "/sem.txt").content(corpo)
+			.contentType("   ");
+		assinar(semTipo, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(semTipo).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder hBranco = MockMvcRequestBuilders.head("/s3/" + outro + "/sem.txt");
+		assinar(hBranco, SECRET, shaVazio());
+		assertThat(mockMvc.perform(hBranco).andReturn().getResponse().getHeader("Content-Type"))
+			.isEqualTo("application/octet-stream");
+		MockHttpServletRequestBuilder hSem = MockMvcRequestBuilders.head("/s3/" + outro + "/sem.txt");
+		assinar(hSem, SECRET, shaVazio());
+		assertThat(mockMvc.perform(hSem).andReturn().getResponse().getHeader("Content-Type"))
+			.isEqualTo("application/octet-stream");
+		MockHttpServletRequestBuilder parametro = put("/s3/" + outro + "/com.txt").content(corpo)
+			.contentType("text/plain; charset=utf-8");
+		assinar(parametro, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(parametro).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder h = MockMvcRequestBuilders.head("/s3/" + outro + "/com.txt");
+		assinar(h, SECRET, shaVazio());
+		var head = mockMvc.perform(h).andReturn().getResponse();
+		assertThat(head.getHeader("Content-Type")).isEqualTo("text/plain; charset=utf-8");
+
+		// E a cópia com `REPLACE` também não grava tipo inválido.
+		MockHttpServletRequestBuilder copia = put("/s3/" + outro + "/copia.txt").content(new byte[0])
+			.header("x-amz-copy-source", "/" + outro + "/com.txt")
+			.header("x-amz-metadata-directive", "REPLACE")
+			.contentType("text/plain\r\nX-Injetado: 1");
+		assinar(copia, SECRET, shaVazio());
+		assertThat(mockMvc.perform(copia).andReturn().getResponse().getStatus()).isEqualTo(400);
+	}
+
+	/**
+	 * `x-amz-storage-class` que o gateway não implementa é `501`, não `200`.
+	 *
+	 * <p><b>Antes:</b> o cabeçalho era ignorado e todo `PUT` respondia `200`. O cliente que manda
+	 * `GLACIER` ou `DEEP_ARCHIVE` — o que o SDK de arquivamento manda — ficava com a certeza de que o
+	 * objeto estava na classe fria: esperaria dias para restaurá-lo, contaria o preço de arquivo e
+	 * trataria a `GET` lenta como normal. O objeto estava em disco quente, servido na hora. A doc do
+	 * gateway já declarava que a classe não é escolhida por requisição, mas o `200` dizia o contrário.</p>
+	 *
+	 * <p><b>Agora:</b> `STANDARD` (a única classe que o gateway realmente faz) continua `200`; as
+	 * demais são `501 NotImplemented` nomeando a classe, antes de abrir upload — a chave não aparece.
+	 * É a mesma escolha do SSE (§4.48): não aplicar e responder sucesso é mentir sobre onde o dado
+	 * está.</p>
+	 */
+	@Test
+	void classe_de_armazenamento_nao_implementada_e_recusada() throws Exception {
+		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		String b = "cls" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		for (String classe : new String[] { "GLACIER", "DEEP_ARCHIVE", "STANDARD_IA", "ONEZONE_IA" }) {
+			MockHttpServletRequestBuilder r = put("/s3/" + b + "/" + classe + ".txt").content(corpo)
+				.header("x-amz-storage-class", classe);
+			assinar(r, SECRET, shaDe("abc"));
+			var recusa = mockMvc.perform(r).andReturn().getResponse();
+			assertThat(recusa.getStatus()).as(classe + ": " + recusa.getContentAsString()).isEqualTo(501);
+			assertThat(recusa.getContentAsString()).contains("<Code>NotImplemented</Code>");
+			assertThat(recusa.getContentAsString()).contains(classe);
+		}
+
+		// `STANDARD` é o que o gateway faz de fato: grava — inclusive com a caixa e o espaço que um
+		// cliente cru manda (`standard`, ` STANDARD `): a classe HTTP não é sensível a caixa.
+		String[] variantes = { "STANDARD", "standard", " STANDARD " };
+		for (int i = 0; i < variantes.length; i++) {
+			String variante = variantes[i];
+			MockHttpServletRequestBuilder v = put("/s3/" + b + "/v" + i + ".txt").content(corpo)
+				.header("x-amz-storage-class", variante);
+			assinar(v, SECRET, shaDe("abc"));
+			assertThat(mockMvc.perform(v).andReturn().getResponse().getStatus()).as(variante).isEqualTo(200);
+		}
+		MockHttpServletRequestBuilder padrao = put("/s3/" + b + "/padrao.txt").content(corpo)
+			.header("x-amz-storage-class", "STANDARD");
+		assinar(padrao, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(padrao).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder g = get("/s3/" + b + "/padrao.txt");
+		assinar(g, SECRET, shaVazio());
+		var lido = mockMvc.perform(g).andReturn();
+		var doLido = lido.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lido)).andReturn().getResponse() : lido.getResponse();
+		assertThat(doLido.getStatus()).isEqualTo(200);
+		assertThat(doLido.getContentAsString()).isEqualTo("abc");
+
+		// A cópia e o multipart também prometeriam uma classe que o gateway não faz.
+		MockHttpServletRequestBuilder copia = put("/s3/" + b + "/copia.txt").content(new byte[0])
+			.header("x-amz-copy-source", "/" + b + "/padrao.txt")
+			.header("x-amz-storage-class", "GLACIER");
+		assinar(copia, SECRET, shaVazio());
+		var recusaCopia = mockMvc.perform(copia).andReturn().getResponse();
+		assertThat(recusaCopia.getStatus()).as(recusaCopia.getContentAsString()).isEqualTo(501);
+		MockHttpServletRequestBuilder multi = MockMvcRequestBuilders.post("/s3/" + b + "/multi.bin?uploads")
+			.header("x-amz-storage-class", "DEEP_ARCHIVE");
+		assinar(multi, SECRET, shaVazio());
+		assertThat(mockMvc.perform(multi).andReturn().getResponse().getStatus()).isEqualTo(501);
+
+		// Nenhuma das recusadas existe: o bucket só tem o objeto `STANDARD`.
+		MockHttpServletRequestBuilder lista = get("/s3/" + b + "?list-type=2");
+		assinar(lista, SECRET, shaVazio());
+		var lr = mockMvc.perform(lista).andReturn();
+		var doLista = lr.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lr)).andReturn().getResponse() : lr.getResponse();
+		assertThat(doLista.getContentAsString()).contains("padrao.txt");
+		assertThat(doLista.getContentAsString()).doesNotContain("GLACIER.txt");
+		assertThat(doLista.getContentAsString()).doesNotContain("copia.txt");
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {

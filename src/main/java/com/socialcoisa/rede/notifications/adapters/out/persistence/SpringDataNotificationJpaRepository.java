@@ -27,6 +27,21 @@ interface SpringDataNotificationJpaRepository extends JpaRepository<Notification
 			@Param("context") String context, Pageable pageable);
 
 	/**
+	 * Page with the unread first (issue #1147): unread notices in arrival order, then the read ones,
+	 * so the unread the summary counts is always inside the first pages. The order is total
+	 * ({@code id} breaks the ties of the second-resolution column), which is what makes the position
+	 * cursor safe: page N+1 starts after the N rows this order already delivered, without repeating
+	 * or skipping one when the order changes group. Native because JPQL has no {@code LIMIT}.
+	 */
+	@Query(value = "select * from notifications n where n.user_id = :userId"
+		+ " and (:context is null or n.kind in " + NotificationContext.SHARED_KINDS_JPQL
+		+ " or (:context = 'PROFESSIONAL' and n.kind in " + NotificationContext.PROFESSIONAL_KINDS_JPQL + ")"
+		+ " or (:context = 'SOCIAL' and n.kind not in " + NotificationContext.PROFESSIONAL_KINDS_JPQL + "))"
+		+ " order by n.is_read asc, n.created_at desc, n.id desc limit :limit offset :offset", nativeQuery = true)
+	List<NotificationJpaEntity> unreadFirstPage(@Param("userId") String userId, @Param("context") String context,
+			@Param("limit") int limit, @Param("offset") long offset);
+
+	/**
 	 * Unread count per (kind, actor, href) of the person, with the same context filter as
 	 * {@link #findByUserId}; rows are {@code [kind, actorId, href, count]}. The actor stays in the
 	 * grouping so the caller can drop blocked actors without loading the notifications, and the
