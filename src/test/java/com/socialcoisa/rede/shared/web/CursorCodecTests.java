@@ -44,6 +44,24 @@ class CursorCodecTests {
 	}
 
 	@Test
+	void positionCursorRoundTripsAndRejectsEverythingElse() {
+		assertThat(codec.decodeOffset(null)).isEmpty();
+		assertThat(codec.decodeOffset(codec.encodeOffset(20))).contains(20L);
+		assertThat(codec.decodeOffset(codec.encodeOffset(0))).contains(0L);
+		// Cursor de instante nao e posicao; posicao negativa ou lixo tambem nao.
+		assertInvalidOffset(Instant.parse("2030-01-01T12:00:00Z").toString());
+		assertInvalidOffset(codec.encodeOffset(-1));
+		assertInvalidOffset("o:abc");
+		assertInvalidOffset("o:");
+		assertInvalidOffset("o:1".repeat(CursorCodec.MAX_CURSOR_LENGTH));
+	}
+
+	private static void assertInvalidOffset(String cursor) {
+		assertThatThrownBy(() -> new CursorCodec().decodeOffset(cursor)).isInstanceOf(ApiException.class)
+			.hasFieldOrPropertyWithValue("code", "INVALID_CURSOR");
+	}
+
+	@Test
 	void rejectsCursorOverTheLengthCapBeforeDecoding() {
 		String huge = Base64.getUrlEncoder().withoutPadding()
 			.encodeToString(new byte[4096]);
