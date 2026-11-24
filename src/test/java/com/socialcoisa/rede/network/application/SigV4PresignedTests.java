@@ -124,6 +124,47 @@ class SigV4PresignedTests {
 			.isNull();
 	}
 
+	/**
+	 * A URL pré-assinada carrega o escopo, e escopo de outro serviço ou região é recusado.
+	 *
+	 * <p><b>Antes:</b> a verificação da URL usava o escopo que a própria URL declarava e nunca o
+	 * conferia: quem tivesse o segredo (um emissor com bug, um serviço que assina {@code ec2}) gerava
+	 * uma URL que este gateway aceitava. Mesma regra do cabeçalho (§4.56).</p>
+	 */
+	@Test
+	void url_com_escopo_de_outro_servico_ou_regiao_e_recusada() {
+		for (String[] escopo : new String[][] { { "enois-1", "s3" }, { "us-east-1", "s3" },
+				{ "enois-1", "ec2" }, { "outra-regiao", "s3" }, { "enois-1", "execute-api" } }) {
+			String query = queryComEscopo("900", escopo[0], escopo[1]);
+			var presigned = SigV4Verifier.parsePresigned(
+				requisicao("GET", "/bkt/fotos/gato.jpg", query), agora());
+			assertThat(presigned).as(escopo[0] + "/" + escopo[1]).isNotNull();
+			// A assinatura em si confere SEMPRE: o segredo é o mesmo.
+			assertThat(SigV4Verifier.verifyPresigned(presigned, SECRET, agora()))
+				.as("a assinatura de " + escopo[0] + "/" + escopo[1] + " confere").isTrue();
+			String motivo = SigV4Verifier.motivoDeEscopoInvalido(presigned.parsed(), "enois-1");
+			boolean valido = motivo == null;
+			assertThat(valido).as(escopo[0] + "/" + escopo[1] + ": " + motivo)
+				.isEqualTo("s3".equals(escopo[1]) && ("enois-1".equals(escopo[0]) || "us-east-1".equals(escopo[0])));
+		}
+	}
+
+	/** A query pré-assinada assinada para um escopo qualquer. */
+	private static String queryComEscopo(String expires, String region, String service) {
+		Map<String, String> base = new LinkedHashMap<>();
+		base.put("X-Amz-Algorithm", "AWS4-HMAC-SHA256");
+		base.put("X-Amz-Credential", ACCESS_KEY + "/" + DATE_STAMP + "/" + region + "/" + service + "/aws4_request");
+		base.put("X-Amz-Date", AMZ_DATE);
+		base.put("X-Amz-Expires", expires);
+		base.put("X-Amz-SignedHeaders", "host");
+		Map<String, String> headers = Map.of("host", "s3.enois.ia.br", "x-amz-date", AMZ_DATE,
+			"x-amz-content-sha256", "UNSIGNED-PAYLOAD");
+		var assinado = new SigV4Verifier.Request("GET", "/bkt/fotos/gato.jpg", base, headers, "UNSIGNED-PAYLOAD");
+		var parsed = new SigV4Verifier.Parsed(ACCESS_KEY, region, service, "host", "");
+		String signature = SigV4Verifier.signature(assinado, parsed, SECRET, DATE_STAMP);
+		return bruto(base) + "&X-Amz-Signature=" + signature;
+	}
+
 	/** Sem {@code X-Amz-Signature} não é presigned — é a requisição de cabeçalho, e quem chama decide. */
 	@Test
 	void sem_assinatura_na_query_devolve_nulo() {

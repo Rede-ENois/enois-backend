@@ -85,6 +85,39 @@ public final class SigV4Verifier {
 	 * <p>{@code null} não é erro de assinatura: pode ser requisição anônima, {@code presigned} ou o
 	 * esquema antigo. Quem chama decide.</p>
 	 */
+	/**
+	 * Região do S3 global: o cliente que não configura região assina {@code us-east-1}.
+	 *
+	 * <p>A AWS aceita {@code us-east-1} em qualquer bucket — o SigV4 do S3 é global —, e é o padrão
+	 * do {@code AWS CLI}. Recusar só porque a instalação se declara {@code enois-1} quebraria todo
+	 * cliente que nunca escolheu região.</p>
+	 */
+	public static final String REGION_GLOBAL = "us-east-1";
+
+	/**
+	 * O serviço e a região do escopo são os desta instalação (§4.56).
+	 *
+	 * <p><b>Antes:</b> o escopo era lido e usado na chave de assinatura, mas nunca conferido — uma
+	 * requisição assinada para {@code ec2} ou para qualquer região era aceita. O segredo é o mesmo,
+	 * então a assinatura confere; o escopo é a única coisa que diz para o quê o cliente assinou.</p>
+	 *
+	 * @param region a região que a instalação declara; {@link #REGION_GLOBAL} é sempre aceita
+	 * @return {@code null} se o escopo é válido, ou o motivo da recusa
+	 */
+	public static String motivoDeEscopoInvalido(Parsed parsed, String region) {
+		if (parsed == null) {
+			return null;
+		}
+		if (!"s3".equals(parsed.service())) {
+			return "A assinatura e para o servico '" + parsed.service() + "', e este gateway atende 's3'.";
+		}
+		if (!region.equals(parsed.region()) && !REGION_GLOBAL.equals(parsed.region())) {
+			return "A assinatura e para a regiao '" + parsed.region() + "', e este gateway atende '"
+				+ region + "' ou '" + REGION_GLOBAL + "'.";
+		}
+		return null;
+	}
+
 	public static Parsed parseAuthorization(String authorization) {
 		if (authorization == null) {
 			return null;

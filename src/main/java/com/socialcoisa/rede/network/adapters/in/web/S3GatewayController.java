@@ -1808,6 +1808,9 @@ class S3GatewayController {
 		if (presigned == null) {
 			return null;
 		}
+		// O escopo da URL é conferido como o do cabeçalho (§4.56): uma URL assinada para `ec2` não
+		// pode abrir o objeto só porque o segredo é o mesmo.
+		exigirEscopo(presigned.parsed());
 		exigirOrcamento(presigned.parsed().accessKey());
 		S3Credential credential = credentials.findByAccessKey(presigned.parsed().accessKey())
 			.filter(c -> c.revokedAt() == null)
@@ -1984,6 +1987,25 @@ class S3GatewayController {
 		}
 	}
 
+	/**
+	 * O serviço e a região do escopo SigV4 têm de ser os deste gateway (§4.56).
+	 *
+	 * <p><b>Antes:</b> o escopo era lido e usado na chave de assinatura, mas nunca conferido — uma
+	 * requisição assinada para {@code ec2}, {@code execute-api} ou qualquer região era aceita com
+	 * {@code 200}. O segredo é o mesmo, então a assinatura confere; o escopo é a única coisa que diz
+	 * para o quê o cliente assinou, e o S3 recusa o que não é {@code s3}.</p>
+	 *
+	 * <p><b>Agora:</b> serviço tem de ser {@code s3}; região, a da instalação ({@link #REGION}) ou
+	 * {@code us-east-1} (a região global do S3, que todo cliente usa por padrão). O resto é
+	 * {@code 403 SignatureDoesNotMatch} — o código do S3 para escopo alheio.</p>
+	 */
+	private static void exigirEscopo(SigV4Verifier.Parsed parsed) {
+		String motivo = SigV4Verifier.motivoDeEscopoInvalido(parsed, REGION);
+		if (motivo != null) {
+			throw s3Error(403, "SignatureDoesNotMatch", motivo);
+		}
+	}
+
 	private S3Credential authenticate(HttpServletRequest request, String operation) {
 		String authorization = request.getHeader(HttpHeaders.AUTHORIZATION);
 		SigV4Verifier.Parsed parsed = SigV4Verifier.parseAuthorization(authorization);
@@ -1996,6 +2018,9 @@ class S3GatewayController {
 			}
 			throw s3Error(403, "AccessDenied", "Assinatura AWS SigV4 ausente.");
 		}
+		// O escopo do SigV4 diz PARA O QUÊ o cliente assinou. Antes ele era lido e usado no cálculo sem
+		// ser conferido, então uma assinatura para `ec2` em qualquer região lia o objeto (§4.56).
+		exigirEscopo(parsed);
 		exigirOrcamento(parsed.accessKey());
 		S3Credential credential = credentials.findByAccessKey(parsed.accessKey())
 			.filter(c -> c.revokedAt() == null)
