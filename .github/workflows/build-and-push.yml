@@ -7,6 +7,16 @@ name: Build, Push and Deploy
 # execute arbitrary workflow code with access to our infra ("pwn request"). The deploy job
 # below is gated to `push`/`workflow_dispatch` on protected branches only. PR validation
 # always runs on GitHub-hosted `ubuntu-latest` and never touches secrets.
+#
+# DECISÃO (2026-11-24, dona do projeto): teste só no PR, deploy não espera teste.
+# `test-suite` é a suíte completa e roda SÓ em pull_request. O caminho de push (qa/main) não
+# roda teste nenhum: o Dockerfile já compila com `./mvnw package -DskipTests`, `schema-check`
+# boota o contexto com `-DskipTests` (só valida schema x migrações) e `migrations-unique` apenas
+# confere as versões do Flyway, sem chamar o Maven. O merge → deploy precisa ser rápido; a
+# suíte inteira já barrou o PR antes do merge.
+#
+# `main` fica no pull_request porque é a branch de produção e o PR qa→main também precisa ser
+# conferido antes de chegar lá — o deploy de main só ocorre depois desse merge.
 
 on:
   push:
@@ -37,6 +47,10 @@ jobs:
   # só aparece no merge: duas V260 (#579/#568) e antes duas V255 (#527/#529) passaram verdes no
   # próprio PR e quebraram a qa. Este job compara os números do branch com os da branch base e
   # reprova a versão que já existe no destino com outro nome — o caso de quem renumerou por cima.
+  #
+  # Roda em PR e em push, e NÃO é teste (decisão de 2026-11-24): no push apenas lista os
+  # arquivos de migração e reprova versão repetida dentro do próprio branch (segundos). O
+  # `mvnw` não é chamado aqui. Não acrescente execução de teste.
   # ===========================================================================
   migrations-unique:
     name: 🧪 Migrações sem versão duplicada
@@ -146,6 +160,10 @@ jobs:
   # ===========================================================================
   # Full test suite on every PR. The image build skips tests and the schema check only boots the
   # context, so before this job a broken test could reach qa unnoticed. PR only: never gates a deploy.
+  #
+  # DECISÃO (2026-11-24, dona do projeto): teste só no PR, deploy não espera teste. Este é o
+  # ÚNICO job que roda a suíte, e só em pull_request. Não acrescente `push` no `if`: o push em
+  # qa/main é o caminho de deploy e precisa ser rápido (o merge já passou por aqui).
   # ===========================================================================
   test-suite:
     name: 🧪 Testes (PR)
@@ -171,9 +189,11 @@ jobs:
   # migrations (ddl-auto=validate). A migration MariaDB refuses, or an entity without its
   # migration, fails here, not in prod. The SPRING_* env vars override the test profile's H2.
   #
-  # Roda também em push: é o gate que de fato precede o deploy. O `mvnw test` do Dockerfile é
-  # pulado (a imagem não roda teste — ver Dockerfile), então SEM esta etapa um merge em qa/main
-  # que quebrasse o boot contra MariaDB só apareceria em produção. Custou ~1m30s, não ~17min.
+  # Roda em PR e em push, mas NÃO é a suíte: sobe o contexto sem executar teste, custa ~1m30s
+  # e falha só se o schema ou o boot contra MariaDB estiverem errados. A suíte completa é o
+  # `test-suite`, só no PR (decisão de 2026-11-24).
+  # O build-and-push depende deste job de propósito: schema quebrado contra MariaDB não pode
+  # chegar à QA, e sem ele o merge em qa/main só descobriria isso no boot em produção.
   # ===========================================================================
   schema-check:
     name: 🧪 Schema x migrations
@@ -202,6 +222,9 @@ jobs:
           java-version: '25'
           cache: maven
 
+      # NÃO é a suíte (decisão de 2026-11-24: teste só no PR, deploy não espera teste):
+      # `-DskipTests` impede qualquer teste de rodar. Só sobe o contexto para validar schema x
+      # migrações contra MariaDB — é o gate barato (~1m30s) que precede o deploy.
       - name: 🧪 Boot with schema validation (MariaDB)
         env:
           # Same driver and dialect as application-prd.properties.
@@ -210,7 +233,7 @@ jobs:
           SPRING_DATASOURCE_USERNAME: enois
           SPRING_DATASOURCE_PASSWORD: schema-check
           SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT: org.hibernate.dialect.MariaDBDialect
-        run: ./mvnw -B -q -Dtest=RedeApplicationTests test
+        run: ./mvnw -B -q -DskipTests -Dtest=RedeApplicationTests test
 
       - name: 🧪 Upgrade do HTML de projetos em schema legado
         run: python3 scripts/tests/user-project-html-migration-test.py
