@@ -39,8 +39,10 @@ class ColecoesPersistenceAdapter implements ColecoesRepository {
 	}
 
 	@Override
-	public List<ColecaoSalva> findByOwnerBefore(UserId ownerId, Instant before, int limit) {
-		return colecoes.doDonoBefore(ownerId.value(), before, PageRequest.of(0, limit)).stream()
+	public List<ColecaoSalva> findByOwnerBefore(UserId ownerId, Instant before, String search, int limit) {
+		String termo = search == null ? "" : search.toLowerCase(java.util.Locale.ROOT);
+		String pattern = "%" + termo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%";
+		return colecoes.doDonoBeforeBuscando(ownerId.value(), before, termo, pattern, PageRequest.of(0, limit)).stream()
 			.map(ColecaoSalvaJpaEntity::toDomain)
 			.toList();
 	}
