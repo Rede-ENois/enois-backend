@@ -45,6 +45,7 @@ public class MuraisService implements MuraisModerationPort {
 
 	private static final int MAX_PAGE_SIZE = 48;
 	private static final int MAX_TITULO = 120;
+	private static final int MAX_BUSCA = 120;
 	private static final int MAX_DESCRICAO = 500;
 
 	private final MuraisRepository repository;
@@ -146,6 +147,11 @@ public class MuraisService implements MuraisModerationPort {
 	 * "adicionar ao mural" do card do feed usa isto: só os meus quadros, cada um dizendo se o
 	 * post já está lá e quantos elos tem.
 	 */
+	/** O termo como vai para a consulta: sem espaços nas pontas, no máximo 120 e sem o vazio. */
+	private static String termoDaBusca(String search) {
+		return StringUtils.hasText(search) ? search.trim().substring(0, Math.min(search.trim().length(), MAX_BUSCA)) : "";
+	}
+
 	@Transactional(readOnly = true)
 	public MuraisViews.MeusMuraisPage meus(UserId owner, String postId) {
 		List<Mural> murais = repository.findActiveMuraisByOwner(owner);
@@ -164,9 +170,18 @@ public class MuraisService implements MuraisModerationPort {
 
 	@Transactional(readOnly = true)
 	public MuraisViews.MuraisPage list(UserId viewer, Optional<Instant> before, int limit) {
+		return list(viewer, before, null, limit);
+	}
+
+	/**
+	 * A lista do Explorar. Com `search`, só entram os quadros cujo título ou descrição têm o termo
+	 * (sem diferenciar maiúsculas) — o espaço vazio é o filtro desligado, não "nada".
+	 */
+	@Transactional(readOnly = true)
+	public MuraisViews.MuraisPage list(UserId viewer, Optional<Instant> before, String search, int limit) {
 		int tamanho = Math.min(Math.max(limit, 1), MAX_PAGE_SIZE);
 		Instant marca = before.orElseGet(() -> clock.instant().plusSeconds(1));
-		List<Mural> murais = repository.findActiveMuraisBefore(marca, tamanho);
+		List<Mural> murais = repository.findActiveMuraisBefore(marca, termoDaBusca(search), tamanho);
 		Map<String, Long> contagens = repository.countContribuicoes(ids(murais));
 		List<MuralResumo> items = murais.stream().map(mural -> resumo(mural, contagens.getOrDefault(mural.id(), 0L)))
 			.toList();
