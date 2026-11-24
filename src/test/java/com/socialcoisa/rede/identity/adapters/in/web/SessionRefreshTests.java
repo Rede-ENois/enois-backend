@@ -20,6 +20,7 @@ import org.springframework.test.web.servlet.MvcResult;
 
 import tools.jackson.databind.ObjectMapper;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
+import org.junit.jupiter.api.Tag;
 import com.socialcoisa.rede.shared.web.TestDatabase;
 
 /**
@@ -27,6 +28,7 @@ import com.socialcoisa.rede.shared.web.TestDatabase;
  * Antes, a sessao so validava a expiracao do access token, entao renovar depois de um tempo ausente
  * falhava e o usuario era jogado para o login — o "logout involuntario" relatado.
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class SessionRefreshTests {

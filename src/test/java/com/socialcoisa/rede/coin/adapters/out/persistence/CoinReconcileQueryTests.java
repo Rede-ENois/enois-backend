@@ -22,6 +22,7 @@ import com.socialcoisa.rede.coin.application.CoinService;
 
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
+import org.junit.jupiter.api.Tag;
 import ch.qos.logback.core.read.ListAppender;
 
 /**
@@ -33,6 +34,7 @@ import ch.qos.logback.core.read.ListAppender;
  * com o número de contas. A segunda prova é a de comportamento — a divergência continua sendo
  * detectada e logada, exatamente como antes.</p>
  */
+@Tag("critico")
 @SpringBootTest
 class CoinReconcileQueryTests {
 

@@ -19,6 +19,7 @@ import org.springframework.test.web.servlet.MvcResult;
 
 import tools.jackson.databind.ObjectMapper;
 
+import org.junit.jupiter.api.Tag;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
 /**
@@ -28,6 +29,7 @@ import com.socialcoisa.rede.shared.web.TestAuthHelper;
  * ao feed e aos comentários, e vale também para quem foi banido antes da mudança (a leitura
  * decide, não a escrita).
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class BannedAuthorAnonymizedTests {

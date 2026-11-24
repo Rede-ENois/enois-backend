@@ -18,6 +18,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
+import org.junit.jupiter.api.Tag;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -28,6 +29,7 @@ import tools.jackson.databind.ObjectMapper;
  * thread do pedido. Aqui o pedido sai por HTTP de verdade, é atendido no thread do Tomcat e o que
  * se confere é o corpo da resposta — o caminho que a pessoa usando o app percorre.</p>
  */
+@Tag("critico")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureMockMvc
 class RevokedSessionReasonOnServerTests {

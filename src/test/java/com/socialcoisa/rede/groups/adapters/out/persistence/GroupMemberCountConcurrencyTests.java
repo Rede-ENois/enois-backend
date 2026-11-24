@@ -17,6 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import org.junit.jupiter.api.Tag;
 import com.socialcoisa.rede.groups.application.port.out.GroupRepository;
 
 /**
@@ -31,6 +32,7 @@ import com.socialcoisa.rede.groups.application.port.out.GroupRepository;
  * <p>Este teste faz N ajustes simultaneos pelo repositorio, como o servico faz, e exige o total
  * exato. Ele falha no codigo anterior e passa com o UPDATE atomico.</p>
  */
+@Tag("critico")
 @SpringBootTest
 class GroupMemberCountConcurrencyTests {
 

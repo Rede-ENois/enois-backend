@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.context.TestPropertySource;
+import org.junit.jupiter.api.Tag;
 import org.springframework.test.web.servlet.MockMvc;
 
 /**
@@ -18,6 +19,7 @@ import org.springframework.test.web.servlet.MockMvc;
  * origem. Recusar o preflight não protege nada e só troca a recusa por uma falha de CORS no
  * navegador, que aparece para a pessoa como "sem conexão" numa ação que nunca chegou ao servidor.</p>
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 @TestPropertySource(properties = {

@@ -10,12 +10,14 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.junit.jupiter.api.Tag;
 import org.springframework.test.web.servlet.MockMvc;
 
 /**
  * Rota protegida sem X-Session-Token é 401, não 400: o cliente entende que precisa entrar e os
  * monitores não confundem falta de login com requisição malformada.
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class MissingSessionHeaderTests {

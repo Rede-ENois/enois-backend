@@ -2,6 +2,7 @@ package com.socialcoisa.rede.apiv1.origins;
 
 import static org.assertj.core.api.Assertions.assertThatCode;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -12,6 +13,8 @@ import org.junit.jupiter.api.Test;
  * <p>A lista de origens do app agora vem do {@link AppOriginRegistry} — a mesma do portao e do CORS
  * —, mas o guarda continua precisando construir com uma lista confiavel vazia.</p>
  */
+
+@Tag("critico")
 class OriginAbuseGuardTests {
 
 	@Test

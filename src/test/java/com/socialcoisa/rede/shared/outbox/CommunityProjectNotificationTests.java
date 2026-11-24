@@ -51,9 +51,11 @@ import com.socialcoisa.rede.shared.web.TestAuthHelper.AuthSession;
 
 import tools.jackson.databind.ObjectMapper;
 
+import org.junit.jupiter.api.Tag;
 import jakarta.persistence.EntityManager;
 
 /** Publicação, autorização e entrega reais, dirigindo a outbox por id, sem espera nem rede. */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 @TestPropertySource(properties = {

@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.ResponseEntity;
 
+import org.junit.jupiter.api.Tag;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 /**
@@ -19,6 +20,7 @@ import com.socialcoisa.rede.shared.web.ApiException;
  *
  * Prefixo "idemp_flow_" em todos os valores para nao colidir com outros testes no H2 compartilhado.
  */
+@Tag("critico")
 @SpringBootTest
 class IdempotencyFlowTests {
 

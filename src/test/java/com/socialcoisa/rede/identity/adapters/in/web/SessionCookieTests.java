@@ -21,10 +21,12 @@ import org.springframework.test.web.servlet.MvcResult;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
 import jakarta.servlet.http.Cookie;
+import org.junit.jupiter.api.Tag;
 import tools.jackson.databind.ObjectMapper;
 
 /** Browser sessions travel in HttpOnly cookies; cookie-authenticated writes need the CSRF header. */
 // The test profile is dev, which turns Secure off for plain-http local runs; production keeps the default.
+@Tag("critico")
 @SpringBootTest(properties = "rede.auth.cookie-secure=true")
 @AutoConfigureMockMvc
 class SessionCookieTests {

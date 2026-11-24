@@ -148,8 +148,10 @@ jobs:
           cache-to: type=gha,mode=max
 
   # ===========================================================================
-  # Full test suite on every PR. The image build skips tests and the schema check only boots the
-  # context, so before this job a broken test could reach qa unnoticed. PR only: never gates a deploy.
+  # Critérios, não a suíte inteira: `qa` e `main` são protegidas, então TODO código que chega
+  # lá passou por este PR. O que roda aqui são as classes @Tag("critico") — autenticação,
+  # autorização, dinheiro, moderação, migração, idempotência/concorrência e contrato de API —
+  # que são as que podem quebrar a aplicação. Para a suíte completa: `./mvnw test` local.
   # ===========================================================================
   test-suite:
     name: 🧪 Testes (PR)
@@ -167,8 +169,8 @@ jobs:
           java-version: '25'
           cache: maven
 
-      - name: 🧪 mvnw test
-        run: ./mvnw -B -q test
+      - name: 🧪 Testes críticos
+        run: ./mvnw -B -q test -Pcriticos
 
   # ===========================================================================
   # Schema check: boot against MariaDB 11.4 (the production engine) built only from the Flyway

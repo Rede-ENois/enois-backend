@@ -23,6 +23,7 @@ import org.springframework.test.web.servlet.MvcResult;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
 import tools.jackson.databind.JsonNode;
+import org.junit.jupiter.api.Tag;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -31,6 +32,7 @@ import tools.jackson.databind.ObjectMapper;
  * - abaixo de 10 moderadores a votação nem abre (só admin pune);
  * - a partir de 10, a punição só é aplicada com mais de 50% dos moderadores concordando.
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class ModeratorAppointmentAndSanctionTests {

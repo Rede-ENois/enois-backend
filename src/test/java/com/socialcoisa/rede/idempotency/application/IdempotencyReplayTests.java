@@ -22,12 +22,15 @@ import com.socialcoisa.rede.idempotency.adapters.out.persistence.SpringDataIdemp
 import com.socialcoisa.rede.shared.web.ApiException;
 
 import tools.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.Tag;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Testa os branches de replayOrReject que sao dificeis de alcancar via integracao:
  * PROCESSING (concorrencia), FAILED (defensivo), e a corrida de insert com fallback.
  */
+
+@Tag("critico")
 class IdempotencyReplayTests {
 
 	private static final Instant NOW = Instant.parse("2026-10-31T12:00:00Z");

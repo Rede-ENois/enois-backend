@@ -19,6 +19,7 @@ import com.socialcoisa.rede.doacoes.application.port.out.DoacaoRepository;
 import com.socialcoisa.rede.doacoes.domain.DoacaoStatus;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
+import org.junit.jupiter.api.Tag;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -26,6 +27,7 @@ import tools.jackson.databind.ObjectMapper;
  * que NÃO pode acontecer (o mesmo comprovante em duas contas, comprovante sem identificador, o
  * valor errado).
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class DoacaoFlowTests {

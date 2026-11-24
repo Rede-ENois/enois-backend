@@ -24,6 +24,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import com.socialcoisa.rede.push.application.port.out.PushSender;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
+import org.junit.jupiter.api.Tag;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -31,6 +32,7 @@ import tools.jackson.databind.ObjectMapper;
  * newest person, the same person acting again does not count twice, the push goes out once, and
  * once read the next reaction starts a new notification.
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class GroupedNotificationTests {

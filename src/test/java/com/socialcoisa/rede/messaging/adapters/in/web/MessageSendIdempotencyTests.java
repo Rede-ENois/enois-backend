@@ -16,6 +16,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import tools.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.Tag;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
 /**
@@ -23,6 +24,7 @@ import com.socialcoisa.rede.shared.web.TestAuthHelper;
  * payload inteiro: sem os campos de cifragem, dois envios DIFERENTES com a mesma chave viravam
  * replay do primeiro — e a segunda mensagem (com a cifra dela) nunca chegava a ser gravada.
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class MessageSendIdempotencyTests {

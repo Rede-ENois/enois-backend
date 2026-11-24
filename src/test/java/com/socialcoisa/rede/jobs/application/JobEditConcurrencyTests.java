@@ -24,8 +24,10 @@ import org.springframework.transaction.support.TransactionTemplate;
 import com.socialcoisa.rede.jobs.application.port.out.JobRepository;
 import com.socialcoisa.rede.jobs.domain.Job;
 import com.socialcoisa.rede.jobs.domain.JobStatus;
+import org.junit.jupiter.api.Tag;
 import com.socialcoisa.rede.shared.web.TestDatabaseSupport;
 
+@Tag("critico")
 @SpringBootTest(properties = {
 	"spring.task.scheduling.enabled=false",
 	"spring.datasource.url=jdbc:h2:mem:job_edit_b1;MODE=MySQL;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=20000",

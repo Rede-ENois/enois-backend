@@ -20,6 +20,7 @@ import org.springframework.test.web.servlet.MvcResult;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.Tag;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
 /**
@@ -27,6 +28,7 @@ import com.socialcoisa.rede.shared.web.TestAuthHelper;
  * penalidade aplicada errada e corrigir o tipo/motivo sem remover. Remover libera a conta e
  * descarta a denúncia de origem; corrigir para um tipo que fecha acesso derruba as sessões.
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class AdminSanctionManualTests {

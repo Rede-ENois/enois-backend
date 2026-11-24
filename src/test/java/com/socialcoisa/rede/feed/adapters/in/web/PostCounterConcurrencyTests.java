@@ -33,6 +33,7 @@ import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.Post;
 import com.socialcoisa.rede.feed.domain.PostId;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
+import org.junit.jupiter.api.Tag;
 import com.socialcoisa.rede.shared.web.TestAuthHelper.AuthSession;
 
 /**
@@ -40,6 +41,7 @@ import com.socialcoisa.rede.shared.web.TestAuthHelper.AuthSession;
  * post, change the counter in memory and save the whole row back: concurrent ones overwrote each
  * other (lost updates on H2, "Record has changed since last read" and deadlocks on MariaDB).
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class PostCounterConcurrencyTests {

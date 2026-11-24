@@ -27,8 +27,10 @@ import com.socialcoisa.rede.groups.domain.Group;
 import com.socialcoisa.rede.groups.domain.GroupJoinMode;
 import com.socialcoisa.rede.groups.domain.GroupMember;
 import com.socialcoisa.rede.groups.domain.GroupRole;
+import org.junit.jupiter.api.Tag;
 import com.socialcoisa.rede.shared.web.TestDatabaseSupport;
 
+@Tag("critico")
 @SpringBootTest(properties = {
 	"spring.task.scheduling.enabled=false",
 	"spring.datasource.url=jdbc:h2:mem:group_removal_b5;MODE=MySQL;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=20000",

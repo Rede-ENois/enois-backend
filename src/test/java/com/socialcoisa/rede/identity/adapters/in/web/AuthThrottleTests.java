@@ -15,12 +15,14 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import tools.jackson.databind.ObjectMapper;
 
+import org.junit.jupiter.api.Tag;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
 /**
  * O throttle de credenciais (F-02/F-04 do pentest): 6 falhas de login seguidas na MESMA
  * conta → 429 LOGIN_THROTTLED (não 401, nem com a senha CERTA — o lock é por conta).
  */
+@Tag("critico")
 @SpringBootTest(properties = {
 	"rede.auth.throttle.login-max-failures=5",
 	"rede.auth.throttle.signup-per-hour=100000"

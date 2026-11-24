@@ -15,9 +15,11 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import tools.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.Tag;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
 /** Diagnostico: upload de midia com conta verificada deve funcionar; sem sessao, 401. */
+@Tag("critico")
 @SpringBootTest(properties = {"rede.media.storage=s3", "rede.media.s3.bucket=bucket-de-teste",
 		"rede.media.s3.publicBaseUrl=https://cdn.exemplo.com"})
 @AutoConfigureMockMvc
