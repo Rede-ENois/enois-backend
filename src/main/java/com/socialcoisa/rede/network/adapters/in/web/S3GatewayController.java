@@ -836,6 +836,33 @@ class S3GatewayController {
 	}
 
 	/**
+	 * Cabeçalhos de objeto que o cliente declara e que o gateway não guarda.
+	 *
+	 * <p><b>Antes:</b> {@code Expires}, {@code Content-Language} e
+	 * {@code x-amz-website-redirect-location} eram aceitos com {@code 200} e descartados — não há
+	 * coluna para eles, e o {@code HEAD}/{@code GET} não os devolviam. Quem manda {@code Expires}
+	 * acredita que o objeto apaga sozinho; quem manda o redirecionamento acredita que o {@code GET}
+	 * devolve um {@code 301}; quem manda o idioma espera a fonte certa no navegador. Nada disso
+	 * acontecia, e a falta do eco não avisa quem não relê o {@code HEAD}.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 501 NotImplemented} nomeando o cabeçalho, antes de abrir upload — no
+	 * {@code PUT}, na cópia e no multipart (§4.51). Os que a §3 promete ({@code x-amz-meta-*},
+	 * {@code Cache-Control}, {@code Content-Disposition}) continuam voltando.</p>
+	 */
+	private static void recusarMetadadoDeObjetoNaoGuardado(HttpServletRequest request) {
+		for (String cabecalho : METADADOS_DE_OBJETO_NAO_GUARDADOS) {
+			if (request.getHeader(cabecalho) != null) {
+				throw s3Error(501, "NotImplemented", "O cabecalho '" + cabecalho
+					+ "' nao e suportado: este gateway nao guarda esse metadado, e o objeto nao foi gravado.");
+			}
+		}
+	}
+
+	/** Metadado de objeto declarado no upload que o catálogo não tem onde guardar (§4.51). */
+	private static final List<String> METADADOS_DE_OBJETO_NAO_GUARDADOS = List.of("Expires",
+		"Content-Language", "x-amz-website-redirect-location");
+
+	/**
 	 * Subrecurso da consulta que o gateway não implementa e que, sem esta guarda, seria gravado.
 	 *
 	 * <p><b>Antes:</b> o {@code PUT} era despachado pela chave da rota, sem olhar a consulta. Um
@@ -944,6 +971,8 @@ class S3GatewayController {
 		recusarSseNaoAplicavel(request);
 		// Classe além de STANDARD é recusa antes de abrir, no PUT e na cópia (§4.49).
 		recusarClasseDeArmazenamentoNaoImplementada(request);
+		// Metadado que o catálogo não guarda é recusa antes de abrir, no PUT e na cópia (§4.51).
+		recusarMetadadoDeObjetoNaoGuardado(request);
 		String origemDaCopia = request.getHeader(COPY_SOURCE);
 		if (origemDaCopia != null && !origemDaCopia.isBlank()) {
 			return copiarObjeto(credential, bucket, key, origemDaCopia, request);
@@ -1344,6 +1373,8 @@ class S3GatewayController {
 		recusarSseNaoAplicavel(request);
 		// O multipart também prometeria uma classe que o gateway não faz (§4.49).
 		recusarClasseDeArmazenamentoNaoImplementada(request);
+		// E um metadado que o catálogo não guarda (§4.51).
+		recusarMetadadoDeObjetoNaoGuardado(request);
 		requireBucket(credential, bucket);
 		String key = keyOf(request);
 		String expires = query(request).get("expires");
