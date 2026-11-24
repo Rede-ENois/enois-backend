@@ -3,6 +3,7 @@ package com.socialcoisa.rede.network.adapters.in.web;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
@@ -43,6 +44,7 @@ import com.socialcoisa.rede.network.domain.StoragePlacement;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 
 /**
  * O gateway <b>API compatível com S3</b> do Énóis Storage (brief §11).
@@ -537,8 +539,11 @@ class S3GatewayController {
 		// ignorado, e o cliente que retomava a partir de uma chave relistava tudo o que já tinha.
 		// Quando há `continuation-token`, ele manda: o token já diz onde continuar, e o S3 ignora o
 		// `start-after` nesse caso.
+		// O token é opaco e assinado com o segredo da credencial e o bucket (§4.53): só vale o que este
+		// gateway emitiu para este bucket. Lixo (ou token de outro bucket) é `400`, não "acabou".
 		String after = v2
-			? (query.get("continuation-token") != null ? query.get("continuation-token") : query.get("start-after"))
+			? (query.get("continuation-token") != null
+				? tokenDeContinuacao(credential, bucket, query.get("continuation-token")) : query.get("start-after"))
 			: query.get("marker");
 		String prefix = query.get("prefix");
 		String delimiter = query.get("delimiter");
@@ -598,7 +603,8 @@ class S3GatewayController {
 		}
 		xml.element("MaxKeys", maxKeys).element("KeyCount", contados).element("IsTruncated", truncated);
 		if (truncated && ultimoEmitido != null) {
-			xml.element(v2 ? "NextContinuationToken" : "NextMarker", ultimoEmitido);
+			xml.element(v2 ? "NextContinuationToken" : "NextMarker",
+				v2 ? emitirTokenDeContinuacao(credential, bucket, ultimoEmitido) : ultimoEmitido);
 		}
 		for (StorageObject object : chaves) {
 			xml.open("Contents").element("Key", object.key())
@@ -833,6 +839,79 @@ class S3GatewayController {
 		}
 		throw s3Error(501, "NotImplemented", "A classe de armazenamento '" + classe.trim()
 			+ "' nao e suportada: este gateway so guarda STANDARD, e o objeto nao foi gravado.");
+	}
+
+	/**
+	 * Emite o {@code NextContinuationToken}: a última chave emitida, assinada com o segredo da
+	 * credencial e o bucket (§4.53).
+	 *
+	 * <p><b>Antes:</b> o token era a última chave <b>em claro</b>, usada como posição sem conferência
+	 * nenhuma. Qualquer string virava posição: {@code continuation-token=lixo} respondia {@code 200}
+	 * com lista vazia, e o cliente concluía que o bucket acabou; o token de um bucket servia no outro.</p>
+	 *
+	 * <p><b>Agora:</b> {@code base64(posição)} + {@code "."} + HMAC-SHA-256 de "bucket posição"
+	 * truncado. O que não confere é {@code 400 InvalidArgument}. Não é um MAC de segurança de dados —
+	 * é a prova de que o token veio daqui, para este bucket, com esta credencial.</p>
+	 */
+	private String emitirTokenDeContinuacao(S3Credential credential, String bucket, String ultimaChave) {
+		String segredo = segredoDoToken(credential);
+		String corpo = java.util.Base64.getUrlEncoder().withoutPadding()
+			.encodeToString(ultimaChave.getBytes(StandardCharsets.UTF_8));
+		return corpo + "." + assinaturaDoToken(segredo, bucket, ultimaChave);
+	}
+
+	/**
+	 * O segredo que assina o token: o mesmo com que a requisição foi verificada.
+	 *
+	 * <p>A requisição de listagem passou pela SigV4 com este segredo; chegar aqui sem ele é a
+	 * credencial inconsistente na base, não o cliente. Devolver um token que o leitor recusa seria
+	 * uma paginação que morre na segunda página.</p>
+	 */
+	private String segredoDoToken(S3Credential credential) {
+		String segredo = credentials.secretFor(credential.id());
+		if (segredo == null) {
+			throw s3Error(403, "SignatureDoesNotMatch",
+				"Credencial sem segredo guardado nao pode assinar; gere uma nova.");
+		}
+		return segredo;
+	}
+
+	/** A posição de uma `continuation-token`, ou {@code 400} se o token não foi emitido aqui. */
+	private String tokenDeContinuacao(S3Credential credential, String bucket, String token) {
+		String segredo = segredoDoToken(credential);
+		int ponto = token.lastIndexOf('.');
+		if (ponto <= 0 || ponto == token.length() - 1) {
+			throw s3Error(400, "InvalidArgument",
+				"O continuation-token nao foi emitido por este gateway para este bucket.");
+		}
+		String chave;
+		try {
+			chave = new String(java.util.Base64.getUrlDecoder().decode(token.substring(0, ponto)), StandardCharsets.UTF_8);
+		}
+		catch (IllegalArgumentException naoEhBase64) {
+			throw s3Error(400, "InvalidArgument",
+				"O continuation-token nao foi emitido por este gateway para este bucket.");
+		}
+		// Comparação em tempo fixo: o token é público, mas comparar sem curto-circuito é a regra.
+		if (!java.security.MessageDigest.isEqual(assinaturaDoToken(segredo, bucket, chave).getBytes(StandardCharsets.US_ASCII),
+				token.substring(ponto + 1).getBytes(StandardCharsets.US_ASCII))) {
+			throw s3Error(400, "InvalidArgument",
+				"O continuation-token nao foi emitido por este gateway para este bucket.");
+		}
+		return chave;
+	}
+
+	/** HMAC-SHA-256 de {@code bucket + "\n" + chave}, hexadecimal. */
+	private static String assinaturaDoToken(String segredo, String bucket, String chave) {
+		try {
+			javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+			mac.init(new javax.crypto.spec.SecretKeySpec(segredo.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+			return java.util.HexFormat.of().formatHex(
+				mac.doFinal((bucket + "\n" + chave).getBytes(StandardCharsets.UTF_8)));
+		}
+		catch (java.security.GeneralSecurityException semHmac) {
+			throw new IllegalStateException("HmacSHA256 nao disponivel", semHmac);
+		}
 	}
 
 	/**
@@ -1592,7 +1671,7 @@ class S3GatewayController {
 		}
 		catch (ApiException recusado) {
 			// As outras rotas do multipart já traduziam; esta era a única que deixava a recusa vazar
-			// como JSON do Control Plane — e é a recusa que o cliente vê depois de enviar tudo (§4.58).
+			// como JSON do Control Plane — e é a recusa que o cliente vê depois de enviar tudo (§4.64).
 			throw noVocabularioDoS3(recusado);
 		}
 		S3Xml xml = new S3Xml();
@@ -1652,12 +1731,17 @@ class S3GatewayController {
 		// cliente que pagina recebia a mesma parte na primeira e na segunda página, e a lista sem
 		// `IsTruncated` fazia ele parar convencido de que tinha visto tudo.
 		int depoisDe = inteiroOu(query.get("part-number-marker"), 0);
+		// `max-parts` ausente ou ilegível é 1000; zero ou negativo cai no mesmo 1000 (o serviço já
+		// aplica esse piso). O `<MaxParts>` ecoa o valor APLICADO, não o pedido: antes, com
+		// `max-parts=0` a resposta dizia `<MaxParts>0</MaxParts>` e mandava 1000 partes — o XML se
+		// contradizia, e o cliente que soma páginas pelo `<MaxParts>` contava errado (§4.54).
 		int maxParts = inteiroOu(query.get("max-parts"), 1000);
-		var pagina = multipart.paginaDePartes(upload.uploadId(), depoisDe, maxParts);
+		int tetoDePartes = maxParts <= 0 ? 1000 : Math.min(maxParts, 1000);
+		var pagina = multipart.paginaDePartes(upload.uploadId(), depoisDe, tetoDePartes);
 		S3Xml xml = new S3Xml();
 		xml.root("ListPartsResult").element("Bucket", bucket).element("Key", upload.key())
 			.element("UploadId", upload.uploadId())
-			.element("PartNumberMarker", depoisDe).element("MaxParts", Math.max(1, Math.min(maxParts, 1000)))
+			.element("PartNumberMarker", depoisDe).element("MaxParts", tetoDePartes)
 			.element("IsTruncated", pagina.truncada());
 		for (var part : pagina.partes()) {
 			xml.open("Part").element("PartNumber", part.number()).element("ETag", "\"" + part.sha256() + "\"")
@@ -1711,7 +1795,17 @@ class S3GatewayController {
 				throw s3Error(400, "MalformedXML", "Part sem PartNumber.");
 			}
 			String etag = entre(trecho, "<ETag>", "</ETag>");
-			partes.add(new Parte(Integer.parseInt(numero.trim()),
+			int numeroDaParte;
+			try {
+				numeroDaParte = Integer.parseInt(numero.trim());
+			}
+			catch (NumberFormatException naoEhNumero) {
+				// O `PartNumber` ilegível é XML malformado, e a recusa sai no vocabulário do S3:
+				// sem esta tradução, a `NumberFormatException` subia como `IllegalArgumentException`
+				// e o cliente recebia o `ErrorResponse` JSON do Control Plane num gateway S3.
+				throw s3Error(400, "MalformedXML", "PartNumber invalido.");
+			}
+			partes.add(new Parte(numeroDaParte,
 				etag == null ? null : etag.replace("\"", "").trim()));
 			cursor = fecha + "</Part>".length();
 		}
@@ -1753,9 +1847,70 @@ class S3GatewayController {
 		recusarSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		recusarLeituraDeSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		StorageObject object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, keyOf(request)));
+		// `If-Match` é a pré-condição do download condicional (§4.63), como no S3.
 		return comVocabularioDoS3(() -> content.respond(object, request.getHeader(HttpHeaders.RANGE),
 			request.getHeader(HttpHeaders.IF_NONE_MATCH), request.getHeader(HttpHeaders.IF_MODIFIED_SINCE),
-			request.getHeader("If-Range")));
+			request.getHeader("If-Range"), request.getHeader(HttpHeaders.IF_MATCH)));
+	}
+
+	/**
+	 * O {@code OPTIONS} do gateway: as operações que **esta** credencial e **esta** chave deixam
+	 * fazer (§4.62). Chamado pelo {@link S3OptionsFilter}, que intercepta antes do
+	 * {@code DispatcherServlet} — ele responderia {@code OPTIONS} sozinho, com o {@code Allow} dos
+	 * métodos mapeados (inclusive os que nenhuma rota atende).
+	 *
+	 * <p><b>Antes:</b> o preflight de CORS do Control Plane respondia todo {@code OPTIONS} antes de
+	 * qualquer autenticação, com o {@code Allow} do servidor
+	 * (<code>PUT,GET,HEAD,DELETE,POST,OPTIONS</code>): uma credencial só de leitura ouvia que podia
+	 * apagar, e quem não se identificou ouvia a mesma lista.</p>
+	 *
+	 * <p><b>Agora:</b> o {@code OPTIONS} passa pela SigV4 como qualquer verbo. Sem assinatura é
+	 * {@code 403} em XML; com assinatura, {@code 200} e um {@code Allow} montado das operações da
+	 * credencial. A chave precisa existir e ser do dono da credencial — o gateway não diz, nem a
+	 * quem tem credencial válida, que uma chave que não é sua está lá.</p>
+	 */
+	void responderOptions(HttpServletRequest request, HttpServletResponse response) throws IOException {
+		String caminho = request.getRequestURI().substring(request.getContextPath().length());
+		String[] partes = caminho.length() > S3GatewayController.PREFIX.length() + 1
+			? caminho.substring(S3GatewayController.PREFIX.length() + 1).split("/", 2) : new String[0];
+		if (partes.length == 0 || partes[0].isBlank()) {
+			// `/s3` e `/s3/`: a pergunta é sobre a instalação, e a assinatura já basta.
+			S3Credential credencial = authenticate(request, "GET");
+			escreverAllow(response, allowDe(credencial));
+			return;
+		}
+		String bucket = partes[0];
+		S3Credential credential = authenticate(request, "GET");
+		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
+		if (partes.length > 1) {
+			// A chave que não existe não ganha lista de métodos: `OPTIONS` de chave fantasma é o
+			// `404 NoSuchKey` do `HEAD`, não o `403` do bucket (§4.62).
+			String chave = partes[1];
+			comVocabularioDoS3(() -> storage.requireDownloadable(bucket, chave, "OPTIONS"));
+		}
+		escreverAllow(response, allowDe(credential));
+	}
+
+	/** O {@code Allow} desta credencial: exatamente o que ela pode fazer aqui, mais {@code OPTIONS}. */
+	private static String allowDe(S3Credential credential) {
+		List<String> verbos = new java.util.ArrayList<>();
+		if (credential.allows("GET")) {
+			verbos.addAll(List.of("GET", "HEAD"));
+		}
+		if (credential.allows("PUT")) {
+			verbos.add("PUT");
+		}
+		if (credential.allows("DELETE")) {
+			verbos.add("DELETE");
+		}
+		verbos.add("OPTIONS");
+		return String.join(", ", verbos);
+	}
+
+	private static void escreverAllow(HttpServletResponse response, String allow) throws IOException {
+		response.setStatus(200);
+		response.setHeader(HttpHeaders.ALLOW, allow);
 	}
 
 	/** HeadObject: mesmos cabeçalhos do GetObject, sem corpo. */
@@ -1772,7 +1927,7 @@ class S3GatewayController {
 		recusarLeituraDeSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		StorageObject object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, keyOf(request), "HEAD"));
 		return comVocabularioDoS3(() -> content.head(object, request.getHeader(HttpHeaders.IF_NONE_MATCH),
-			request.getHeader(HttpHeaders.IF_MODIFIED_SINCE)));
+			request.getHeader(HttpHeaders.IF_MODIFIED_SINCE), request.getHeader(HttpHeaders.IF_MATCH)));
 	}
 
 	/** DeleteObject: lápide no catálogo. A resposta é 204 mesmo se a chave não existir (igual ao S3). */
@@ -2255,7 +2410,34 @@ class S3GatewayController {
 		if (slash < 0) {
 			throw s3Error(400, "InvalidRequest", "Informe o bucket e a chave.");
 		}
-		return semBarra.substring(slash + 1);
+		return chaveDeclarada(semBarra.substring(slash + 1));
+	}
+
+	/**
+	 * A chave como o cliente a declarou: o caminho da URI decodificado.
+	 *
+	 * <p><b>Antes:</b> a chave era gravada <b>como veio na URI</b>, percent-encoded:
+	 * {@code PUT /b/café.txt} guardava {@code caf%C3%A9.txt} e a listagem devolvia essa string. O
+	 * nome do objeto no S3 é o declarado — quem compara a {@code <Key>} com o nome local, monta URL
+	 * a partir dela ou usa a chave numa cópia por cabeçalho apontava para outro objeto, e não havia
+	 * como gravar {@code caf%C3%A9.txt} de propósito.</p>
+	 *
+	 * <p><b>Agora:</b> {@code %C3%A9} vira {@code é}, {@code %20} vira espaço e {@code +} continua
+	 * {@code +} (em caminho, {@code +} não é espaço — diferente do formulário). {@code %25} vira o
+	 * {@code %} literal, então a chave que já tem {@code %} é gravável. Percent-encoding inválido é
+	 * recusa e a chave fica como veio (§4.52).</p>
+	 */
+	static String chaveDeclarada(String chaveDaUri) {
+		if (chaveDaUri.indexOf('%') < 0) {
+			return chaveDaUri;
+		}
+		try {
+			return URLDecoder.decode(chaveDaUri.replace("+", "%2B"), StandardCharsets.UTF_8);
+		}
+		catch (IllegalArgumentException percentQuebrado) {
+			// `%` solto ou hexadecimal inválido: a URI não é uma chave; responder como veio é a recusa.
+			return chaveDaUri;
+		}
 	}
 
 	/** O caminho como o protocolo S3 o vê: sem o context path e sem o prefixo `/s3` do gateway. */
@@ -2511,6 +2693,14 @@ class S3GatewayController {
 		// Énóis é legível o bastante (`NoSuchUpload`, `InvalidArgument`, `MalformedXML`, `InvalidPart`
 		// são os do S3) e o `Code` é o que o SDK lê. Antes, só os dois casos acima eram traduzidos e
 		// o resto saía como JSON do Control Plane — corpo que o SDK não sabe deserializar.
+		//
+		// A validação de nome de bucket (§4.55) é exceção à regra de repassar o código interno: o
+		// `STORAGE_BUCKET_INVALID` do Énóis não é código do S3, e o SDK que procura `InvalidBucketName`
+		// para mostrar a mensagem certa não o reconhece. A mensagem (que diz qual regra violou) vai
+		// inteira.
+		if ("STORAGE_BUCKET_INVALID".equals(recusado.code())) {
+			return s3Error(recusado.status(), "InvalidBucketName", recusado.getMessage());
+		}
 		return s3Error(recusado.status(), recusado.code(), recusado.getMessage());
 	}
 
@@ -2553,7 +2743,14 @@ class S3GatewayController {
 				"O bucket ja existe em outra conta.");
 		}
 		if (donoAtual == null) {
-			storage.putBucketPolicy(credential.ownerUserId(), bucket, false, null, null);
+			// O nome é conferido aqui — e não só no primeiro objeto (§4.55): `PUT /com_underline`
+			// respondia 200 e registrava o bucket com um nome que o S3 recusa como host.
+			try {
+				storage.putBucketPolicy(credential.ownerUserId(), bucket, false, null, null);
+			}
+			catch (ApiException recusado) {
+				throw noVocabularioDoS3(recusado);
+			}
 		}
 		return ResponseEntity.ok().build();
 	}

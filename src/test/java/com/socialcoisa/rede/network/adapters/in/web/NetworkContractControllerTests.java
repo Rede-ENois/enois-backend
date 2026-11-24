@@ -8,6 +8,10 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,6 +20,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
@@ -298,6 +303,76 @@ class NetworkContractControllerTests {
 				.header("X-Session-Token", from.token())
 				.header("Idempotency-Key", "net-req-" + from.userId() + "-" + to.userId()))
 			.andExpect(status().isAccepted());
+	}
+
+	@Test
+	void acceptingMarksTheRequestNoticeRead() throws Exception {
+		var requester = auth.authenticate("net_notice_acc_a_" + System.nanoTime());
+		var receiver = auth.authenticate("net_notice_acc_b_" + System.nanoTime());
+		requestConnection(requester, receiver);
+
+		assertThat(requestNotice(receiver, requester.userId()).get("read").asBoolean())
+			.as("o aviso nasce não lido").isFalse();
+
+		mockMvc.perform(put("/network/connections/{target}/accept", requester.userId())
+				.header("X-Session-Token", receiver.token())
+				.header("Idempotency-Key", "net-notice-acc-" + UUID.randomUUID()))
+			.andExpect(status().isOk());
+
+		assertThat(requestNotice(receiver, requester.userId()).get("read").asBoolean()).isTrue();
+	}
+
+	@Test
+	void decliningMarksTheRequestNoticeRead() throws Exception {
+		var requester = auth.authenticate("net_notice_dec_a_" + System.nanoTime());
+		var receiver = auth.authenticate("net_notice_dec_b_" + System.nanoTime());
+		requestConnection(requester, receiver);
+
+		assertThat(requestNotice(receiver, requester.userId()).get("read").asBoolean())
+			.as("o aviso nasce não lido").isFalse();
+
+		removeConnection(receiver, requester);
+
+		assertThat(requestNotice(receiver, requester.userId()).get("read").asBoolean()).isTrue();
+	}
+
+	@Test
+	void cancellingMarksTheReceiversRequestNoticeRead() throws Exception {
+		var requester = auth.authenticate("net_notice_can_a_" + System.nanoTime());
+		var receiver = auth.authenticate("net_notice_can_b_" + System.nanoTime());
+		requestConnection(requester, receiver);
+
+		assertThat(requestNotice(receiver, requester.userId()).get("read").asBoolean())
+			.as("o aviso nasce não lido").isFalse();
+
+		removeConnection(requester, receiver);
+
+		assertThat(requestNotice(receiver, requester.userId()).get("read").asBoolean()).isTrue();
+	}
+
+	private JsonNode requestNotice(TestAuthHelper.AuthSession owner, String requesterId) throws Exception {
+		String body = mockMvc.perform(get("/notifications")
+				.header("X-Session-Token", owner.token())
+				.param("limit", "20"))
+			.andExpect(status().isOk())
+			.andReturn().getResponse().getContentAsString();
+		String href = "/api/network/connections/" + requesterId + "/accept";
+		List<JsonNode> notices = new ArrayList<>();
+		objectMapper.readTree(body).get("items").forEach(item -> {
+			if ("CONNECTION_REQUEST".equals(item.get("kind").asString()) && href.equals(item.get("href").asString())) {
+				notices.add(item);
+			}
+		});
+		assertThat(notices).hasSize(1);
+		return notices.getFirst();
+	}
+
+	private void removeConnection(TestAuthHelper.AuthSession actor, TestAuthHelper.AuthSession other)
+			throws Exception {
+		mockMvc.perform(delete("/network/connections/{target}", other.userId())
+				.header("X-Session-Token", actor.token())
+				.header("Idempotency-Key", "net-notice-rem-" + UUID.randomUUID()))
+			.andExpect(status().isOk());
 	}
 
 	@Test

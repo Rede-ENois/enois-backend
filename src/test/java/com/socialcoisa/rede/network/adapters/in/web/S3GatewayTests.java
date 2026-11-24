@@ -27,6 +27,7 @@ import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.http.HttpServletRequest;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -60,6 +61,7 @@ import com.socialcoisa.rede.shared.security.SecretCipher;
  */
 @SpringBootTest
 @AutoConfigureMockMvc
+@Tag("critico")
 class S3GatewayTests {
 
 	private static final String ACCESS_KEY_PREFIX = "AKIAENOIS";
@@ -1452,8 +1454,11 @@ void put_com_if_none_match_nao_sobrescreve_chave_ocupada() throws Exception {
 
 		var doc = javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder()
 			.parse(new java.io.ByteArrayInputStream(xml1.getBytes(StandardCharsets.UTF_8)));
+		// O token é opaco e assinado (§4.53): a posição `p/sub/` vai em base64 e com HMAC, nunca em
+		// claro. Antes desta rota, o token era a chave crua; conferir o valor literal aqui seria a
+		// asserção que o ciclo 143 existe para invalidar.
 		String token = doc.getElementsByTagName("NextContinuationToken").item(0).getTextContent();
-		assertThat(token).isEqualTo("p/sub/");
+		assertThat(token).isNotEqualTo("p/sub/").contains(".");
 
 		MockHttpServletRequestBuilder segundo = get("/s3/" + bucket).queryParam("list-type", "2")
 			.queryParam("prefix", "p/").queryParam("delimiter", "/").queryParam("max-keys", "2")
@@ -1657,7 +1662,7 @@ void put_com_if_none_match_nao_sobrescreve_chave_ocupada() throws Exception {
 		// não distingue "token venceu" de "start-after venceu": seria a mesma chave de partida.
 		MockHttpServletRequestBuilder comToken = get("/s3/" + bucket).queryParam("list-type", "2")
 			.queryParam("prefix", "inicio/").queryParam("start-after", "inicio/c.txt")
-			.queryParam("continuation-token", "inicio/a.txt");
+			.queryParam("continuation-token", tokenQueDiz("inicio/a.txt"));
 		assinar(comToken, SECRET, shaVazio());
 		var comTokenResposta = mockMvc.perform(comToken).andReturn().getResponse();
 		assertThat(comTokenResposta.getStatus()).isEqualTo(200);
@@ -2698,17 +2703,20 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 	 * e o resto de outra, e a corrupção só aparecia ao abrir o arquivo.</p>
 	 *
 	 * <p><b>Agora:</b> com {@code If-Range} em ETag, a faixa é aplicada só quando o ETag é o da versão
-	 * servida; senão {@code 200} com o corpo inteiro. Com data, vale {@code Last-Modified} &lt;=
-	 * aquela data. Validador que não é nem ETag nem data ({@code lixo}) cai no corpo inteiro, como no
-	 * S3.</p>
+	 * servida, em comparação forte: {@code W/} não casa com o ETag forte. Com data, vale apenas a data
+	 * exata do {@code Last-Modified} (HTTP-date tem granularidade de segundo); data futura não vale.
+	 * Validador que não é nem ETag nem data ({@code lixo}) cai no corpo inteiro, como no S3.</p>
 	 */
 	@Test
 	void if_range_validador_que_nao_bate_devolve_o_corpo_inteiro() throws Exception {
 		gravar("ifr/a.txt", "0123456789");
 		MockHttpServletRequestBuilder h = MockMvcRequestBuilders.head("/s3/" + bucket + "/ifr/a.txt");
 		assinar(h, SECRET, shaVazio());
-		String etag = mockMvc.perform(h).andReturn().getResponse().getHeader("ETag");
+		var cabecalhos = mockMvc.perform(h).andReturn().getResponse();
+		String etag = cabecalhos.getHeader("ETag");
+		String lastModified = cabecalhos.getHeader("Last-Modified");
 		assertThat(etag).isNotNull();
+		assertThat(lastModified).isNotNull();
 
 		// ETag da versão servida: a faixa vale.
 		MockHttpServletRequestBuilder bate = get("/s3/" + bucket + "/ifr/a.txt")
@@ -2720,9 +2728,21 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		assertThat(doBate.getStatus()).isEqualTo(206);
 		assertThat(doBate.getContentAsString()).isEqualTo("01234");
 
-		// ETag de outra versão, data antiga, data futura e lixo: corpo inteiro com 200.
-		for (String validador : new String[] { "\"outro\"", "Wed, 01 Jan 2020 00:00:00 GMT",
-				"Wed, 01 Jan 2100 00:00:00 GMT", "lixo" }) {
+		// A data exata do Last-Modified também vale (o cliente devolve o que recebeu).
+		MockHttpServletRequestBuilder dataBate = get("/s3/" + bucket + "/ifr/a.txt")
+			.header("Range", "bytes=0-4").header("If-Range", lastModified);
+		assinar(dataBate, SECRET, shaVazio());
+		var rd = mockMvc.perform(dataBate).andReturn();
+		var doData = rd.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(rd)).andReturn().getResponse() : rd.getResponse();
+		assertThat(doData.getStatus()).as("If-Range Last-Modified").isEqualTo(206);
+		assertThat(doData.getContentAsString()).isEqualTo("01234");
+
+		// ETag de outra versão, ETag fraco do atual, data antiga, data futura e lixo: corpo inteiro.
+		// A data futura tem de ser um HTTP-date válido: com o dia da semana errado o parser recusa
+		// antes da comparação e o caso não prova nada.
+		for (String validador : new String[] { "\"outro\"", "W/" + etag, "Wed, 01 Jan 2020 00:00:00 GMT",
+				"Fri, 01 Jan 2100 00:00:00 GMT", "lixo" }) {
 			MockHttpServletRequestBuilder naoBate = get("/s3/" + bucket + "/ifr/a.txt")
 				.header("Range", "bytes=0-4").header("If-Range", validador);
 			assinar(naoBate, SECRET, shaVazio());
@@ -3100,7 +3120,7 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 	 *
 	 * <p><b>Agora:</b> XML em todas as recusas do {@code Complete} — {@code EntityTooSmall},
 	 * {@code InvalidPart}, {@code NoSuchUpload}, {@code MalformedXML} —, com {@code Code} do S3 e
-	 * {@code 4xx} (§4.4.57). O sucesso continua igual.</p>
+	 * {@code 4xx} (§4.64). O sucesso continua igual.</p>
 	 */
 	@Test
 	void complete_multipart_recusa_em_xml_e_nao_em_json() throws Exception {
@@ -3110,6 +3130,162 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		assinar(r, SECRET, shaDe("abcdefghij"));
 		assertThat(mockMvc.perform(r).andReturn().getResponse().getStatus()).isEqualTo(200);
 
+	}
+	/**
+	 * `GET`/`HEAD` com `If-Match` que não casa é `412 PreconditionFailed`, não o objeto.
+	 *
+	 * <p><b>Antes:</b> o `GET` avaliava só `If-None-Match` e `If-Modified-Since`. `If-Match` era
+	 * ignorado — e como `Range` também é aceito, o cliente que pedia uma faixa condicionada ao ETag
+	 * recebia {@code 206} com o pedaço da versão <b>nova</b> na posição da velha: exatamente o
+	 * arquivo remontado com metade de cada versão que o {@code If-Range} foi criado para evitar, mas
+	 * na forma que o S3 usa para download condicional ({@code If-Match: <etag>} + {@code Range}). O
+	 * S3 aplica {@code If-Match} ao {@code GET} e ao {@code HEAD}: é o "só me dê este se ainda for
+	 * esta versão", sem a semântica de "sem alteração" do {@code If-None-Match}.</p>
+	 *
+	 * <p><b>Agora:</b> na ordem do HTTP, {@code If-Match} vem antes de {@code If-None-Match}: se não
+	 * casa (ETag diferente, ou {@code *} com o objeto ausente — aqui o objeto já existe, então
+	 * {@code *} casa), a resposta é {@code 412} com o ETag, sem corpo. Quando casa, o resto do fluxo
+	 * segue: faixa, 304 e 200 normalmente (§4.63).</p>
+	 */
+	@Test
+	void get_e_head_com_if_match_divergente_sao_412() throws Exception {
+		String b = "im" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		String corpo = "0123456789";
+		MockHttpServletRequestBuilder r = put("/s3/" + b + "/x.txt").content(corpo.getBytes(StandardCharsets.UTF_8));
+		assinar(r, SECRET, shaDe(corpo));
+		assertThat(mockMvc.perform(r).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder h = MockMvcRequestBuilders.head("/s3/" + b + "/x.txt");
+		assinar(h, SECRET, shaVazio());
+		String etag = mockMvc.perform(h).andReturn().getResponse().getHeader("ETag");
+		assertThat(etag).isNotNull().startsWith("\"");
+
+		// Divergente, com e sem faixa, no GET e no HEAD.
+		for (String ifMatch : new String[] { "\"velho\"", "\"outro-1\"", "\"velho\", \"tambem-velho\"", "W/\"velho\"",
+			"W/" + etag }) {
+			for (String faixa : new String[] { null, "bytes=0-3" }) {
+				MockHttpServletRequestBuilder g = get("/s3/" + b + "/x.txt").header("If-Match", ifMatch);
+				if (faixa != null) {
+					g.header("Range", faixa);
+				}
+				assinar(g, SECRET, shaVazio());
+				var rr = mockMvc.perform(g).andReturn();
+				var resp = rr.getRequest().isAsyncStarted()
+					? mockMvc.perform(asyncDispatch(rr)).andReturn().getResponse() : rr.getResponse();
+				String rotulo = "GET If-Match=" + ifMatch + (faixa == null ? "" : " Range=" + faixa);
+				assertThat(resp.getStatus()).as(rotulo + ": " + resp.getContentAsString()).isEqualTo(412);
+				assertThat(resp.getContentAsByteArray()).as(rotulo).isEmpty();
+				assertThat(resp.getHeader("ETag")).as(rotulo).isEqualTo(etag);
+			}
+			MockHttpServletRequestBuilder hh = MockMvcRequestBuilders.head("/s3/" + b + "/x.txt")
+				.header("If-Match", ifMatch);
+			assinar(hh, SECRET, shaVazio());
+			assertThat(mockMvc.perform(hh).andReturn().getResponse().getStatus()).as("HEAD " + ifMatch).isEqualTo(412);
+		}
+
+		// Casando: o fluxo normal continua — inteiro, faixa, e o 304 do If-None-Match continua valendo.
+		// A lista com um etag velho E o certo casa (o S3 casa qualquer um da lista).
+		for (String casando : new String[] { etag, "*", "\"velho\", " + etag }) {
+			MockHttpServletRequestBuilder lista = get("/s3/" + b + "/x.txt").header("If-Match", casando);
+			assinar(lista, SECRET, shaVazio());
+			var lr = mockMvc.perform(lista).andReturn();
+			var lresp = lr.getRequest().isAsyncStarted()
+				? mockMvc.perform(asyncDispatch(lr)).andReturn().getResponse() : lr.getResponse();
+			assertThat(lresp.getStatus()).as("If-Match=" + casando).isEqualTo(200);
+			assertThat(lresp.getContentAsString()).isEqualTo(corpo);
+		}
+		MockHttpServletRequestBuilder ok = get("/s3/" + b + "/x.txt").header("If-Match", etag);
+		assinar(ok, SECRET, shaVazio());
+		var okr = mockMvc.perform(ok).andReturn();
+		var okresp = okr.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(okr)).andReturn().getResponse() : okr.getResponse();
+		assertThat(okresp.getStatus()).isEqualTo(200);
+		assertThat(okresp.getContentAsString()).isEqualTo(corpo);
+
+		MockHttpServletRequestBuilder faixaOk = get("/s3/" + b + "/x.txt").header("If-Match", etag)
+			.header("Range", "bytes=2-4");
+		assinar(faixaOk, SECRET, shaVazio());
+		var fok = mockMvc.perform(faixaOk).andReturn();
+		var fresp = fok.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(fok)).andReturn().getResponse() : fok.getResponse();
+		assertThat(fresp.getStatus()).isEqualTo(206);
+		assertThat(fresp.getContentAsString()).isEqualTo("234");
+
+		// If-Match casa e If-None-Match do mesmo ETag pede 304 — If-Match não engole o 304.
+		MockHttpServletRequestBuilder d304 = MockMvcRequestBuilders.head("/s3/" + b + "/x.txt")
+			.header("If-Match", etag).header("If-None-Match", etag);
+		assinar(d304, SECRET, shaVazio());
+		assertThat(mockMvc.perform(d304).andReturn().getResponse().getStatus()).isEqualTo(304);
+	}
+	/**
+	 * Nome que o S3 não aceita como bucket é `400`, seja qual for a rota.
+	 *
+	 * <p><b>Antes:</b> só o tamanho (≤ 63) e a maiúscula eram conferidos. {@code com_underline},
+	 * {@code com espaço}, {@code traco-no-fim-}, {@code -traco-no-inicio} e {@code dois..pontos} criavam
+	 * bucket com {@code 200} — e o S3 recusa todos: o nome do bucket vira <b>host</b> do virtual-host
+	 * ({@code <bucket>.s3...}) e rótulo DNS não tem {@code _}, espaço, ponto no fim nem hífen no fim.
+	 * O cliente que grava com um nome que o S3 rejeita descobre o problema <b>só ao apontar um cliente
+	 * de verdade</b> para o bucket, com erro de DNS; e o bucket criado assim fica com um nome que
+	 * ninguém consegue usar no caminho virtual-host.</p>
+	 *
+	 * <p><b>Agora:</b> o nome é conferido como o S3 do caminho ({@code path-style}) confere: minúscula,
+	 * dígito, ponto e hífen; começa e termina com letra ou dígito; sem ponto consecutivo; sem ponto
+	 * antes de hífen; de 3 a 63 caracteres; e não pode ter a forma de um IPv4 (ambiguidade com endereço).
+	 * {@code 400} com o motivo, na criação e no primeiro {@code PUT} de objeto (§4.58).</p>
+	 */
+	@Test
+	void nome_de_bucket_fora_do_alfabeto_do_s3_e_400() throws Exception {
+		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		String[] invalidos = { "com_underline", "com espaço", "traco-no-fim-", "-traco-no-inicio",
+			"dois..pontos", "ponto-hifen.-x", "10.0.0.1", "ab" };
+		for (String nome : invalidos) {
+			MockHttpServletRequestBuilder criar = put("/s3/" + nome).content(new byte[0]);
+			assinar(criar, SECRET, shaVazio());
+			var recusa = mockMvc.perform(criar).andReturn().getResponse();
+			assertThat(recusa.getStatus()).as("criacao de '" + nome + "'").isEqualTo(400);
+			assertThat(recusa.getContentAsString()).contains("<Code>InvalidBucketName</Code>")
+				.contains("<Message>");
+			// O mesmo nome no primeiro PUT de objeto: recusa antes de gravar qualquer coisa.
+			MockHttpServletRequestBuilder enviar = put("/s3/" + nome + "/x.txt").content(corpo);
+			assinar(enviar, SECRET, shaDe("abc"));
+			var recusaObjeto = mockMvc.perform(enviar).andReturn().getResponse();
+			assertThat(recusaObjeto.getStatus()).as("objeto em '" + nome + "'").isEqualTo(400);
+			assertThat(recusaObjeto.getContentAsString()).contains("<Code>InvalidBucketName</Code>");
+		}
+		// Nada foi criado sob os nomes recusados.
+		assertThat(jdbc.queryForObject(
+			"select count(*) from network_storage_objects where bucket in (?, ?, ?, ?, ?, ?, ?, ?) and deleted_at is null",
+			Long.class, (Object[]) invalidos)).isZero();
+
+		// O que o S3 aceita continua aceito, inclusive nos limites.
+		for (String valido : new String[] { "a-b-c", "a.b.c", "abc", "1-2-3",
+			"a" + "b".repeat(61) + "c" }) {
+			MockHttpServletRequestBuilder enviar = put("/s3/" + valido + "/x.txt").content(corpo);
+			assinar(enviar, SECRET, shaDe("abc"));
+			assertThat(mockMvc.perform(enviar).andReturn().getResponse().getStatus())
+				.as("'" + valido + "' tem de ser aceito").isEqualTo(200);
+		}
+	}
+
+	/**
+	 * `MaxParts` do `ListParts` é o teto que valeu de verdade — não um pedido que não foi honrado.
+	 *
+	 * <p><b>Antes:</b> o {@code <MaxParts>} era o pedido cru, não o valor aplicado. Com
+	 * {@code max-parts=0} (ou negativo) a página vinha com as partes todas, cortada em 1000, e o XML
+	 * dizia {@code <MaxParts>0</MaxParts>}; com {@code max-parts=5000} a página vinha cortada em 1000 e
+	 * o XML dizia 5000. Nos dois o XML se contradizia: quem pagina somando o que o {@code <MaxParts>}
+	 * promete conta errado quantas páginas faltam, e quem vê {@code MaxParts 0} com partes dentro
+	 * conclui que a resposta está quebrada.</p>
+	 *
+	 * <p><b>Agora:</b> {@code <MaxParts>} é o valor aplicado — o mesmo que corta a página: ausente ou
+	 * ilegível é 1000, zero e negativo recusam para 1000, acima de 1000 é 1000.</p>
+	 */
+	@Test
+	void list_parts_ecoa_o_max_parts_aplicado_nao_o_pedido() throws Exception {
+		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		String b = "mp" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		MockHttpServletRequestBuilder r = put("/s3/" + b + "/x.txt").content(corpo);
+		assinar(r, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(r).andReturn().getResponse().getStatus()).isEqualTo(200);
 		MockHttpServletRequestBuilder c = MockMvcRequestBuilders.post("/s3/" + b + "/mp.bin?uploads");
 		assinar(c, SECRET, shaVazio());
 		String uploadId = java.util.regex.Pattern.compile("<UploadId>([^<]*)</UploadId>")
@@ -3164,6 +3340,292 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		var malformado = mockMvc.perform(co4).andReturn().getResponse();
 		assertThat(malformado.getStatus()).isEqualTo(400);
 		assertThat(malformado.getContentAsString()).contains("<Code>").doesNotContain("\"code\"");
+
+		// `PartNumber` que não é número: o parser não pode estourar com o JSON do Control Plane.
+		String naoNumero = "<CompleteMultipartUpload><Part><PartNumber>abc</PartNumber>"
+			+ "<ETag>\"x\"</ETag></Part></CompleteMultipartUpload>";
+		MockHttpServletRequestBuilder co5 = MockMvcRequestBuilders.post("/s3/" + b + "/mp.bin?uploadId=" + uploadId)
+			.content(naoNumero.getBytes(StandardCharsets.UTF_8)).contentType("application/xml");
+		assinar(co5, SECRET, shaDe(naoNumero));
+		var parteInvalida = mockMvc.perform(co5).andReturn().getResponse();
+		assertThat(parteInvalida.getStatus()).isEqualTo(400);
+		assertThat(parteInvalida.getContentAsString()).contains("<Code>MalformedXML</Code>")
+			.doesNotContain("\"code\"");
+		for (int n = 1; n <= 3; n++) {
+			MockHttpServletRequestBuilder p2 = put("/s3/" + b + "/mp.bin?uploadId=" + uploadId + "&partNumber=" + n)
+				.content(corpo);
+			assinar(p2, SECRET, shaDe("abc"));
+			assertThat(mockMvc.perform(p2).andReturn().getResponse().getStatus()).isEqualTo(200);
+		}
+
+		String[][] casos = { { "max-parts=2", "2" }, { "max-parts=0", "1000" }, { "max-parts=-1", "1000" },
+			{ "max-parts=5000", "1000" }, { "max-parts=abc", "1000" } };
+		for (String[] caso : casos) {
+			MockHttpServletRequestBuilder l = get("/s3/" + b + "/mp.bin?uploadId=" + uploadId + "&" + caso[0]);
+			assinar(l, SECRET, shaVazio());
+			var resp = mockMvc.perform(l).andReturn().getResponse();
+			assertThat(resp.getStatus()).as(caso[0]).isEqualTo(200);
+			String xml = resp.getContentAsString();
+			assertThat(xml).as(caso[0]).contains("<MaxParts>" + caso[1] + "</MaxParts>");
+			// A página nunca entrega mais partes do que o `<MaxParts>` ecoado diz.
+			long entregues = java.util.regex.Pattern.compile("<PartNumber>").matcher(xml).results().count();
+			assertThat(entregues).as(caso[0]).isLessThanOrEqualTo(Long.parseLong(caso[1]));
+		}
+		// `max-parts=2` com marcador pagina de dois em dois: o que o `<MaxParts>` ecoa É o corte.
+		MockHttpServletRequestBuilder l = get("/s3/" + b + "/mp.bin?uploadId=" + uploadId
+			+ "&max-parts=2&part-number-marker=1");
+		assinar(l, SECRET, shaVazio());
+		String xml = mockMvc.perform(l).andReturn().getResponse().getContentAsString();
+		assertThat(xml).contains("<MaxParts>2</MaxParts>").contains("<PartNumber>2</PartNumber>")
+			.contains("<PartNumber>3</PartNumber>").doesNotContain("<PartNumber>1</PartNumber>")
+			.contains("<IsTruncated>false</IsTruncated>");
+	}
+
+	/**
+	 * `continuation-token` que o gateway não emitiu (ou de outro bucket) é `400`, não lista vazia.
+	 *
+	 * <p><b>Antes:</b> o token era o <b>último nome emitido</b>, em claro, e o gateway o usava como
+	 * posição sem conferir nada. Qualquer string era aceita como posição: {@code continuation-token=lixo}
+	 * respondia {@code 200} com {@code KeyCount 0}, e o cliente que retoma a paginação conclui que o
+	 * bucket acabou — perde o resto da listagem sem ver erro. Um token de <b>outro bucket</b> também
+	 * servia de posição, então listagens de buckets diferentes misturavam estados.</p>
+	 *
+	 * <p><b>Agora:</b> o token é opaco e assinado com o segredo da credencial e o bucket (HMAC): só
+	 * vale o que este gateway emitiu para este bucket. Token que não confere — lixo, inventado, de
+	 * outro bucket ou de outra credencial — é {@code 400 InvalidArgument}. A paginação normal continua
+	 * andando objeto por objeto.</p>
+	 */
+	@Test
+	void continuation_token_que_o_gateway_nao_emitiu_e_400() throws Exception {
+		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		String b = "tk" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		for (String k : new String[] { "a1.txt", "a2.txt", "a3.txt" }) {
+			MockHttpServletRequestBuilder r = put("/s3/" + b + "/" + k).content(corpo);
+			assinar(r, SECRET, shaDe("abc"));
+			assertThat(mockMvc.perform(r).andReturn().getResponse().getStatus()).isEqualTo(200);
+		}
+		// Token que não veio de nenhuma listagem: recusa em vez de "acabou".
+		for (String token : new String[] { "lixo", "a1.txt", "AAA", "%41%41" }) {
+			MockHttpServletRequestBuilder l = get("/s3/" + b + "?list-type=2&continuation-token=" + token);
+			assinar(l, SECRET, shaVazio());
+			var recusa = mockMvc.perform(l).andReturn().getResponse();
+			assertThat(recusa.getStatus()).as(token).isEqualTo(400);
+			assertThat(recusa.getContentAsString()).contains("<Code>InvalidArgument</Code>");
+		}
+
+		// A paginação normal: três páginas de um, cada uma devolvendo o próximo objeto.
+		String token = null;
+		java.util.List<String> vistos = new java.util.ArrayList<>();
+		for (int volta = 0; volta < 4; volta++) {
+			String url = "/s3/" + b + "?list-type=2&max-keys=1"
+				+ (token == null ? "" : "&continuation-token=" + java.net.URLEncoder.encode(token, StandardCharsets.UTF_8));
+			MockHttpServletRequestBuilder l = get(url);
+			assinar(l, SECRET, shaVazio());
+			var rr = mockMvc.perform(l).andReturn();
+			var resp = rr.getRequest().isAsyncStarted()
+				? mockMvc.perform(asyncDispatch(rr)).andReturn().getResponse() : rr.getResponse();
+			assertThat(resp.getStatus()).as("volta " + volta).isEqualTo(200);
+			String xml = resp.getContentAsString();
+			java.util.regex.Pattern.compile("<Key>([^<]*)</Key>").matcher(xml).results()
+				.map(m -> m.group(1)).forEach(vistos::add);
+			token = java.util.regex.Pattern.compile("<NextContinuationToken>([^<]*)</NextContinuationToken>")
+				.matcher(xml).results().map(m -> m.group(1)).findFirst().orElse(null);
+			if (token == null) {
+				break;
+			}
+		}
+		assertThat(vistos).containsExactly("a1.txt", "a2.txt", "a3.txt");
+		// O token emitido não é o nome do objeto: é opaco.
+		assertThat(vistos).doesNotContain(token);
+
+		// Token de um bucket não vale no outro.
+		String outro = "tk" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		MockHttpServletRequestBuilder r = put("/s3/" + outro + "/z.txt").content(corpo);
+		assinar(r, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(r).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder p1 = get("/s3/" + b + "?list-type=2&max-keys=1");
+		assinar(p1, SECRET, shaVazio());
+		var pr = mockMvc.perform(p1).andReturn();
+		var px = (pr.getRequest().isAsyncStarted() ? mockMvc.perform(asyncDispatch(pr)).andReturn().getResponse()
+			: pr.getResponse()).getContentAsString();
+		String tokenDoB = java.util.regex.Pattern.compile("<NextContinuationToken>([^<]*)</NextContinuationToken>")
+			.matcher(px).results().map(m -> m.group(1)).findFirst().orElse(null);
+		assertThat(tokenDoB).isNotNull();
+		// Assinatura alterada: a forma está certa e a posição existe, mas o gateway não emitiu este
+		// token — só a verificação da assinatura separa os dois casos.
+		char ultimo = tokenDoB.charAt(tokenDoB.length() - 1);
+		String forjado = tokenDoB.substring(0, tokenDoB.length() - 1) + (ultimo == 'a' ? 'b' : 'a');
+		MockHttpServletRequestBuilder pf = get("/s3/" + b + "?list-type=2&continuation-token="
+			+ java.net.URLEncoder.encode(forjado, StandardCharsets.UTF_8));
+		assinar(pf, SECRET, shaVazio());
+		assertThat(mockMvc.perform(pf).andReturn().getResponse().getStatus()).isEqualTo(400);
+		MockHttpServletRequestBuilder p2 = get("/s3/" + outro + "?list-type=2&continuation-token="
+			+ java.net.URLEncoder.encode(tokenDoB, StandardCharsets.UTF_8));
+		assinar(p2, SECRET, shaVazio());
+		assertThat(mockMvc.perform(p2).andReturn().getResponse().getStatus()).isEqualTo(400);
+	}
+
+	/**
+	 * Um {@code continuation-token} válido para a chave, com a assinatura que o gateway confere.
+	 *
+	 * <p>Desde o §4.53 o token carrega HMAC do bucket e da chave: o valor em claro é recusado com
+	 * {@code 400}. Para testar "o token vence o start-after" o token precisa ser legítimo.</p>
+	 */
+	private String tokenQueDiz(String chave) {
+		try {
+			String corpo = java.util.Base64.getUrlEncoder().withoutPadding()
+				.encodeToString(chave.getBytes(StandardCharsets.UTF_8));
+			javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+			mac.init(new javax.crypto.spec.SecretKeySpec(SECRET.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+			return corpo + "." + java.util.HexFormat.of().formatHex(
+				mac.doFinal((bucket + "\n" + chave).getBytes(StandardCharsets.UTF_8)));
+		}
+		catch (java.security.GeneralSecurityException semHmac) {
+			throw new IllegalStateException(semHmac);
+		}
+	}
+
+	/**
+	 * A chave gravada é a que o cliente declarou, não a forma da URI.
+	 *
+	 * <p><b>Antes:</b> o `PUT` gravava a chave <b>como veio na URI</b> (percent-encoded, sem
+	 * decodificar). `PUT /b/café.txt` guardava `caf%C3%A9.txt`; a listagem devolvia essa string e o
+	 * `GET` com a chave listada até funcionava — mas o <b>nome do objeto</b> era outro. O nome no S3 é
+	 * o que o cliente declarou: quem compara a `<Key>` com o nome do arquivo local, gera URL a partir
+	 * dela ou usa a chave numa cópia por cabeçalho (`x-amz-copy-source`, que decodifica) apontava
+	 * para um objeto que não existe. E não havia como gravar `caf%C3%A9.txt` de propósito: toda
+	 * chave com `%` virava outra.</p>
+	 *
+	 * <p><b>Agora:</b> a chave é decodificada da URI no `PUT` (e no multipart), como o caminho do S3:
+	 * `%C3%A9` é `é`, `%20` é espaço, `+` continua `+` (em caminho, `+` não é espaço). A listagem
+	 * devolve o nome declarado, e o `GET` aceita a mesma forma.</p>
+	 */
+	@Test
+	void chave_gravada_e_o_nome_declarado_nao_a_forma_da_uri() throws Exception {
+		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		String b = "enc" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		String[] chaves = { "café.txt", "com espaço.txt", "a&b<c>.txt", "plus+1.txt", "sinal%40literal.txt",
+			"ja%20codado.txt", "cem%25+e+mais.txt" };
+		for (String k : chaves) {
+			MockHttpServletRequestBuilder r = put("/s3/" + b + "/" + k).content(corpo);
+			assinar(r, SECRET, shaDe("abc"));
+			assertThat(mockMvc.perform(r).andReturn().getResponse().getStatus()).as(k).isEqualTo(200);
+		}
+		var gravadas = jdbc.queryForList(
+			"select object_key from network_storage_objects where bucket = ? and deleted_at is null", String.class, b);
+		assertThat(gravadas).containsExactlyInAnyOrder(chaves);
+		// `%` do nome não vira escape: `sinal%40literal.txt` NÃO é `sinal@literal.txt`.
+		assertThat(gravadas).contains("sinal%40literal.txt", "ja%20codado.txt")
+			.doesNotContain("sinal@literal.txt", "ja codado.txt");
+
+		// A listagem traz o mesmo nome, e a chave listada é a que o GET entrega.
+		MockHttpServletRequestBuilder l = get("/s3/" + b + "?list-type=2");
+		assinar(l, SECRET, shaVazio());
+		var lr = mockMvc.perform(l).andReturn();
+		var resp = lr.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lr)).andReturn().getResponse() : lr.getResponse();
+		String xml = resp.getContentAsString();
+		assertThat(xml).contains("<Key>café.txt</Key>").contains("<Key>com espaço.txt</Key>")
+			.contains("<Key>a&amp;b&lt;c&gt;.txt</Key>").contains("<Key>plus+1.txt</Key>")
+			.contains("<Key>sinal%40literal.txt</Key>").contains("<Key>ja%20codado.txt</Key>");
+		for (String k : chaves) {
+			MockHttpServletRequestBuilder g = get("/s3/" + b + "/" + k);
+			assinar(g, SECRET, shaVazio());
+			var rd = mockMvc.perform(g).andReturn();
+			var doGet = rd.getRequest().isAsyncStarted()
+				? mockMvc.perform(asyncDispatch(rd)).andReturn().getResponse() : rd.getResponse();
+			assertThat(doGet.getContentAsString()).as(k).isEqualTo("abc");
+		}
+	}
+
+	/**
+	 * O `OPTIONS` no gateway S3 autentica como o S3, e o verbo errado sai no XML do S3.
+	 *
+	 * <p><b>Antes:</b> o preflight de CORS do Control Plane responde a **todo** `OPTIONS` antes de
+	 * qualquer autenticação:</p>
+	 *
+	 * <pre>
+	 * OPTIONS /s3/&lt;b&gt;/x.txt   (sem assinatura nenhuma)
+	 * → 200   Allow: PUT,GET,HEAD,DELETE,POST,OPTIONS
+	 * </pre>
+	 *
+	 * <p>Duas mentiras: quem pergunta "quais métodos este objeto aceita" sem credencial recebe a lista
+	 * do servidor inteiro, não a da credencial que não mandou — a de leitura também ouve `PUT` e
+	 * `DELETE`; e o verbo de escrita que não existe aqui (`PATCH`) sai como <b>JSON do Control
+	 * Plane</b> (`{"code":"METHOD_NOT_ALLOWED"}`), não como o `405` XML do S3 com `Allow`. O cliente
+	 * que sonda capacidades (`Allow`) para decidir a estratégia de upload lê o servidor, não a
+	 * credencial.</p>
+	 *
+	 * <p><b>Agora:</b> no `/s3/**` o `OPTIONS` passa pela SigV4 como qualquer verbo (§4.62): sem
+	 * assinatura é `403 AccessDenied` em XML; com assinatura, `200` com `Allow` montado a partir das
+	 * operações da credencial e do dono do bucket. Verbo não suportado (`PATCH`, `TRACE`) é
+	 * `405 MethodNotAllowed` em XML com `Allow` da rota. Preflight de navegador (com
+	 * `Origin` e `Access-Control-Request-Method`) continua respondido pelo CORS, que é o navegador
+	 * perguntando antes de mandar a credencial — esse não pode exigir assinatura.</p>
+	 */
+	@Test
+	void options_autentica_e_o_verbo_invalido_e_xml() throws Exception {
+		String b = "op" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		MockHttpServletRequestBuilder r = put("/s3/" + b);
+		assinar(r, SECRET, shaVazio());
+		assertThat(mockMvc.perform(r).andReturn().getResponse().getStatus()).isEqualTo(200);
+		String corpo = "0123456789";
+		MockHttpServletRequestBuilder p = put("/s3/" + b + "/x.txt").content(corpo.getBytes(StandardCharsets.UTF_8));
+		assinar(p, SECRET, shaDe(corpo));
+		assertThat(mockMvc.perform(p).andReturn().getResponse().getStatus()).isEqualTo(200);
+
+		// Sem credencial nenhuma: o OPTIONS não é uma porta aberta no gateway S3.
+		var semAssinatura = mockMvc.perform(MockMvcRequestBuilders.options("/s3/" + b + "/x.txt")).andReturn()
+			.getResponse();
+		assertThat(semAssinatura.getStatus()).as(semAssinatura.getContentAsString()).isEqualTo(403);
+		assertThat(semAssinatura.getContentType()).contains("xml");
+		assertThat(semAssinatura.getHeader("Allow")).as("Allow de quem não se identificou").isNull();
+
+		// Com assinatura de credencial SÓ DE LEITURA: 200 e um Allow que NÃO mente sobre escrita. É o
+		// discriminante: a lista do servidor (e a do preflight) contém PUT e DELETE, e quem só lê não
+		// pode ouvi-los.
+		String accessKeyLeitura = "AKIAENOISRDONLY" + UUID.randomUUID().toString().replace("-", "").substring(0, 5).toUpperCase();
+		jdbc.update("""
+			insert into network_storage_s3_credentials (id, access_key, secret_hash, secret_encrypted, owner_user_id,
+				allowed_bucket, allowed_operations, created_at)
+			values (?, ?, ?, ?, ?, null, 'GET', ?)
+			""", "s3c_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12), accessKeyLeitura,
+			com.socialcoisa.rede.shared.security.Hashes.sha256Hex(SECRET), cipher.encrypt(SECRET), admin,
+			java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00Z")));
+		MockHttpServletRequestBuilder o = MockMvcRequestBuilders.options("/s3/" + b + "/x.txt");
+		assinar(o, SECRET, shaVazio(), accessKeyLeitura);
+		var comAssinatura = mockMvc.perform(o).andReturn().getResponse();
+		assertThat(comAssinatura.getStatus()).as(comAssinatura.getContentAsString()).isEqualTo(200);
+		assertThat(comAssinatura.getHeader("Allow")).as("Allow da credencial de leitura").isNotNull()
+			.contains("GET").contains("HEAD").contains("OPTIONS")
+			.doesNotContain("PUT").doesNotContain("DELETE").doesNotContain("POST");
+
+		// A credencial do cenário (GET PUT LIST DELETE) ouve os três verbos de objeto que tem — e
+		// "LIST" (que é de bucket, não de objeto) não vira método HTTP nenhum.
+		MockHttpServletRequestBuilder completo = MockMvcRequestBuilders.options("/s3/" + b + "/x.txt");
+		assinar(completo, SECRET, shaVazio());
+		var allowCompleto = mockMvc.perform(completo).andReturn().getResponse().getHeader("Allow");
+		assertThat(allowCompleto).as("Allow de GET PUT DELETE").contains("GET").contains("PUT")
+			.contains("DELETE").doesNotContain("LIST").doesNotContain("POST");
+
+		// Preflight de navegador (Origin + Access-Control-Request-Method) não é o OPTIONS de capacidade.
+		var preflight = mockMvc.perform(MockMvcRequestBuilders.options("/s3/" + b + "/x.txt")
+			.header("Origin", "https://enois.ia.br").header("Access-Control-Request-Method", "PUT"))
+			.andReturn().getResponse();
+		assertThat(preflight.getStatus()).as("o navegador pergunta antes de ter credencial").isLessThan(300);
+
+		// Verbo que o gateway não tem: 405 no XML do S3, com Allow — não JSON do Control Plane.
+		for (String verbo : new String[] { "PATCH", "TRACE" }) {
+			MockHttpServletRequestBuilder v = MockMvcRequestBuilders.request(
+				org.springframework.http.HttpMethod.valueOf(verbo), "/s3/" + b + "/x.txt");
+			assinar(v, SECRET, shaVazio());
+			var resp = mockMvc.perform(v).andReturn().getResponse();
+			assertThat(resp.getStatus()).as(verbo).isEqualTo(405);
+			assertThat(resp.getContentType()).as(verbo).contains("xml");
+			assertThat(resp.getHeader("Allow")).as(verbo + " Allow").isNotNull().contains("GET");
+			assertThat(resp.getContentAsString()).as(verbo).contains("MethodNotAllowed")
+				.doesNotContain("\"code\"");
+		}
 	}
 
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */

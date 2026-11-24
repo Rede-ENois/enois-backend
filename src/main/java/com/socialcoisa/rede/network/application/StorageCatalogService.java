@@ -1360,16 +1360,53 @@ public class StorageCatalogService {
 		}
 	}
 
+	/**
+	 * O nome do bucket como o S3 o aceita — e não só "curto e sem maiúscula".
+	 *
+	 * <p><b>Antes:</b> bastava ter até 63 caracteres e nenhuma maiúscula. {@code com_underline},
+	 * {@code com espaço}, {@code traco-no-fim-}, {@code -traco-no-inicio} e {@code dois..pontos} criavam
+	 * bucket com {@code 200}; o S3 recusa os cinco. O nome do bucket é o <b>host</b> do virtual-host
+	 * ({@code <bucket>.s3...}), e rótulo DNS não tem {@code _}, espaço, ponto consecutivo, hífen nas
+	 * pontas — o bucket criado assim só falharia no DNS de quem apontasse um cliente de verdade.</p>
+	 *
+	 * <p><b>Agora:</b> 3 a 63 caracteres, começando e terminando por letra ou dígito, só minúscula,
+	 * dígito, hífen e ponto, sem {@code ..}, sem {@code .-}, e sem a forma de um IPv4 (que o S3 reserva
+	 * para o TLS do caminho virtual-host). A mensagem diz qual regra foi violada.</p>
+	 */
 	private static void validateBucket(String bucket) {
-		if (bucket == null || bucket.isBlank() || bucket.length() > 63) {
+		if (bucket == null || bucket.isBlank()) {
 			throw new ApiException(400, "STORAGE_BUCKET_INVALID", "Nome de bucket invalido.");
+		}
+		if (bucket.length() < 3 || bucket.length() > 63) {
+			throw new ApiException(400, "STORAGE_BUCKET_INVALID",
+				"Nome de bucket deve ter de 3 a 63 caracteres.");
 		}
 		if (!bucket.equals(bucket.toLowerCase(java.util.Locale.ROOT))) {
 			// S3 proíbe maiúscula em bucket: aceitar aqui daria duas grafias para o mesmo bucket, e a
 			// única de `bucket` na tabela passaria a esconder colisão.
 			throw new ApiException(400, "STORAGE_BUCKET_INVALID", "O nome do bucket deve ser minusculo.");
 		}
+		if (!bucket.matches("[a-z0-9.\\-]+")) {
+			throw new ApiException(400, "STORAGE_BUCKET_INVALID",
+				"O nome do bucket aceita apenas minuscula, digito, hifen e ponto.");
+		}
+		if (!bucket.matches("[a-z0-9].*[a-z0-9]")) {
+			throw new ApiException(400, "STORAGE_BUCKET_INVALID",
+				"O nome do bucket deve comecar e terminar com letra ou digito.");
+		}
+		if (bucket.contains("..") || bucket.contains(".-")) {
+			throw new ApiException(400, "STORAGE_BUCKET_INVALID",
+				"O nome do bucket nao aceita ponto consecutivo nem ponto antes de hifen.");
+		}
+		if (IPV4.matcher(bucket).matches()) {
+			throw new ApiException(400, "STORAGE_BUCKET_INVALID",
+				"O nome do bucket nao pode ter a forma de um endereco IPv4.");
+		}
 	}
+
+	/** A forma de um IPv4, que o S3 reserva: um bucket assim colidiria com um host de TLS. */
+	private static final java.util.regex.Pattern IPV4 =
+		java.util.regex.Pattern.compile("\\d{1,3}(\\.\\d{1,3}){3}");
 
 	/**
 	 * Grava o corpo num temporário e o devolve medido. O leitor não guarda o objeto inteiro em
