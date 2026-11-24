@@ -2618,6 +2618,75 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		assertThat(mockMvc.perform(troca).andReturn().getResponse().getStatus()).isEqualTo(400);
 	}
 
+	/**
+	 * `x-amz-server-side-encryption` é recusado, não aceito em silêncio.
+	 *
+	 * <p><b>Antes:</b> o cabeçalho era ignorado e o `PUT` respondia `200`. O cliente que manda
+	 * `AES256` (ou o SDK com SSE configurado, que manda por padrão) ficava com a certeza de que o
+	 * objeto estava cifrado na rede: a `HEAD` não devolvia nem o cabeçalho, e o objeto estava em claro.
+	 * O objeto era servido sem cifra e a única prova do contrário era a ausência do eco na leitura.</p>
+	 *
+	 * <p><b>Agora:</b> `501 NotImplemented` antes de abrir upload, no `PUT`, no
+	 * `CreateMultipartUpload` e no `CopyObject` — a chave não aparece. É a mesma regra do subrecurso
+	 * não implementado: prometer uma garantia que o gateway não cumpre é pior que dizer que não
+	 * cumpre. `x-amz-server-side-encryption-aws-kms-key-id` junto do pedido cai na mesma recusa.</p>
+	 */
+	@Test
+	void sse_declarado_no_put_e_recusado_e_nao_grava() throws Exception {
+		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		MockHttpServletRequestBuilder r = put("/s3/" + bucket + "/sse/x.txt").content(corpo)
+			.header("x-amz-server-side-encryption", "AES256");
+		assinar(r, SECRET, shaDe("abc"));
+		var resposta = mockMvc.perform(r).andReturn().getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(501);
+		assertThat(resposta.getContentAsString()).contains("<Code>NotImplemented</Code>");
+		assertThat(resposta.getContentAsString()).contains("x-amz-server-side-encryption");
+		MockHttpServletRequestBuilder g = get("/s3/" + bucket + "/sse/x.txt");
+		assinar(g, SECRET, shaVazio());
+		var lido = mockMvc.perform(g).andReturn();
+		var doLido = lido.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lido)).andReturn().getResponse() : lido.getResponse();
+		// O bucket não ganhou dono porque a recusa vem antes de abrir: a leitura é `403`, não `200`.
+		assertThat(doLido.getStatus()).as("objeto gravado com SSE pedido e nao aplicado").isNotEqualTo(200);
+		assertThat(doLido.getContentAsString()).doesNotContain("abc");
+
+		// `aws:kms` com a chave: mesma recusa, e o multipart também.
+		MockHttpServletRequestBuilder kms = put("/s3/" + bucket + "/sse/y.txt").content(corpo)
+			.header("x-amz-server-side-encryption", "aws:kms")
+			.header("x-amz-server-side-encryption-aws-kms-key-id", "chave-1");
+		assinar(kms, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(kms).andReturn().getResponse().getStatus()).isEqualTo(501);
+		// E a cópia: o `PUT` com `x-amz-copy-source` também não pode prometer cifra.
+		String origemBucket = "sseo" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		MockHttpServletRequestBuilder origem = put("/s3/" + origemBucket + "/origem.txt").content(corpo);
+		assinar(origem, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(origem).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder copia = put("/s3/" + origemBucket + "/copia.txt").content(new byte[0])
+			.header("x-amz-copy-source", "/" + origemBucket + "/origem.txt")
+			.header("x-amz-server-side-encryption", "AES256");
+		assinar(copia, SECRET, shaVazio());
+		var recusaCopia = mockMvc.perform(copia).andReturn().getResponse();
+		assertThat(recusaCopia.getStatus()).as(recusaCopia.getContentAsString()).isEqualTo(501);
+		MockHttpServletRequestBuilder gCopia = get("/s3/" + origemBucket + "/copia.txt");
+		assinar(gCopia, SECRET, shaVazio());
+		var lidaCopia = mockMvc.perform(gCopia).andReturn();
+		var doCopia = lidaCopia.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lidaCopia)).andReturn().getResponse() : lidaCopia.getResponse();
+		assertThat(doCopia.getStatus()).as("copia gravada com SSE pedido").isNotEqualTo(200);
+
+		MockHttpServletRequestBuilder mp = MockMvcRequestBuilders.post("/s3/" + bucket + "/sse/multi.bin?uploads")
+			.header("x-amz-server-side-encryption", "AES256");
+		assinar(mp, SECRET, shaVazio());
+		assertThat(mockMvc.perform(mp).andReturn().getResponse().getStatus()).isEqualTo(501);
+
+		// Sem o cabeçalho, o PUT continua gravando — num bucket novo, porque o `bucket` do teste nunca
+		// ganhou dono: todos os `PUT` acima foram recusados antes de abrir.
+		String outroBucket = "sse" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		MockHttpServletRequestBuilder sem = put("/s3/" + outroBucket + "/sse/z.txt").content(corpo);
+		assinar(sem, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(sem).andReturn().getResponse().getStatus()).isEqualTo(200);
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {
