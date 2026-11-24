@@ -7,6 +7,10 @@ name: Build, Push and Deploy
 # execute arbitrary workflow code with access to our infra ("pwn request"). The deploy job
 # below is gated to `push`/`workflow_dispatch` on protected branches only. PR validation
 # always runs on GitHub-hosted `ubuntu-latest` and never touches secrets.
+#
+# DECISÃO (2026-11-24, dona do projeto): a suíte roda no PR. `qa` e `main` são branches
+# protegidas — nelas só entra merge de PR, então o código que chega no push já passou pelo gate
+# e não repete a suíte. O `schema-check` continua no push como gate de migração antes do deploy.
 
 on:
   push:
