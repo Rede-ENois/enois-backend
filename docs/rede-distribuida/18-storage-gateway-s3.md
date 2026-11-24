@@ -1666,7 +1666,7 @@ Vermelho antes: `200` no `Expires`. Mutações **4/4**: sem a guarda no `PUT`; s
 (o teste passou a cobri-la depois que a mutação sobreviveu); guarda que aceita tudo; lista reduzida só
 ao `Expires`.
 
-## 4.58 Recusa do `CompleteMultipartUpload` também é XML (ciclo 148)
+## 4.61 Recusa do `CompleteMultipartUpload` também é XML (ciclo 148)
 
 O `CompleteMultipartUpload` era a única rota do multipart que chamava o serviço sem traduzir a recusa:
 
