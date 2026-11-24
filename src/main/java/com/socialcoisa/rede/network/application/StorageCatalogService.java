@@ -224,7 +224,7 @@ public class StorageCatalogService {
 			boolean cobrarPartesReservadas) {
 		validateBucket(bucket);
 		validateKey(key);
-		String type = contentType == null || contentType.isBlank() ? "application/octet-stream" : contentType;
+		String type = validatedContentType(contentType);
 		Instant now = clock.instant();
 		// A cota é cobrada <b>antes</b> de tudo: um objeto PENDING derrubado pela cota deixaria a
 		// chave ocupada até virar lápide, e o upload seguinte do mesmo participante não poderia
@@ -330,6 +330,27 @@ public class StorageCatalogService {
 	public static final int MAX_CLIENT_HEADER = 200;
 
 	/**
+	 * O {@code Content-Type} declarado, ou o padrão quando veio vazio.
+	 *
+	 * <p><b>Antes:</b> o tipo era gravado como veio. Um {@code Content-Type} com {@code \r\n} ficava
+	 * na linha e voltava no {@code HEAD}/{@code GET} como <b>dois</b> campos do cabeçalho — a injeção
+	 * só não virava cabeçalho novo porque o Tomcat descarta o que não é nome de campo válido. Valor
+	 * de qualquer tamanho também passava, e o tipo voltava inteiro na leitura.</p>
+	 *
+	 * <p><b>Agora:</b> a mesma regra do {@code Cache-Control}/{@code Content-Disposition}: cabe em
+	 * {@link #MAX_CLIENT_HEADER} e não tem caractere de controle; senão {@code 400} antes de abrir
+	 * upload. É o tipo que o cliente declarou, porque é ele que o navegador usa para decidir o que
+	 * fazer com o arquivo (§4.50).</p>
+	 */
+	public static String validatedContentType(String contentType) {
+		if (contentType == null || contentType.isBlank()) {
+			return "application/octet-stream";
+		}
+		validateHeaderValue(contentType, "Content-Type");
+		return contentType;
+	}
+
+	/**
 	 * Valida o {@code Cache-Control} e o {@code Content-Disposition} declarados no upload.
 	 *
 	 * <p>Os valores voltam como cabeçalho HTTP no GET e no HEAD, e um {@code 
@@ -343,18 +364,23 @@ public class StorageCatalogService {
 			if (valor == null) {
 				continue;
 			}
-			if (valor.length() > MAX_CLIENT_HEADER) {
-				throw new ApiException(400, "InvalidArgument",
-					"Cache-Control e Content-Disposition do objeto cabem em " + MAX_CLIENT_HEADER + " caracteres.");
-			}
-			for (int i = 0; i < valor.length(); i++) {
-				if (valor.charAt(i) < 0x20 && valor.charAt(i) != '\t' || valor.charAt(i) == 0x7f) {
-					throw new ApiException(400, "InvalidArgument",
-						"Cache-Control e Content-Disposition nao aceitam caractere de controle.");
-				}
-			}
+			validateHeaderValue(valor, "Cache-Control e Content-Disposition");
 		}
 		return new ClientHeaders(metadata, cacheControl, contentDisposition);
+	}
+
+	/** Tamanho e caracteres de controle de um valor que volta como cabeçalho HTTP. */
+	private static void validateHeaderValue(String valor, String nome) {
+		if (valor.length() > MAX_CLIENT_HEADER) {
+			throw new ApiException(400, "InvalidArgument",
+				nome + " do objeto cabe em " + MAX_CLIENT_HEADER + " caracteres.");
+		}
+		for (int i = 0; i < valor.length(); i++) {
+			if (valor.charAt(i) < 0x20 && valor.charAt(i) != '\t' || valor.charAt(i) == 0x7f) {
+				throw new ApiException(400, "InvalidArgument",
+					nome + " nao aceitam caractere de controle.");
+			}
+		}
 	}
 
 	/**

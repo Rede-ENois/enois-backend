@@ -2735,6 +2735,71 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		}
 	}
 
+	/**
+	 * `Content-Type` com caractere de controle ou gigante é `400` antes de gravar.
+	 *
+	 * <p><b>Antes:</b> o tipo era gravado como veio. {@code Content-Type: text/plain\r\nX-Injetado: 1}
+	 * ficava na linha e voltava no {@code HEAD}/{@code GET} como <b>dois</b> campos do cabeçalho — só
+	 * não virava cabeçalho novo porque o Tomcat descarta o que não é nome de campo válido; a linha
+	 * extra ia junto com o valor. Um tipo de 300 caracteres também era gravado e devolvido inteiro. O
+	 * {@code Cache-Control} e o {@code Content-Disposition} já tinham essa regra; o tipo, que é o que
+	 * o navegador usa para decidir o que fazer com o arquivo, não tinha.</p>
+	 *
+	 * <p><b>Agora:</b> valor com caractere de controle ou acima do teto do cabeçalho é {@code 400
+	 * InvalidArgument} antes de abrir upload — a chave não aparece. Vazio continua virando
+	 * {@code application/octet-stream}, e {@code text/plain; charset=utf-8} é gravado e ecoado
+	 * literalmente.</p>
+	 */
+	@Test
+	void content_type_com_controle_ou_gigante_e_recusado_e_nao_grava() throws Exception {
+		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		String b = "ct" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		String[] invalidos = { "text/plain\r\nX-Injetado: 1", "text/plain\nX-Injetado: 1",
+			"text/plain\u0000", "a/" + "b".repeat(300) };
+		for (int i = 0; i < invalidos.length; i++) {
+			MockHttpServletRequestBuilder r = put("/s3/" + b + "/inv" + i + ".txt").content(corpo)
+				.contentType(invalidos[i]);
+			assinar(r, SECRET, shaDe("abc"));
+			var recusa = mockMvc.perform(r).andReturn().getResponse();
+			assertThat(recusa.getStatus()).as(invalidos[i]).isEqualTo(400);
+			assertThat(recusa.getContentAsString()).contains("<Code>InvalidArgument</Code>");
+		}
+		// Nenhuma das recusadas existe: o bucket ainda não tem dono (o primeiro PUT foi recusado).
+		String outro = "cto" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+
+		// Sem `Content-Type` (cliente cru) o tipo é o mesmo padrão do resto do módulo; com parâmetro,
+		// volta literal.
+		// Tipo em branco (o que o SDK manda quando o cliente não escolhe um) vira o padrão do módulo.
+		MockHttpServletRequestBuilder semTipo = put("/s3/" + outro + "/sem.txt").content(corpo)
+			.contentType("   ");
+		assinar(semTipo, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(semTipo).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder hBranco = MockMvcRequestBuilders.head("/s3/" + outro + "/sem.txt");
+		assinar(hBranco, SECRET, shaVazio());
+		assertThat(mockMvc.perform(hBranco).andReturn().getResponse().getHeader("Content-Type"))
+			.isEqualTo("application/octet-stream");
+		MockHttpServletRequestBuilder hSem = MockMvcRequestBuilders.head("/s3/" + outro + "/sem.txt");
+		assinar(hSem, SECRET, shaVazio());
+		assertThat(mockMvc.perform(hSem).andReturn().getResponse().getHeader("Content-Type"))
+			.isEqualTo("application/octet-stream");
+		MockHttpServletRequestBuilder parametro = put("/s3/" + outro + "/com.txt").content(corpo)
+			.contentType("text/plain; charset=utf-8");
+		assinar(parametro, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(parametro).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder h = MockMvcRequestBuilders.head("/s3/" + outro + "/com.txt");
+		assinar(h, SECRET, shaVazio());
+		var head = mockMvc.perform(h).andReturn().getResponse();
+		assertThat(head.getHeader("Content-Type")).isEqualTo("text/plain; charset=utf-8");
+
+		// E a cópia com `REPLACE` também não grava tipo inválido.
+		MockHttpServletRequestBuilder copia = put("/s3/" + outro + "/copia.txt").content(new byte[0])
+			.header("x-amz-copy-source", "/" + outro + "/com.txt")
+			.header("x-amz-metadata-directive", "REPLACE")
+			.contentType("text/plain\r\nX-Injetado: 1");
+		assinar(copia, SECRET, shaVazio());
+		assertThat(mockMvc.perform(copia).andReturn().getResponse().getStatus()).isEqualTo(400);
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {
