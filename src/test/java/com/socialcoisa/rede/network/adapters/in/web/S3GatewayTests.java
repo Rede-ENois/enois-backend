@@ -3185,6 +3185,136 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		assinar(d304, SECRET, shaVazio());
 		assertThat(mockMvc.perform(d304).andReturn().getResponse().getStatus()).isEqualTo(304);
 	}
+
+	/**
+	 * `ListMultipartUploads` honra `max-uploads` e pagina — não devolve tudo e diz "acabou".
+	 *
+	 * <p><b>Antes:</b> a rota listava todos os uploads abertos do dono e respondia
+	 * {@code <IsTruncated>false</IsTruncated>} <b>sempre</b>. {@code max-uploads=1},
+	 * {@code max-uploads=0}, {@code max-uploads=abc}, {@code key-marker} e {@code upload-id-marker}
+	 * eram ignorados, e o {@code <MaxUploads>} do S3 não aparecia na resposta:</p>
+	 *
+	 * <pre>
+	 * GET /s3/&lt;b&gt;?uploads&amp;max-uploads=1   (três uploads abertos)
+	 * → 200  &lt;IsTruncated&gt;false&lt;/IsTruncated&gt; &lt;Upload&gt;zeta&lt;/Upload&gt;&lt;Upload&gt;alfa&lt;/Upload&gt;&lt;Upload&gt;meio&lt;/Upload&gt;
+	 * </pre>
+	 *
+	 * <p>Dois defeitos de uma vez. O teto não é honrado — quem pediu 1 e recebeu 3 não tem como saber
+	 * que a resposta foi maior que o pedido —, e o {@code IsTruncated} fixo em {@code false} mente
+	 * sobre a completude. Um cliente que pagina pelo {@code <NextKeyMarker>} nunca o recebe (não há
+	 * campo) e conclui que viu tudo. O {@code aws s3api list-multipart-uploads} não consegue paginar
+	 * um bucket com muitos uploads abortados, e é justamente a ferramenta de quem vai limpá-los.</p>
+	 *
+	 * <p><b>Agora:</b> teto de 1000 (o padrão do S3) aplicado de fato, {@code <MaxUploads>} ecoa o
+	 * valor aplicado (como o {@code ListParts} faz desde §4.54), {@code <IsTruncated>} reflete se há
+	 * mais, e o {@code <NextKeyMarker>}/{@code <NextUploadIdMarker>} aparecem para continuar. Os
+	 * marcadores são a posição na ordenação {@code (key, upload_id)} que a listagem já usava, e um
+	 * {@code max-uploads} ilegível ou negativo cai no teto, nunca corta tudo (§4.64).</p>
+	 */
+	@Test
+	void list_multipart_uploads_honra_max_uploads_e_pagina() throws Exception {
+		String b = "mu" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		MockHttpServletRequestBuilder semeia = put("/s3/" + b + "/semente.txt");
+		assinar(semeia, SECRET, shaDe("semente"));
+		assertThat(mockMvc.perform(semeia.content("semente".getBytes(StandardCharsets.UTF_8))).andReturn()
+			.getResponse().getStatus()).isEqualTo(200);
+		String[] chaves = { "zeta.bin", "alfa.bin", "meio.bin", "meio.bin" };
+		java.util.List<String> idsDaChaveRepetida = new java.util.ArrayList<>();
+		for (String chave : chaves) {
+			MockHttpServletRequestBuilder c = MockMvcRequestBuilders.post("/s3/" + b + "/" + chave + "?uploads");
+			assinar(c, SECRET, shaVazio());
+			var aberto = mockMvc.perform(c).andReturn().getResponse();
+			assertThat(aberto.getStatus()).isEqualTo(200);
+			if (chave.equals("meio.bin")) {
+				idsDaChaveRepetida.add(entre(aberto.getContentAsString(), "<UploadId>", "</UploadId>"));
+			}
+		}
+		// Dois uploads na MESMA chave: é o caso em que o `upload-id-marker` decide qual vem depois.
+		assertThat(idsDaChaveRepetida).hasSize(2).doesNotHaveDuplicates();
+
+		// Sem parâmetro: os quatro, completo e sem NextKeyMarker.
+		String tudo = listarUploads(b, "");
+		assertThat(ocorrencias(tudo, "<Upload>")).as(tudo).isEqualTo(4);
+		assertThat(tudo).contains("<IsTruncated>false</IsTruncated>").doesNotContain("<NextKeyMarker>")
+			.contains("<MaxUploads>1000</MaxUploads>");
+
+		// max-uploads=1: UM upload, truncado, com o marcador para continuar. Pagina-se até o fim.
+		java.util.List<String> vista = new java.util.ArrayList<>();
+		String keyMarker = null;
+		String idMarker = null;
+		for (int pagina = 0; pagina < 10; pagina++) {
+			String consulta = "&max-uploads=1" + (keyMarker == null ? ""
+				: "&key-marker=" + java.net.URLEncoder.encode(keyMarker, StandardCharsets.UTF_8)
+					+ "&upload-id-marker=" + java.net.URLEncoder.encode(idMarker, StandardCharsets.UTF_8));
+			String xml = listarUploads(b, consulta);
+			assertThat(ocorrencias(xml, "<Upload>")).as("página " + pagina + ": " + xml).isEqualTo(1);
+			vista.add(entre(xml, "<Key>", "</Key>"));
+			if (xml.contains("<IsTruncated>false</IsTruncated>")) {
+				break;
+			}
+			keyMarker = entre(xml, "<NextKeyMarker>", "</NextKeyMarker>");
+			idMarker = entre(xml, "<NextUploadIdMarker>", "</NextUploadIdMarker>");
+		}
+		assertThat(vista).as("a paginação viu os quatro, sem repetir")
+			.containsExactly("alfa.bin", "meio.bin", "meio.bin", "zeta.bin");
+
+		// `key-marker` sozinho aponta para a chave INTEIRA: a próxima página começa nas chaves maiores.
+		// A chave do marcador ainda tem um upload pendente e ele não pode voltar.
+		String semId = listarUploads(b, "&key-marker=meio.bin");
+		assertThat(ocorrencias(semId, "<Upload>")).as(semId).isEqualTo(1);
+		assertThat(entre(semId, "<Key>", "</Key>")).isEqualTo("zeta.bin");
+		assertThat(listarUploads(b, "&key-marker=zeta.bin")).as("depois da última chave").doesNotContain("<Upload>");
+
+		// `key-marker` + `upload-id-marker`: na mesma chave, só os uploads com id maior.
+		String primeiroMeio = idsDaChaveRepetida.stream().min(String::compareTo).orElseThrow();
+		String segundoMeio = idsDaChaveRepetida.stream().max(String::compareTo).orElseThrow();
+		String depoisDoPrimeiro = listarUploads(b, "&key-marker=meio.bin&upload-id-marker=" + primeiroMeio);
+		assertThat(depoisDoPrimeiro).as(depoisDoPrimeiro).contains("<Key>meio.bin</Key>").contains(segundoMeio)
+			.doesNotContain(primeiroMeio).contains("<Key>zeta.bin</Key>");
+		String depoisDoSegundo = listarUploads(b, "&key-marker=meio.bin&upload-id-marker=" + segundoMeio);
+		assertThat(depoisDoSegundo).as(depoisDoSegundo).doesNotContain("<Key>meio.bin</Key>")
+			.contains("<Key>zeta.bin</Key>");
+
+		// max-uploads=0 e ilegível: teto aplicado, nada perdido, nunca zero na resposta.
+		for (String valor : new String[] { "0", "-1", "abc" }) {
+			String xml = listarUploads(b, "&max-uploads=" + valor);
+			assertThat(ocorrencias(xml, "<Upload>")).as("max-uploads=" + valor).isEqualTo(4);
+			assertThat(xml).as("max-uploads=" + valor).contains("<MaxUploads>1000</MaxUploads>");
+		}
+
+		// Acima do teto: o `<MaxUploads>` é o valor aplicado (1000), não o pedido.
+		String acimaDoTeto = listarUploads(b, "&max-uploads=5000");
+		assertThat(ocorrencias(acimaDoTeto, "<Upload>")).as(acimaDoTeto).isEqualTo(4);
+		assertThat(acimaDoTeto).contains("<MaxUploads>1000</MaxUploads>").doesNotContain("<MaxUploads>5000</MaxUploads>");
+		// Abaixo do teto, o pedido é o aplicado.
+		assertThat(listarUploads(b, "&max-uploads=2")).contains("<MaxUploads>2</MaxUploads>")
+			.contains("<IsTruncated>true</IsTruncated>");
+	}
+
+	private String listarUploads(String b, String consulta) throws Exception {
+		MockHttpServletRequestBuilder l = get("/s3/" + b + "?uploads" + consulta);
+		assinar(l, SECRET, shaVazio());
+		var rr = mockMvc.perform(l).andReturn();
+		var resp = rr.getRequest().isAsyncStarted() ? mockMvc.perform(asyncDispatch(rr)).andReturn() : rr;
+		assertThat(resp.getResponse().getStatus()).as(resp.getResponse().getContentAsString()).isEqualTo(200);
+		return resp.getResponse().getContentAsString();
+	}
+
+	private static int ocorrencias(String texto, String alvo) {
+		int n = 0;
+		for (int i = texto.indexOf(alvo); i >= 0; i = texto.indexOf(alvo, i + 1)) {
+			n++;
+		}
+		return n;
+	}
+
+	private static String entre(String texto, String abre, String fecha) {
+		int a = texto.indexOf(abre);
+		assertThat(a).as(abre + " em " + texto).isNotNegative();
+		return texto.substring(a + abre.length(), texto.indexOf(fecha, a));
+	}
+
+	
 	/**
 	 * Nome que o S3 não aceita como bucket é `400`, seja qual for a rota.
 	 *

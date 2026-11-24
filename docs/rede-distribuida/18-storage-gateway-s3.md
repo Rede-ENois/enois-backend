@@ -1918,7 +1918,47 @@ divergentes × com e sem `Range`, no `GET` e no `HEAD` → `412` com o `ETag` e 
 condição; `GET` sem repassar o cabeçalho; `HEAD` sem repassar; aceitando qualquer ETag "parecido";
 aceitando o validador fraco do ETag atual.
 
+## 4.64 `ListMultipartUploads` honra `max-uploads` e pagina (ciclo 151)
 
+A rota listava **todos** os uploads abertos do dono e respondia `IsTruncated=false` sempre:
+
+```
+GET /s3/<b>?uploads&max-uploads=1     (três uploads abertos)
+→ 200 <IsTruncated>false</IsTruncated>
+      <Upload>zeta.bin</Upload><Upload>alfa.bin</Upload><Upload>meio.bin</Upload>
+      (sem <MaxUploads>, sem <NextKeyMarker>)
+```
+
+Dois defeitos de uma vez. O teto não era honrado — quem pediu 1 não tem como saber que a resposta
+veio maior —, e o `IsTruncated` fixo em `false` mentia sobre a completude. Como o `<NextKeyMarker>`
+nunca existia, um cliente que pagina por ele **nunca** tem próxima página e conclui que viu tudo. O
+`aws s3api list-multipart-uploads`, que é a ferramenta de quem vai limpar uploads abortados, não
+conseguia varrer um bucket com muitos.
+
+### Agora
+
+| parâmetro | antes | agora |
+|---|---|---|
+| `max-uploads=1` (três abertos) | os três, `IsTruncated=false` | um, `IsTruncated=true`, `NextKeyMarker`/`NextUploadIdMarker` |
+| `max-uploads=0`, `-1`, `abc` | os três | os três (teto 1000), `<MaxUploads>1000</MaxUploads>` |
+| sem `max-uploads` | os três, sem `<MaxUploads>` | os três, `<MaxUploads>1000</MaxUploads>` |
+| `key-marker` + `upload-id-marker` | ignorados | posição na ordem `(key, upload_id)` |
+| `prefix` | filtrava | filtra (igual) |
+
+- O teto é 1000, como o do `ListParts` (§4.54), e o `<MaxUploads>` ecoa o **valor aplicado**, não o
+  pedido — a mesma regra do `<MaxParts>`.
+- A paginação é na ordem do S3, `(key, upload_id)`: no marcador de uma chave, a próxima página traz o
+  resto das chaves maiores e, na mesma chave, só os uploads com id maior. Paginar com
+  `max-uploads=1` viu os três, sem repetir e sem perder.
+- O banco faz `limit teto + 1` para saber se há próxima página sem uma segunda contagem.
+
+**Verificação:** `S3GatewayTests` **+1** (`list_multipart_uploads_honra_max_uploads_e_pagina`): sem
+parâmetro → três, `<MaxUploads>1000</MaxUploads>` e sem marcador; `max-uploads=1` paginando até o fim
+→ uma linha por página, `IsTruncated=true` com marcador, e as três chaves na ordem `alfa`,
+`meio`, `zeta`; `max-uploads=0/-1/abc` → três e `<MaxUploads>1000</MaxUploads>`. Vermelho antes: sem
+`<MaxUploads>` e os três com `max-uploads=1`. Mutações **5/5**: teto ignorado (o bug);
+`IsTruncated` fixo em `false`; sem os marcadores; marcador só pela chave; `max-uploads=0` cortando
+tudo em vez de cair no teto.
 
 ## 5. Erros
 
