@@ -1713,6 +1713,8 @@ inválidos recusados na criação e no `PUT` de objeto, com `InvalidBucketName`,
 cinco nomes válidos (inclusive os limites de 3 e 63) aceitos. Vermelho antes: `200` em
 `com_underline`. Mutações **5/5**: alfabeto aceitando `_` e espaço; sem a regra das pontas; sem a dos
 pontos; sem a do IPv4; sem a tradução para `InvalidBucketName`.
+A classe passa a ter `@Tag("critico")`: o gate de PR roda os 78 testes do gateway em vez de ficar cego
+para eles.
 
 ## 5. Erros
 
