@@ -1722,12 +1722,17 @@ class S3GatewayController {
 		// cliente que pagina recebia a mesma parte na primeira e na segunda página, e a lista sem
 		// `IsTruncated` fazia ele parar convencido de que tinha visto tudo.
 		int depoisDe = inteiroOu(query.get("part-number-marker"), 0);
+		// `max-parts` ausente ou ilegível é 1000; zero ou negativo cai no mesmo 1000 (o serviço já
+		// aplica esse piso). O `<MaxParts>` ecoa o valor APLICADO, não o pedido: antes, com
+		// `max-parts=0` a resposta dizia `<MaxParts>0</MaxParts>` e mandava 1000 partes — o XML se
+		// contradizia, e o cliente que soma páginas pelo `<MaxParts>` contava errado (§4.54).
 		int maxParts = inteiroOu(query.get("max-parts"), 1000);
-		var pagina = multipart.paginaDePartes(upload.uploadId(), depoisDe, maxParts);
+		int tetoDePartes = maxParts <= 0 ? 1000 : Math.min(maxParts, 1000);
+		var pagina = multipart.paginaDePartes(upload.uploadId(), depoisDe, tetoDePartes);
 		S3Xml xml = new S3Xml();
 		xml.root("ListPartsResult").element("Bucket", bucket).element("Key", upload.key())
 			.element("UploadId", upload.uploadId())
-			.element("PartNumberMarker", depoisDe).element("MaxParts", Math.max(1, Math.min(maxParts, 1000)))
+			.element("PartNumberMarker", depoisDe).element("MaxParts", tetoDePartes)
 			.element("IsTruncated", pagina.truncada());
 		for (var part : pagina.partes()) {
 			xml.open("Part").element("PartNumber", part.number()).element("ETag", "\"" + part.sha256() + "\"")

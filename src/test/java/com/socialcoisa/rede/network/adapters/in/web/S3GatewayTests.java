@@ -3101,6 +3101,58 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 	}
 
 	/**
+	 * `MaxParts` do `ListParts` é o teto que valeu de verdade — não um pedido que não foi honrado.
+	 *
+	 * <p><b>Antes:</b> o {@code <MaxParts>} era o pedido cru, não o valor aplicado. Com
+	 * {@code max-parts=0} (ou negativo) a página vinha com as partes todas, cortada em 1000, e o XML
+	 * dizia {@code <MaxParts>0</MaxParts>}; com {@code max-parts=5000} a página vinha cortada em 1000 e
+	 * o XML dizia 5000. Nos dois o XML se contradizia: quem pagina somando o que o {@code <MaxParts>}
+	 * promete conta errado quantas páginas faltam, e quem vê {@code MaxParts 0} com partes dentro
+	 * conclui que a resposta está quebrada.</p>
+	 *
+	 * <p><b>Agora:</b> {@code <MaxParts>} é o valor aplicado — o mesmo que corta a página: ausente ou
+	 * ilegível é 1000, zero e negativo recusam para 1000, acima de 1000 é 1000.</p>
+	 */
+	@Test
+	void list_parts_ecoa_o_max_parts_aplicado_nao_o_pedido() throws Exception {
+		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		String b = "mp" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		MockHttpServletRequestBuilder r = put("/s3/" + b + "/x.txt").content(corpo);
+		assinar(r, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(r).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder c = MockMvcRequestBuilders.post("/s3/" + b + "/mp.bin?uploads");
+		assinar(c, SECRET, shaVazio());
+		String uploadId = java.util.regex.Pattern.compile("<UploadId>([^<]*)</UploadId>")
+			.matcher(mockMvc.perform(c).andReturn().getResponse().getContentAsString()).results()
+			.map(m -> m.group(1)).findFirst().orElseThrow();
+		for (int n = 1; n <= 3; n++) {
+			MockHttpServletRequestBuilder p2 = put("/s3/" + b + "/mp.bin?uploadId=" + uploadId + "&partNumber=" + n)
+				.content(corpo);
+			assinar(p2, SECRET, shaDe("abc"));
+			assertThat(mockMvc.perform(p2).andReturn().getResponse().getStatus()).isEqualTo(200);
+		}
+
+		String[][] casos = { { "max-parts=2", "2" }, { "max-parts=0", "1000" }, { "max-parts=-1", "1000" },
+			{ "max-parts=5000", "1000" }, { "max-parts=abc", "1000" } };
+		for (String[] caso : casos) {
+			MockHttpServletRequestBuilder l = get("/s3/" + b + "/mp.bin?uploadId=" + uploadId + "&" + caso[0]);
+			assinar(l, SECRET, shaVazio());
+			var resp = mockMvc.perform(l).andReturn().getResponse();
+			assertThat(resp.getStatus()).as(caso[0]).isEqualTo(200);
+			String xml = resp.getContentAsString();
+			assertThat(xml).as(caso[0]).contains("<MaxParts>" + caso[1] + "</MaxParts>");
+			// A página nunca entrega mais partes do que o `<MaxParts>` ecoado diz.
+			long entregues = java.util.regex.Pattern.compile("<PartNumber>").matcher(xml).results().count();
+			assertThat(entregues).as(caso[0]).isLessThanOrEqualTo(Long.parseLong(caso[1]));
+		}
+		// `max-parts=2` com marcador pagina de dois em dois: o que o `<MaxParts>` ecoa É o corte.
+		MockHttpServletRequestBuilder l = get("/s3/" + b + "/mp.bin?uploadId=" + uploadId
+			+ "&max-parts=2&part-number-marker=1");
+		assinar(l, SECRET, shaVazio());
+		String xml = mockMvc.perform(l).andReturn().getResponse().getContentAsString();
+		assertThat(xml).contains("<MaxParts>2</MaxParts>").contains("<PartNumber>2</PartNumber>")
+			.contains("<PartNumber>3</PartNumber>").doesNotContain("<PartNumber>1</PartNumber>")
+			.contains("<IsTruncated>false</IsTruncated>");
 	 * `continuation-token` que o gateway não emitiu (ou de outro bucket) é `400`, não lista vazia.
 	 *
 	 * <p><b>Antes:</b> o token era o <b>último nome emitido</b>, em claro, e o gateway o usava como

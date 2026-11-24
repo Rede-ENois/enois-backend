@@ -1670,6 +1670,38 @@ Vermelho antes: `200` no `Expires`. Mutações **4/4**: sem a guarda no `PUT`; s
 (o teste passou a cobri-la depois que a mutação sobreviveu); guarda que aceita tudo; lista reduzida só
 ao `Expires`.
 
+## 4.59 `<MaxParts>` do `ListParts` é o valor aplicado, não o pedido (ciclo 144)
+
+O `<MaxParts>` da resposta era o `max-parts` **cru** da consulta, enquanto o corte da página usava o
+valor normalizado:
+
+```
+GET ...?uploadId=<id>&max-parts=0      → <MaxParts>0</MaxParts>    e a página traz as partes (até 1000)
+GET ...?uploadId=<id>&max-parts=5000   → <MaxParts>5000</MaxParts> e a página traz no máximo 1000
+```
+
+Nos dois o XML se contradiz. Com `MaxParts 0` e partes dentro, o cliente conclui que a resposta está
+quebrada; com `MaxParts 5000` numa página de 1000, quem soma o que a resposta promete conta errado
+quantas páginas faltam e para cedo.
+
+### Agora
+
+| `max-parts` | página | antes `<MaxParts>` | agora |
+|---|---|---|---|
+| ausente | até 1000 | 1000 | 1000 |
+| `2` | até 2 | 2 | 2 |
+| `0`, `-1` | até 1000 (piso) | 0, -1 | **1000** |
+| `abc` (ilegível) | até 1000 | 1000 | 1000 |
+| `5000` | até 1000 (teto) | 5000 | **1000** |
+
+O `<MaxParts>` é o mesmo número que corta a página — calculado uma vez, em `tetoDePartes`, e usado nos
+dois lugares. Paginação, `part-number-marker`, `IsTruncated` e `NextPartNumberMarker` não mudam.
+
+**Verificação:** `S3GatewayTests` **+1** (`list_parts_ecoa_o_max_parts_aplicado_nao_o_pedido`): cinco
+valores de `max-parts`, cada um conferindo o `<MaxParts>` ecoado **e** que a página não entrega mais
+partes do que ele diz; e a página com marcador. Vermelho antes: `MaxParts 0` com 3 partes. Mutações
+**4/4**: ecoando o pedido cru; sem o teto de 1000; sem o piso de zero/negativo; página cortada em 1000
+com o eco dizendo outro número.
 ## 4.58 `continuation-token` é opaco e assinado (ciclo 143)
 
 O token era o **último nome emitido**, em claro, usado como posição sem conferência:
