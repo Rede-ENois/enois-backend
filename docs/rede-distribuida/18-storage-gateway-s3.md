@@ -1462,22 +1462,25 @@ corrupção só aparecia ao abrir.
 | `If-Range` | antes | agora |
 |---|---|---|
 | ausente | `206` | `206` |
-| ETag da versão servida | `206` | `206` |
+| ETag forte da versão servida | `206` | `206` |
 | ETag de outra versão | `206` (pedaço errado) | `200`, corpo inteiro, sem `Content-Range` |
+| ETag fraco do atual (`W/"..."`) | `206` | `200`, corpo inteiro: a comparação é forte (RFC 9110 §13.1.5) |
 | data anterior ao `Last-Modified` | `206` | `200`, corpo inteiro |
 | data no mesmo segundo do `Last-Modified` | `206` | `206` (HTTP-date tem granularidade de segundo) |
-| data posterior | `206` | `206` |
+| data posterior | `206` | `200`, corpo inteiro |
 | valor que não é ETag nem data (`lixo`) | `206` | `200`, corpo inteiro |
 
-- A data é comparada em segundos, como o `If-Modified-Since` (o `304` condicional): o `updated_at` tem
-  milissegundos e o cliente devolve o `Last-Modified` que recebeu, truncado.
+- A data é comparada por **igualdade**, em segundos — a granularidade do HTTP-date. Não é `<=`: uma
+  data futura não valida o recurso (o cliente devolve o `Last-Modified` que recebeu, truncado).
+- O ETag é comparado com a regra **forte**: `W/"..."` nunca corresponde ao ETag forte da representação.
 - A regra vive no serviço de conteúdo, não no gateway: o parâmetro novo de `respond` tem a
   sobrecarga antiga para o chamador que não passa `If-Range`.
 
 **Verificação:** `S3GatewayTests` **+1** (`if_range_validador_que_nao_bate_devolve_o_corpo_inteiro`):
-ETag certo → `206` com `01234`; ETag de outra versão, data antiga, data futura e `lixo` → `200` com
-`0123456789` e sem `Content-Range`. Vermelho antes: `206` nos quatro. Mutações **3/3**: gateway sem
-passar o cabeçalho; comparação de data desligada; comparação de ETag desligada.
+ETag forte certo e data exata → `206` com `01234`; ETag de outra versão, ETag fraco do atual, data
+antiga, data futura (`Fri, 01 Jan 2100`) e `lixo` → `200` com `0123456789` e sem `Content-Range`.
+Vermelho antes: `206` no ETag fraco e na data futura. A classe passa a ter `@Tag("critico")`: o gate
+de PR roda os 77 testes do gateway em vez de ficar cego para eles. Sem migração.
 
 ## 4.48 SSE declarado é recusado, não ignorado (ciclo 138)
 
