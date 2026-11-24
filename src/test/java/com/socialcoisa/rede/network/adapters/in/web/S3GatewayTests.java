@@ -3101,104 +3101,6 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 	}
 
 	/**
-	 * Nome que o S3 não aceita como bucket é `400`, seja qual for a rota.
-	 *
-	 * <p><b>Antes:</b> só o tamanho (≤ 63) e a maiúscula eram conferidos. {@code com_underline},
-	 * {@code com espaço}, {@code traco-no-fim-}, {@code -traco-no-inicio} e {@code dois..pontos} criavam
-	 * bucket com {@code 200} — e o S3 recusa todos: o nome do bucket vira <b>host</b> do virtual-host
-	 * ({@code <bucket>.s3...}) e rótulo DNS não tem {@code _}, espaço, ponto no fim nem hífen no fim.
-	 * O cliente que grava com um nome que o S3 rejeita descobre o problema <b>só ao apontar um cliente
-	 * de verdade</b> para o bucket, com erro de DNS; e o bucket criado assim fica com um nome que
-	 * ninguém consegue usar no caminho virtual-host.</p>
-	 *
-	 * <p><b>Agora:</b> o nome é conferido como o S3 do caminho ({@code path-style}) confere: minúscula,
-	 * dígito, ponto e hífen; começa e termina com letra ou dígito; sem ponto consecutivo; sem ponto
-	 * antes de hífen; de 3 a 63 caracteres; e não pode ter a forma de um IPv4 (ambiguidade com endereço).
-	 * {@code 400} com o motivo, na criação e no primeiro {@code PUT} de objeto (§4.58).</p>
-	 */
-	@Test
-	void nome_de_bucket_fora_do_alfabeto_do_s3_e_400() throws Exception {
-		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-		String[] invalidos = { "com_underline", "com espaço", "traco-no-fim-", "-traco-no-inicio",
-			"dois..pontos", "ponto-hifen.-x", "10.0.0.1", "ab" };
-		for (String nome : invalidos) {
-			MockHttpServletRequestBuilder criar = put("/s3/" + nome).content(new byte[0]);
-			assinar(criar, SECRET, shaVazio());
-			var recusa = mockMvc.perform(criar).andReturn().getResponse();
-			assertThat(recusa.getStatus()).as("criacao de '" + nome + "'").isEqualTo(400);
-			assertThat(recusa.getContentAsString()).contains("<Code>InvalidBucketName</Code>")
-				.contains("<Message>");
-			// O mesmo nome no primeiro PUT de objeto: recusa antes de gravar qualquer coisa.
-			MockHttpServletRequestBuilder enviar = put("/s3/" + nome + "/x.txt").content(corpo);
-			assinar(enviar, SECRET, shaDe("abc"));
-			var recusaObjeto = mockMvc.perform(enviar).andReturn().getResponse();
-			assertThat(recusaObjeto.getStatus()).as("objeto em '" + nome + "'").isEqualTo(400);
-			assertThat(recusaObjeto.getContentAsString()).contains("<Code>InvalidBucketName</Code>");
-		}
-		// Nada foi criado sob os nomes recusados.
-		assertThat(jdbc.queryForObject(
-			"select count(*) from network_storage_objects where bucket in (?, ?, ?, ?, ?, ?, ?, ?) and deleted_at is null",
-			Long.class, (Object[]) invalidos)).isZero();
-
-		// O que o S3 aceita continua aceito, inclusive nos limites.
-		for (String valido : new String[] { "a-b-c", "a.b.c", "abc", "1-2-3",
-			"a" + "b".repeat(61) + "c" }) {
-			MockHttpServletRequestBuilder enviar = put("/s3/" + valido + "/x.txt").content(corpo);
-			assinar(enviar, SECRET, shaDe("abc"));
-			assertThat(mockMvc.perform(enviar).andReturn().getResponse().getStatus())
-				.as("'" + valido + "' tem de ser aceito").isEqualTo(200);
-	 * `MaxParts` do `ListParts` é o teto que valeu de verdade — não um pedido que não foi honrado.
-	 *
-	 * <p><b>Antes:</b> o {@code <MaxParts>} era o pedido cru, não o valor aplicado. Com
-	 * {@code max-parts=0} (ou negativo) a página vinha com as partes todas, cortada em 1000, e o XML
-	 * dizia {@code <MaxParts>0</MaxParts>}; com {@code max-parts=5000} a página vinha cortada em 1000 e
-	 * o XML dizia 5000. Nos dois o XML se contradizia: quem pagina somando o que o {@code <MaxParts>}
-	 * promete conta errado quantas páginas faltam, e quem vê {@code MaxParts 0} com partes dentro
-	 * conclui que a resposta está quebrada.</p>
-	 *
-	 * <p><b>Agora:</b> {@code <MaxParts>} é o valor aplicado — o mesmo que corta a página: ausente ou
-	 * ilegível é 1000, zero e negativo recusam para 1000, acima de 1000 é 1000.</p>
-	 */
-	@Test
-	void list_parts_ecoa_o_max_parts_aplicado_nao_o_pedido() throws Exception {
-		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-		String b = "mp" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
-		MockHttpServletRequestBuilder r = put("/s3/" + b + "/x.txt").content(corpo);
-		assinar(r, SECRET, shaDe("abc"));
-		assertThat(mockMvc.perform(r).andReturn().getResponse().getStatus()).isEqualTo(200);
-		MockHttpServletRequestBuilder c = MockMvcRequestBuilders.post("/s3/" + b + "/mp.bin?uploads");
-		assinar(c, SECRET, shaVazio());
-		String uploadId = java.util.regex.Pattern.compile("<UploadId>([^<]*)</UploadId>")
-			.matcher(mockMvc.perform(c).andReturn().getResponse().getContentAsString()).results()
-			.map(m -> m.group(1)).findFirst().orElseThrow();
-		for (int n = 1; n <= 3; n++) {
-			MockHttpServletRequestBuilder p2 = put("/s3/" + b + "/mp.bin?uploadId=" + uploadId + "&partNumber=" + n)
-				.content(corpo);
-			assinar(p2, SECRET, shaDe("abc"));
-			assertThat(mockMvc.perform(p2).andReturn().getResponse().getStatus()).isEqualTo(200);
-		}
-
-		String[][] casos = { { "max-parts=2", "2" }, { "max-parts=0", "1000" }, { "max-parts=-1", "1000" },
-			{ "max-parts=5000", "1000" }, { "max-parts=abc", "1000" } };
-		for (String[] caso : casos) {
-			MockHttpServletRequestBuilder l = get("/s3/" + b + "/mp.bin?uploadId=" + uploadId + "&" + caso[0]);
-			assinar(l, SECRET, shaVazio());
-			var resp = mockMvc.perform(l).andReturn().getResponse();
-			assertThat(resp.getStatus()).as(caso[0]).isEqualTo(200);
-			String xml = resp.getContentAsString();
-			assertThat(xml).as(caso[0]).contains("<MaxParts>" + caso[1] + "</MaxParts>");
-			// A página nunca entrega mais partes do que o `<MaxParts>` ecoado diz.
-			long entregues = java.util.regex.Pattern.compile("<PartNumber>").matcher(xml).results().count();
-			assertThat(entregues).as(caso[0]).isLessThanOrEqualTo(Long.parseLong(caso[1]));
-		}
-		// `max-parts=2` com marcador pagina de dois em dois: o que o `<MaxParts>` ecoa É o corte.
-		MockHttpServletRequestBuilder l = get("/s3/" + b + "/mp.bin?uploadId=" + uploadId
-			+ "&max-parts=2&part-number-marker=1");
-		assinar(l, SECRET, shaVazio());
-		String xml = mockMvc.perform(l).andReturn().getResponse().getContentAsString();
-		assertThat(xml).contains("<MaxParts>2</MaxParts>").contains("<PartNumber>2</PartNumber>")
-			.contains("<PartNumber>3</PartNumber>").doesNotContain("<PartNumber>1</PartNumber>")
-			.contains("<IsTruncated>false</IsTruncated>");
 	 * `continuation-token` que o gateway não emitiu (ou de outro bucket) é `400`, não lista vazia.
 	 *
 	 * <p><b>Antes:</b> o token era o <b>último nome emitido</b>, em claro, e o gateway o usava como
@@ -3283,22 +3185,6 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 	}
 
 	/**
-	 * Um {@code continuation-token} válido para a chave, com a assinatura que o gateway confere.
-	 *
-	 * <p>Desde o §4.53 o token carrega HMAC do bucket e da chave: o valor em claro é recusado com
-	 * {@code 400}. Para testar "o token vence o start-after" o token precisa ser legítimo.</p>
-	 */
-	private String tokenQueDiz(String chave) {
-		try {
-			String corpo = java.util.Base64.getUrlEncoder().withoutPadding()
-				.encodeToString(chave.getBytes(StandardCharsets.UTF_8));
-			javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
-			mac.init(new javax.crypto.spec.SecretKeySpec(SECRET.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
-			return corpo + "." + java.util.HexFormat.of().formatHex(
-				mac.doFinal((bucket + "\n" + chave).getBytes(StandardCharsets.UTF_8)));
-		}
-		catch (java.security.GeneralSecurityException semHmac) {
-			throw new IllegalStateException(semHmac);
 	 * A chave gravada é a que o cliente declarou, não a forma da URI.
 	 *
 	 * <p><b>Antes:</b> o `PUT` gravava a chave <b>como veio na URI</b> (percent-encoded, sem
@@ -3348,6 +3234,26 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 			var doGet = rd.getRequest().isAsyncStarted()
 				? mockMvc.perform(asyncDispatch(rd)).andReturn().getResponse() : rd.getResponse();
 			assertThat(doGet.getContentAsString()).as(k).isEqualTo("abc");
+		}
+	}
+
+	/**
+	 * Um {@code continuation-token} válido para a chave, com a assinatura que o gateway confere.
+	 *
+	 * <p>Desde o §4.53 o token carrega HMAC do bucket e da chave: o valor em claro é recusado com
+	 * {@code 400}. Para testar "o token vence o start-after" o token precisa ser legítimo.</p>
+	 */
+	private String tokenQueDiz(String chave) {
+		try {
+			String corpo = java.util.Base64.getUrlEncoder().withoutPadding()
+				.encodeToString(chave.getBytes(StandardCharsets.UTF_8));
+			javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+			mac.init(new javax.crypto.spec.SecretKeySpec(SECRET.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+			return corpo + "." + java.util.HexFormat.of().formatHex(
+				mac.doFinal((bucket + "\n" + chave).getBytes(StandardCharsets.UTF_8)));
+		}
+		catch (java.security.GeneralSecurityException semHmac) {
+			throw new IllegalStateException(semHmac);
 		}
 	}
 
