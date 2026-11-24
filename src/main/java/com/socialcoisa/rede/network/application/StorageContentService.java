@@ -127,7 +127,7 @@ public class StorageContentService {
 			String ifModifiedSince, String ifRange, String ifMatch, boolean abrirCopia) {
 		// `If-Match` antes de abrir a cópia (§4.57): a pergunta é sobre a versão do catálogo, e o
 		// 412 não precisa do corpo. O ETag é o mesmo que a resposta devolve.
-		if (ifMatch != null && !ifMatch.isBlank() && !matches(etag(object), ifMatch)) {
+		if (ifMatch != null && !ifMatch.isBlank() && !matchesStrong(etag(object), ifMatch)) {
 			return resposta(412).header(HttpHeaders.ETAG, etag(object)).build();
 		}
 		List<StoragePlacement> location = storage.location(object.id());
@@ -199,7 +199,7 @@ public class StorageContentService {
 	/** O {@code HEAD} com {@code If-Match} (§4.57): a mesma pergunta do {@code GET}, sem corpo. */
 	public ResponseEntity<StreamingResponseBody> head(StorageObject object, String ifNoneMatch, String ifModifiedSince,
 			String ifMatch) {
-		if (ifMatch != null && !ifMatch.isBlank() && !matches(etag(object), ifMatch)) {
+		if (ifMatch != null && !ifMatch.isBlank() && !matchesStrong(etag(object), ifMatch)) {
 			return resposta(412).header(HttpHeaders.ETAG, etag(object)).build();
 		}
 		List<StoragePlacement> location = storage.location(object.id());
@@ -351,6 +351,27 @@ public class StorageContentService {
 		}
 		return !object.updatedAt().truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
 			.isAfter(pedido.truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
+	}
+
+	/**
+	 * {@code If-Match} contra o ETag com comparação FORTE (RFC 9110 §13.1.1). Um ETag fraco não
+	 * corresponde ao ETag forte da representação atual, ainda que o valor opaco seja o mesmo:
+	 * {@code W/"abc"} não casa com {@code "abc"}. {@code *} casa porque o objeto existe.
+	 */
+	static boolean matchesStrong(String etag, String ifMatch) {
+		if (ifMatch == null || ifMatch.isBlank()) {
+			return false;
+		}
+		for (String candidate : ifMatch.split(",")) {
+			String item = candidate.trim();
+			if ("*".equals(item)) {
+				return true;
+			}
+			if (!item.startsWith("W/") && etag.equals(item)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** {@code If-None-Match} contra o ETag; {@code *} e a lista separada por vírgula valem. */

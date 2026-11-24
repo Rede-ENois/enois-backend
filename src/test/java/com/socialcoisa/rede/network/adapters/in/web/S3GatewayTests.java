@@ -3045,7 +3045,8 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		assertThat(etag).isNotNull().startsWith("\"");
 
 		// Divergente, com e sem faixa, no GET e no HEAD.
-		for (String ifMatch : new String[] { "\"velho\"", "\"outro-1\"", "\"velho\", \"tambem-velho\"", "W/\"velho\"" }) {
+		for (String ifMatch : new String[] { "\"velho\"", "\"outro-1\"", "\"velho\", \"tambem-velho\"", "W/\"velho\"",
+				"W/" + etag }) {
 			for (String faixa : new String[] { null, "bytes=0-3" }) {
 				MockHttpServletRequestBuilder g = get("/s3/" + b + "/x.txt").header("If-Match", ifMatch);
 				if (faixa != null) {
