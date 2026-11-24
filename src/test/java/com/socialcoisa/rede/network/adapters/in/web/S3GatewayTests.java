@@ -3097,6 +3097,59 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		}
 	}
 
+	/**
+	 * A chave gravada é a que o cliente declarou, não a forma da URI.
+	 *
+	 * <p><b>Antes:</b> o `PUT` gravava a chave <b>como veio na URI</b> (percent-encoded, sem
+	 * decodificar). `PUT /b/café.txt` guardava `caf%C3%A9.txt`; a listagem devolvia essa string e o
+	 * `GET` com a chave listada até funcionava — mas o <b>nome do objeto</b> era outro. O nome no S3 é
+	 * o que o cliente declarou: quem compara a `<Key>` com o nome do arquivo local, gera URL a partir
+	 * dela ou usa a chave numa cópia por cabeçalho (`x-amz-copy-source`, que decodifica) apontava
+	 * para um objeto que não existe. E não havia como gravar `caf%C3%A9.txt` de propósito: toda
+	 * chave com `%` virava outra.</p>
+	 *
+	 * <p><b>Agora:</b> a chave é decodificada da URI no `PUT` (e no multipart), como o caminho do S3:
+	 * `%C3%A9` é `é`, `%20` é espaço, `+` continua `+` (em caminho, `+` não é espaço). A listagem
+	 * devolve o nome declarado, e o `GET` aceita a mesma forma.</p>
+	 */
+	@Test
+	void chave_gravada_e_o_nome_declarado_nao_a_forma_da_uri() throws Exception {
+		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		String b = "enc" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		String[] chaves = { "café.txt", "com espaço.txt", "a&b<c>.txt", "plus+1.txt", "sinal%40literal.txt",
+			"ja%20codado.txt", "cem%25+e+mais.txt" };
+		for (String k : chaves) {
+			MockHttpServletRequestBuilder r = put("/s3/" + b + "/" + k).content(corpo);
+			assinar(r, SECRET, shaDe("abc"));
+			assertThat(mockMvc.perform(r).andReturn().getResponse().getStatus()).as(k).isEqualTo(200);
+		}
+		var gravadas = jdbc.queryForList(
+			"select object_key from network_storage_objects where bucket = ? and deleted_at is null", String.class, b);
+		assertThat(gravadas).containsExactlyInAnyOrder(chaves);
+		// `%` do nome não vira escape: `sinal%40literal.txt` NÃO é `sinal@literal.txt`.
+		assertThat(gravadas).contains("sinal%40literal.txt", "ja%20codado.txt")
+			.doesNotContain("sinal@literal.txt", "ja codado.txt");
+
+		// A listagem traz o mesmo nome, e a chave listada é a que o GET entrega.
+		MockHttpServletRequestBuilder l = get("/s3/" + b + "?list-type=2");
+		assinar(l, SECRET, shaVazio());
+		var lr = mockMvc.perform(l).andReturn();
+		var resp = lr.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lr)).andReturn().getResponse() : lr.getResponse();
+		String xml = resp.getContentAsString();
+		assertThat(xml).contains("<Key>café.txt</Key>").contains("<Key>com espaço.txt</Key>")
+			.contains("<Key>a&amp;b&lt;c&gt;.txt</Key>").contains("<Key>plus+1.txt</Key>")
+			.contains("<Key>sinal%40literal.txt</Key>").contains("<Key>ja%20codado.txt</Key>");
+		for (String k : chaves) {
+			MockHttpServletRequestBuilder g = get("/s3/" + b + "/" + k);
+			assinar(g, SECRET, shaVazio());
+			var rd = mockMvc.perform(g).andReturn();
+			var doGet = rd.getRequest().isAsyncStarted()
+				? mockMvc.perform(asyncDispatch(rd)).andReturn().getResponse() : rd.getResponse();
+			assertThat(doGet.getContentAsString()).as(k).isEqualTo("abc");
+		}
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {

@@ -1631,6 +1631,7 @@ URL emitida pelo gateway como controle, re-assinada para `ec2` e recusada), mais
 URL pré-assinada sem a guarda (mutações 1–4 sobreviveram até o teste de integração da URL existir);
 cabeçalho sem a guarda.
 
+
 ## 4.57 Metadado de objeto que o gateway não guarda é `501` (ciclo 141)
 
 Três cabeçalhos declarados no upload eram aceitos e descartados — não há coluna para eles na linha do
@@ -1668,6 +1669,48 @@ os três → `501` nomeando o cabeçalho e nada criado; `x-amz-meta-*` + `Cache-
 Vermelho antes: `200` no `Expires`. Mutações **4/4**: sem a guarda no `PUT`; sem a guarda no multipart
 (o teste passou a cobri-la depois que a mutação sobreviveu); guarda que aceita tudo; lista reduzida só
 ao `Expires`.
+
+## 4.58 A chave gravada é o nome declarado, não a forma da URI (ciclo 142)
+
+A chave era gravada **como vinha na URI**, percent-encoded:
+
+```
+PUT /s3/<b>/café.txt        → linha com object_key = caf%C3%A9.txt
+GET /s3/<b>?list-type=2     → <Key>caf%C3%A9.txt</Key>
+```
+
+O `GET` com a chave listada até funcionava (o caminho volta codificado e casa com a linha), então o
+defeito não aparecia num teste de ida e volta. O nome do objeto, porém, era outro: quem compara a
+`<Key>` com o nome do arquivo local, monta URL a partir dela ou usa a chave numa **cópia por
+cabeçalho** — que decodifica — apontava para um objeto que não existe. E não havia como gravar
+`caf%C3%A9.txt` de propósito: todo `%` do nome virava outra chave.
+
+### Agora
+
+| chave na URI | antes (`object_key`) | agora |
+|---|---|---|
+| `café.txt` (URI `caf%C3%A9.txt`) | `caf%C3%A9.txt` | `café.txt` |
+| `com espaço.txt` | `com%20espa%C3%A7o.txt` | `com espaço.txt` |
+| `a&b<c>.txt` (URI `a&b%3Cc%3E.txt`) | `a&b%3Cc%3E.txt` | `a&b<c>.txt` |
+| `plus+1.txt` | `plus+1.txt` | `plus+1.txt` (`+` **não** é espaço em caminho) |
+| `sinal%40literal.txt` | `sinal%40literal.txt` | `sinal%40literal.txt` (`%25` é o escape do `%`) |
+| `ja%20codado.txt` | `ja%20codado.txt` | `ja%20codado.txt` |
+| percent-encoding inválido (`%zz`) | `%zz` | `%zz`, sem decodificar (recusa) |
+
+- A decodificação é a do **caminho**, não a de formulário: `+` fica `+`. Passa pela mesma regra do
+  `x-amz-copy-source`, que já decodificava.
+- Vale para o `PUT`, o multipart e o `DELETE` (todos por `keyOf`); a listagem, o `HEAD` e o `GET`
+  passam a usar o mesmo nome, então a `<Key>` listada **é** alcançável.
+- A chave que já existia codificada na base continua acessível pelo caminho codificado: a URI que
+  gera `caf%C3%A9.txt` decodifica para `café.txt`, e quem manda `%25` obtém o literal — a linha
+  antiga `caf%C3%A9.txt` deixa de ser a mesma chave. Objetos gravados antes desta versão com
+  caractere especial passam a pedir a URI com `%25` para serem lidos.
+
+**Verificação:** `S3GatewayTests` **+1** (`chave_gravada_e_o_nome_declarado_nao_a_forma_da_uri`): a
+coluna `object_key` tem exatamente os sete nomes declarados (inclusive `%` e `+`); a listagem traz o
+mesmo nome com `&amp;`/`&lt;` só como XML; o `GET` com a chave listada devolve o corpo. Vermelho antes:
+as linhas com `%C3%A9`, `%20` e `%3C`. Mutações **4/4**: sem decodificar; `+` virando espaço;
+decodificar duas vezes (`%25`→`%`→outra coisa); `%25` único tratado à parte.
 
 ## 5. Erros
 
