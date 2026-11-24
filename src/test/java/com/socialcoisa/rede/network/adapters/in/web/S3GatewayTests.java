@@ -3080,6 +3080,92 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		}
 	}
 
+	/**
+	 * Toda recusa do multipart sai no XML do S3, inclusive no {@code CompleteMultipartUpload}.
+	 *
+	 * <p><b>Antes:</b> {@code CreateMultipartUpload}, {@code UploadPart}, {@code UploadPartCopy} e
+	 * {@code Abort} traduziam a recusa do serviço pelo {@code noVocabularioDoS3}, mas o {@code Complete}
+	 * chamava {@code multipart.complete} direto. A recusa mais comum dele — {@code EntityTooSmall},
+	 * parte menor que 5 MiB que não é a última — saía como <b>JSON do Control Plane</b>:</p>
+	 *
+	 * <pre>
+	 * POST /s3/<b>/mp.bin?uploadId=...  → 400 {"code":"EntityTooSmall","message":"..."}
+	 * </pre>
+	 *
+	 * <p>O SDK procura {@code <Code>} no XML para decidir o que fazer (o {@code EntityTooSmall} diz
+	 * "reescreva as partes"); com JSON ele trata como corpo que não sabe ler — e o cliente que
+	 * refaz o upload inteiro por não reconhecer o erro é o sintoma. A recusa do {@code Complete} é a
+	 * única do fluxo que o cliente vê depois de ter enviado todos os bytes: é a que mais precisa da
+	 * mensagem certa.</p>
+	 *
+	 * <p><b>Agora:</b> XML em todas as recusas do {@code Complete} — {@code EntityTooSmall},
+	 * {@code InvalidPart}, {@code NoSuchUpload}, {@code MalformedXML} —, com {@code Code} do S3 e
+	 * {@code 4xx} (§4.4.57). O sucesso continua igual.</p>
+	 */
+	@Test
+	void complete_multipart_recusa_em_xml_e_nao_em_json() throws Exception {
+		byte[] corpo = "abcdefghij".getBytes(StandardCharsets.UTF_8);
+		String b = "cm" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		MockHttpServletRequestBuilder r = put("/s3/" + b + "/x.txt").content(corpo);
+		assinar(r, SECRET, shaDe("abcdefghij"));
+		assertThat(mockMvc.perform(r).andReturn().getResponse().getStatus()).isEqualTo(200);
+
+		MockHttpServletRequestBuilder c = MockMvcRequestBuilders.post("/s3/" + b + "/mp.bin?uploads");
+		assinar(c, SECRET, shaVazio());
+		String uploadId = java.util.regex.Pattern.compile("<UploadId>([^<]*)</UploadId>")
+			.matcher(mockMvc.perform(c).andReturn().getResponse().getContentAsString()).results()
+			.map(m -> m.group(1)).findFirst().orElseThrow();
+		String[] partes = { "abcde", "fghij" };
+		String[] etags = new String[2];
+		for (int n = 1; n <= 2; n++) {
+			MockHttpServletRequestBuilder p2 = put("/s3/" + b + "/mp.bin?uploadId=" + uploadId + "&partNumber=" + n)
+				.content(partes[n - 1].getBytes(StandardCharsets.UTF_8));
+			assinar(p2, SECRET, shaDe(partes[n - 1]));
+			etags[n - 1] = mockMvc.perform(p2).andReturn().getResponse().getHeader("ETag");
+		}
+		// Duas partes de 5 bytes: a primeira é menor que 5 MiB e não é a última.
+		String xml = "<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>" + etags[0]
+			+ "</ETag></Part><Part><PartNumber>2</PartNumber><ETag>" + etags[1]
+			+ "</ETag></Part></CompleteMultipartUpload>";
+		MockHttpServletRequestBuilder co = MockMvcRequestBuilders.post("/s3/" + b + "/mp.bin?uploadId=" + uploadId)
+			.content(xml.getBytes(StandardCharsets.UTF_8)).contentType("application/xml");
+		assinar(co, SECRET, shaDe(xml));
+		var recusa = mockMvc.perform(co).andReturn().getResponse();
+		assertThat(recusa.getStatus()).isEqualTo(400);
+		assertThat(recusa.getContentType()).as("o SDK le o Code do XML").contains("xml");
+		assertThat(recusa.getContentAsString()).startsWith("<?xml").contains("<Code>EntityTooSmall</Code>")
+			.doesNotContain("\"code\"");
+		assertThat(recusa.getContentAsString()).contains("<RequestId>");
+
+		// ETag que não é de nenhuma parte: `InvalidPart`, no mesmo XML.
+		String errado = "<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>\""
+			+ "0".repeat(64) + "\"</ETag></Part></CompleteMultipartUpload>";
+		MockHttpServletRequestBuilder co2 = MockMvcRequestBuilders.post("/s3/" + b + "/mp.bin?uploadId=" + uploadId)
+			.content(errado.getBytes(StandardCharsets.UTF_8)).contentType("application/xml");
+		assinar(co2, SECRET, shaDe(errado));
+		var recusaParte = mockMvc.perform(co2).andReturn().getResponse();
+		assertThat(recusaParte.getContentType()).as(recusaParte.getContentAsString()).contains("xml");
+		assertThat(recusaParte.getContentAsString()).startsWith("<?xml").contains("<Code>")
+			.doesNotContain("\"code\"");
+
+		// UploadId que não existe: NoSuchUpload em XML, nunca JSON.
+		MockHttpServletRequestBuilder co3 = MockMvcRequestBuilders.post("/s3/" + b + "/mp.bin?uploadId=mpu_inexistente")
+			.content(xml.getBytes(StandardCharsets.UTF_8)).contentType("application/xml");
+		assinar(co3, SECRET, shaDe(xml));
+		var semUpload = mockMvc.perform(co3).andReturn().getResponse();
+		assertThat(semUpload.getStatus()).isEqualTo(404);
+		assertThat(semUpload.getContentAsString()).contains("<Code>NoSuchUpload</Code>").doesNotContain("\"code\"");
+
+		// Corpo que não é o XML: MalformedXML em XML.
+		String lixo = "<CompleteMultipartUpload><Part>1</PartX></CompleteMultipartUpload>";
+		MockHttpServletRequestBuilder co4 = MockMvcRequestBuilders.post("/s3/" + b + "/mp.bin?uploadId=" + uploadId)
+			.content(lixo.getBytes(StandardCharsets.UTF_8)).contentType("application/xml");
+		assinar(co4, SECRET, shaDe(lixo));
+		var malformado = mockMvc.perform(co4).andReturn().getResponse();
+		assertThat(malformado.getStatus()).isEqualTo(400);
+		assertThat(malformado.getContentAsString()).contains("<Code>").doesNotContain("\"code\"");
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {
