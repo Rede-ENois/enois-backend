@@ -27,6 +27,7 @@ import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.http.HttpServletRequest;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -60,6 +61,7 @@ import com.socialcoisa.rede.shared.security.SecretCipher;
  */
 @SpringBootTest
 @AutoConfigureMockMvc
+@Tag("critico")
 class S3GatewayTests {
 
 	private static final String ACCESS_KEY_PREFIX = "AKIAENOIS";
@@ -2698,17 +2700,20 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 	 * e o resto de outra, e a corrupção só aparecia ao abrir o arquivo.</p>
 	 *
 	 * <p><b>Agora:</b> com {@code If-Range} em ETag, a faixa é aplicada só quando o ETag é o da versão
-	 * servida; senão {@code 200} com o corpo inteiro. Com data, vale {@code Last-Modified} &lt;=
-	 * aquela data. Validador que não é nem ETag nem data ({@code lixo}) cai no corpo inteiro, como no
-	 * S3.</p>
+	 * servida, em comparação forte: {@code W/} não casa com o ETag forte. Com data, vale apenas a data
+	 * exata do {@code Last-Modified} (HTTP-date tem granularidade de segundo); data futura não vale.
+	 * Validador que não é nem ETag nem data ({@code lixo}) cai no corpo inteiro, como no S3.</p>
 	 */
 	@Test
 	void if_range_validador_que_nao_bate_devolve_o_corpo_inteiro() throws Exception {
 		gravar("ifr/a.txt", "0123456789");
 		MockHttpServletRequestBuilder h = MockMvcRequestBuilders.head("/s3/" + bucket + "/ifr/a.txt");
 		assinar(h, SECRET, shaVazio());
-		String etag = mockMvc.perform(h).andReturn().getResponse().getHeader("ETag");
+		var cabecalhos = mockMvc.perform(h).andReturn().getResponse();
+		String etag = cabecalhos.getHeader("ETag");
+		String lastModified = cabecalhos.getHeader("Last-Modified");
 		assertThat(etag).isNotNull();
+		assertThat(lastModified).isNotNull();
 
 		// ETag da versão servida: a faixa vale.
 		MockHttpServletRequestBuilder bate = get("/s3/" + bucket + "/ifr/a.txt")
@@ -2720,9 +2725,21 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		assertThat(doBate.getStatus()).isEqualTo(206);
 		assertThat(doBate.getContentAsString()).isEqualTo("01234");
 
-		// ETag de outra versão, data antiga, data futura e lixo: corpo inteiro com 200.
-		for (String validador : new String[] { "\"outro\"", "Wed, 01 Jan 2020 00:00:00 GMT",
-				"Wed, 01 Jan 2100 00:00:00 GMT", "lixo" }) {
+		// A data exata do Last-Modified também vale (o cliente devolve o que recebeu).
+		MockHttpServletRequestBuilder dataBate = get("/s3/" + bucket + "/ifr/a.txt")
+			.header("Range", "bytes=0-4").header("If-Range", lastModified);
+		assinar(dataBate, SECRET, shaVazio());
+		var rd = mockMvc.perform(dataBate).andReturn();
+		var doData = rd.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(rd)).andReturn().getResponse() : rd.getResponse();
+		assertThat(doData.getStatus()).as("If-Range Last-Modified").isEqualTo(206);
+		assertThat(doData.getContentAsString()).isEqualTo("01234");
+
+		// ETag de outra versão, ETag fraco do atual, data antiga, data futura e lixo: corpo inteiro.
+		// A data futura tem de ser um HTTP-date válido: com o dia da semana errado o parser recusa
+		// antes da comparação e o caso não prova nada.
+		for (String validador : new String[] { "\"outro\"", "W/" + etag, "Wed, 01 Jan 2020 00:00:00 GMT",
+				"Fri, 01 Jan 2100 00:00:00 GMT", "lixo" }) {
 			MockHttpServletRequestBuilder naoBate = get("/s3/" + bucket + "/ifr/a.txt")
 				.header("Range", "bytes=0-4").header("If-Range", validador);
 			assinar(naoBate, SECRET, shaVazio());
