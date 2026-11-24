@@ -1691,7 +1691,8 @@ class S3GatewayController {
 		recusarLeituraDeSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		StorageObject object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, keyOf(request)));
 		return comVocabularioDoS3(() -> content.respond(object, request.getHeader(HttpHeaders.RANGE),
-			request.getHeader(HttpHeaders.IF_NONE_MATCH), request.getHeader(HttpHeaders.IF_MODIFIED_SINCE)));
+			request.getHeader(HttpHeaders.IF_NONE_MATCH), request.getHeader(HttpHeaders.IF_MODIFIED_SINCE),
+			request.getHeader("If-Range")));
 	}
 
 	/** HeadObject: mesmos cabeçalhos do GetObject, sem corpo. */

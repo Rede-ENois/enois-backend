@@ -1443,6 +1443,42 @@ errado mantém o conteúdo anterior. Vermelho antes: `200` em todos os casos. Mu
 conferência do digest; algoritmo não conferido aceito; sem a normalização de maiúsculas; comparação
 desligada.
 
+## 4.47 `If-Range` decide se o `Range` vale (ciclo 137)
+
+O cabeçalho que protege um download retomado era ignorado:
+
+```
+GET /s3/<b>/a.txt   Range: bytes=0-4   If-Range: "ETag de OUTRA versão"   → 206, "01234"
+```
+
+O cliente que retoma um download manda `If-Range` com o ETag da versão que começou a baixar. Se o
+objeto foi substituído no meio, o S3 responde `200` com o arquivo **novo e inteiro**, e o cliente
+recomeça. Aqui ele recebia `206` com o pedaço da versão **nova** na posição da velha: o arquivo
+remontado no disco do cliente ficava com os primeiros bytes de uma versão e o resto de outra, e a
+corrupção só aparecia ao abrir.
+
+### Agora
+
+| `If-Range` | antes | agora |
+|---|---|---|
+| ausente | `206` | `206` |
+| ETag da versão servida | `206` | `206` |
+| ETag de outra versão | `206` (pedaço errado) | `200`, corpo inteiro, sem `Content-Range` |
+| data anterior ao `Last-Modified` | `206` | `200`, corpo inteiro |
+| data no mesmo segundo do `Last-Modified` | `206` | `206` (HTTP-date tem granularidade de segundo) |
+| data posterior | `206` | `206` |
+| valor que não é ETag nem data (`lixo`) | `206` | `200`, corpo inteiro |
+
+- A data é comparada em segundos, como o `If-Modified-Since` (o `304` condicional): o `updated_at` tem
+  milissegundos e o cliente devolve o `Last-Modified` que recebeu, truncado.
+- A regra vive no serviço de conteúdo, não no gateway: o parâmetro novo de `respond` tem a
+  sobrecarga antiga para o chamador que não passa `If-Range`.
+
+**Verificação:** `S3GatewayTests` **+1** (`if_range_validador_que_nao_bate_devolve_o_corpo_inteiro`):
+ETag certo → `206` com `01234`; ETag de outra versão, data antiga, data futura e `lixo` → `200` com
+`0123456789` e sem `Content-Range`. Vermelho antes: `206` nos quatro. Mutações **3/3**: gateway sem
+passar o cabeçalho; comparação de data desligada; comparação de ETag desligada.
+
 ## 4.48 SSE declarado é recusado, não ignorado (ciclo 138)
 
 O SDK manda `x-amz-server-side-encryption` quando SSE está configurado. Aqui ele era ignorado:
