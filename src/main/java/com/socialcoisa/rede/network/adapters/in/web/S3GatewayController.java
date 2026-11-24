@@ -835,6 +835,7 @@ class S3GatewayController {
 			+ "' nao e suportada: este gateway so guarda STANDARD, e o objeto nao foi gravado.");
 	}
 
+	/**
 	 * Cabeçalhos de objeto que o cliente declara e que o gateway não guarda.
 	 *
 	 * <p><b>Antes:</b> {@code Expires}, {@code Content-Language} e
@@ -859,6 +860,8 @@ class S3GatewayController {
 
 	/** Metadado de objeto declarado no upload que o catálogo não tem onde guardar (§4.51). */
 	private static final List<String> METADADOS_DE_OBJETO_NAO_GUARDADOS = List.of("Expires",
+		"Content-Language", "x-amz-website-redirect-location");
+
 	/**
 	 * Subrecurso da consulta que o gateway não implementa e que, sem esta guarda, seria gravado.
 	 *
@@ -968,6 +971,8 @@ class S3GatewayController {
 		recusarSseNaoAplicavel(request);
 		// Classe além de STANDARD é recusa antes de abrir, no PUT e na cópia (§4.49).
 		recusarClasseDeArmazenamentoNaoImplementada(request);
+		// Metadado que o catálogo não guarda é recusa antes de abrir, no PUT e na cópia (§4.51).
+		recusarMetadadoDeObjetoNaoGuardado(request);
 		String origemDaCopia = request.getHeader(COPY_SOURCE);
 		if (origemDaCopia != null && !origemDaCopia.isBlank()) {
 			return copiarObjeto(credential, bucket, key, origemDaCopia, request);
@@ -1368,6 +1373,8 @@ class S3GatewayController {
 		recusarSseNaoAplicavel(request);
 		// O multipart também prometeria uma classe que o gateway não faz (§4.49).
 		recusarClasseDeArmazenamentoNaoImplementada(request);
+		// E um metadado que o catálogo não guarda (§4.51).
+		recusarMetadadoDeObjetoNaoGuardado(request);
 		requireBucket(credential, bucket);
 		String key = keyOf(request);
 		String expires = query(request).get("expires");
