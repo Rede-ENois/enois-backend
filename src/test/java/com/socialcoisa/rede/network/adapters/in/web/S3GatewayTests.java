@@ -3375,8 +3375,8 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		MockHttpServletRequestBuilder l = get("/s3/" + b + "/mp.bin?uploadId=" + uploadId
 			+ "&max-parts=2&part-number-marker=1");
 		assinar(l, SECRET, shaVazio());
-		String xml = mockMvc.perform(l).andReturn().getResponse().getContentAsString();
-		assertThat(xml).contains("<MaxParts>2</MaxParts>").contains("<PartNumber>2</PartNumber>")
+		String xmlDaPagina = mockMvc.perform(l).andReturn().getResponse().getContentAsString();
+		assertThat(xmlDaPagina).contains("<MaxParts>2</MaxParts>").contains("<PartNumber>2</PartNumber>")
 			.contains("<PartNumber>3</PartNumber>").doesNotContain("<PartNumber>1</PartNumber>")
 			.contains("<IsTruncated>false</IsTruncated>");
 	}
