@@ -3080,6 +3080,90 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		}
 	}
 
+	/**
+	 * `continuation-token` que o gateway não emitiu (ou de outro bucket) é `400`, não lista vazia.
+	 *
+	 * <p><b>Antes:</b> o token era o <b>último nome emitido</b>, em claro, e o gateway o usava como
+	 * posição sem conferir nada. Qualquer string era aceita como posição: {@code continuation-token=lixo}
+	 * respondia {@code 200} com {@code KeyCount 0}, e o cliente que retoma a paginação conclui que o
+	 * bucket acabou — perde o resto da listagem sem ver erro. Um token de <b>outro bucket</b> também
+	 * servia de posição, então listagens de buckets diferentes misturavam estados.</p>
+	 *
+	 * <p><b>Agora:</b> o token é opaco e assinado com o segredo da credencial e o bucket (HMAC): só
+	 * vale o que este gateway emitiu para este bucket. Token que não confere — lixo, inventado, de
+	 * outro bucket ou de outra credencial — é {@code 400 InvalidArgument}. A paginação normal continua
+	 * andando objeto por objeto.</p>
+	 */
+	@Test
+	void continuation_token_que_o_gateway_nao_emitiu_e_400() throws Exception {
+		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		String b = "tk" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		for (String k : new String[] { "a1.txt", "a2.txt", "a3.txt" }) {
+			MockHttpServletRequestBuilder r = put("/s3/" + b + "/" + k).content(corpo);
+			assinar(r, SECRET, shaDe("abc"));
+			assertThat(mockMvc.perform(r).andReturn().getResponse().getStatus()).isEqualTo(200);
+		}
+		// Token que não veio de nenhuma listagem: recusa em vez de "acabou".
+		for (String token : new String[] { "lixo", "a1.txt", "AAA", "%41%41" }) {
+			MockHttpServletRequestBuilder l = get("/s3/" + b + "?list-type=2&continuation-token=" + token);
+			assinar(l, SECRET, shaVazio());
+			var recusa = mockMvc.perform(l).andReturn().getResponse();
+			assertThat(recusa.getStatus()).as(token).isEqualTo(400);
+			assertThat(recusa.getContentAsString()).contains("<Code>InvalidArgument</Code>");
+		}
+
+		// A paginação normal: três páginas de um, cada uma devolvendo o próximo objeto.
+		String token = null;
+		java.util.List<String> vistos = new java.util.ArrayList<>();
+		for (int volta = 0; volta < 4; volta++) {
+			String url = "/s3/" + b + "?list-type=2&max-keys=1"
+				+ (token == null ? "" : "&continuation-token=" + java.net.URLEncoder.encode(token, StandardCharsets.UTF_8));
+			MockHttpServletRequestBuilder l = get(url);
+			assinar(l, SECRET, shaVazio());
+			var rr = mockMvc.perform(l).andReturn();
+			var resp = rr.getRequest().isAsyncStarted()
+				? mockMvc.perform(asyncDispatch(rr)).andReturn().getResponse() : rr.getResponse();
+			assertThat(resp.getStatus()).as("volta " + volta).isEqualTo(200);
+			String xml = resp.getContentAsString();
+			java.util.regex.Pattern.compile("<Key>([^<]*)</Key>").matcher(xml).results()
+				.map(m -> m.group(1)).forEach(vistos::add);
+			token = java.util.regex.Pattern.compile("<NextContinuationToken>([^<]*)</NextContinuationToken>")
+				.matcher(xml).results().map(m -> m.group(1)).findFirst().orElse(null);
+			if (token == null) {
+				break;
+			}
+		}
+		assertThat(vistos).containsExactly("a1.txt", "a2.txt", "a3.txt");
+		// O token emitido não é o nome do objeto: é opaco.
+		assertThat(vistos).doesNotContain(token);
+
+		// Token de um bucket não vale no outro.
+		String outro = "tk" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		MockHttpServletRequestBuilder r = put("/s3/" + outro + "/z.txt").content(corpo);
+		assinar(r, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(r).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder p1 = get("/s3/" + b + "?list-type=2&max-keys=1");
+		assinar(p1, SECRET, shaVazio());
+		var pr = mockMvc.perform(p1).andReturn();
+		var px = (pr.getRequest().isAsyncStarted() ? mockMvc.perform(asyncDispatch(pr)).andReturn().getResponse()
+			: pr.getResponse()).getContentAsString();
+		String tokenDoB = java.util.regex.Pattern.compile("<NextContinuationToken>([^<]*)</NextContinuationToken>")
+			.matcher(px).results().map(m -> m.group(1)).findFirst().orElse(null);
+		assertThat(tokenDoB).isNotNull();
+		// Assinatura alterada: a forma está certa e a posição existe, mas o gateway não emitiu este
+		// token — só a verificação da assinatura separa os dois casos.
+		char ultimo = tokenDoB.charAt(tokenDoB.length() - 1);
+		String forjado = tokenDoB.substring(0, tokenDoB.length() - 1) + (ultimo == 'a' ? 'b' : 'a');
+		MockHttpServletRequestBuilder pf = get("/s3/" + b + "?list-type=2&continuation-token="
+			+ java.net.URLEncoder.encode(forjado, StandardCharsets.UTF_8));
+		assinar(pf, SECRET, shaVazio());
+		assertThat(mockMvc.perform(pf).andReturn().getResponse().getStatus()).isEqualTo(400);
+		MockHttpServletRequestBuilder p2 = get("/s3/" + outro + "?list-type=2&continuation-token="
+			+ java.net.URLEncoder.encode(tokenDoB, StandardCharsets.UTF_8));
+		assinar(p2, SECRET, shaVazio());
+		assertThat(mockMvc.perform(p2).andReturn().getResponse().getStatus()).isEqualTo(400);
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {
