@@ -3,6 +3,7 @@ package com.socialcoisa.rede.network.adapters.in.web;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
@@ -2324,7 +2325,34 @@ class S3GatewayController {
 		if (slash < 0) {
 			throw s3Error(400, "InvalidRequest", "Informe o bucket e a chave.");
 		}
-		return semBarra.substring(slash + 1);
+		return chaveDeclarada(semBarra.substring(slash + 1));
+	}
+
+	/**
+	 * A chave como o cliente a declarou: o caminho da URI decodificado.
+	 *
+	 * <p><b>Antes:</b> a chave era gravada <b>como veio na URI</b>, percent-encoded:
+	 * {@code PUT /b/café.txt} guardava {@code caf%C3%A9.txt} e a listagem devolvia essa string. O
+	 * nome do objeto no S3 é o declarado — quem compara a {@code <Key>} com o nome local, monta URL
+	 * a partir dela ou usa a chave numa cópia por cabeçalho apontava para outro objeto, e não havia
+	 * como gravar {@code caf%C3%A9.txt} de propósito.</p>
+	 *
+	 * <p><b>Agora:</b> {@code %C3%A9} vira {@code é}, {@code %20} vira espaço e {@code +} continua
+	 * {@code +} (em caminho, {@code +} não é espaço — diferente do formulário). {@code %25} vira o
+	 * {@code %} literal, então a chave que já tem {@code %} é gravável. Percent-encoding inválido é
+	 * recusa e a chave fica como veio (§4.52).</p>
+	 */
+	static String chaveDeclarada(String chaveDaUri) {
+		if (chaveDaUri.indexOf('%') < 0) {
+			return chaveDaUri;
+		}
+		try {
+			return URLDecoder.decode(chaveDaUri.replace("+", "%2B"), StandardCharsets.UTF_8);
+		}
+		catch (IllegalArgumentException percentQuebrado) {
+			// `%` solto ou hexadecimal inválido: a URI não é uma chave; responder como veio é a recusa.
+			return chaveDaUri;
+		}
 	}
 
 	/** O caminho como o protocolo S3 o vê: sem o context path e sem o prefixo `/s3` do gateway. */

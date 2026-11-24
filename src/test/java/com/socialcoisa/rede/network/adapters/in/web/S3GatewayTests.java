@@ -27,6 +27,7 @@ import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.http.HttpServletRequest;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -60,6 +61,7 @@ import com.socialcoisa.rede.shared.security.SecretCipher;
  */
 @SpringBootTest
 @AutoConfigureMockMvc
+@Tag("critico")
 class S3GatewayTests {
 
 	private static final String ACCESS_KEY_PREFIX = "AKIAENOIS";
@@ -2701,17 +2703,20 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 	 * e o resto de outra, e a corrupção só aparecia ao abrir o arquivo.</p>
 	 *
 	 * <p><b>Agora:</b> com {@code If-Range} em ETag, a faixa é aplicada só quando o ETag é o da versão
-	 * servida; senão {@code 200} com o corpo inteiro. Com data, vale {@code Last-Modified} &lt;=
-	 * aquela data. Validador que não é nem ETag nem data ({@code lixo}) cai no corpo inteiro, como no
-	 * S3.</p>
+	 * servida, em comparação forte: {@code W/} não casa com o ETag forte. Com data, vale apenas a data
+	 * exata do {@code Last-Modified} (HTTP-date tem granularidade de segundo); data futura não vale.
+	 * Validador que não é nem ETag nem data ({@code lixo}) cai no corpo inteiro, como no S3.</p>
 	 */
 	@Test
 	void if_range_validador_que_nao_bate_devolve_o_corpo_inteiro() throws Exception {
 		gravar("ifr/a.txt", "0123456789");
 		MockHttpServletRequestBuilder h = MockMvcRequestBuilders.head("/s3/" + bucket + "/ifr/a.txt");
 		assinar(h, SECRET, shaVazio());
-		String etag = mockMvc.perform(h).andReturn().getResponse().getHeader("ETag");
+		var cabecalhos = mockMvc.perform(h).andReturn().getResponse();
+		String etag = cabecalhos.getHeader("ETag");
+		String lastModified = cabecalhos.getHeader("Last-Modified");
 		assertThat(etag).isNotNull();
+		assertThat(lastModified).isNotNull();
 
 		// ETag da versão servida: a faixa vale.
 		MockHttpServletRequestBuilder bate = get("/s3/" + bucket + "/ifr/a.txt")
@@ -2723,9 +2728,21 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		assertThat(doBate.getStatus()).isEqualTo(206);
 		assertThat(doBate.getContentAsString()).isEqualTo("01234");
 
-		// ETag de outra versão, data antiga, data futura e lixo: corpo inteiro com 200.
-		for (String validador : new String[] { "\"outro\"", "Wed, 01 Jan 2020 00:00:00 GMT",
-				"Wed, 01 Jan 2100 00:00:00 GMT", "lixo" }) {
+		// A data exata do Last-Modified também vale (o cliente devolve o que recebeu).
+		MockHttpServletRequestBuilder dataBate = get("/s3/" + bucket + "/ifr/a.txt")
+			.header("Range", "bytes=0-4").header("If-Range", lastModified);
+		assinar(dataBate, SECRET, shaVazio());
+		var rd = mockMvc.perform(dataBate).andReturn();
+		var doData = rd.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(rd)).andReturn().getResponse() : rd.getResponse();
+		assertThat(doData.getStatus()).as("If-Range Last-Modified").isEqualTo(206);
+		assertThat(doData.getContentAsString()).isEqualTo("01234");
+
+		// ETag de outra versão, ETag fraco do atual, data antiga, data futura e lixo: corpo inteiro.
+		// A data futura tem de ser um HTTP-date válido: com o dia da semana errado o parser recusa
+		// antes da comparação e o caso não prova nada.
+		for (String validador : new String[] { "\"outro\"", "W/" + etag, "Wed, 01 Jan 2020 00:00:00 GMT",
+				"Fri, 01 Jan 2100 00:00:00 GMT", "lixo" }) {
 			MockHttpServletRequestBuilder naoBate = get("/s3/" + bucket + "/ifr/a.txt")
 				.header("Range", "bytes=0-4").header("If-Range", validador);
 			assinar(naoBate, SECRET, shaVazio());
@@ -3184,6 +3201,55 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		}
 		catch (java.security.GeneralSecurityException semHmac) {
 			throw new IllegalStateException(semHmac);
+	 * A chave gravada é a que o cliente declarou, não a forma da URI.
+	 *
+	 * <p><b>Antes:</b> o `PUT` gravava a chave <b>como veio na URI</b> (percent-encoded, sem
+	 * decodificar). `PUT /b/café.txt` guardava `caf%C3%A9.txt`; a listagem devolvia essa string e o
+	 * `GET` com a chave listada até funcionava — mas o <b>nome do objeto</b> era outro. O nome no S3 é
+	 * o que o cliente declarou: quem compara a `<Key>` com o nome do arquivo local, gera URL a partir
+	 * dela ou usa a chave numa cópia por cabeçalho (`x-amz-copy-source`, que decodifica) apontava
+	 * para um objeto que não existe. E não havia como gravar `caf%C3%A9.txt` de propósito: toda
+	 * chave com `%` virava outra.</p>
+	 *
+	 * <p><b>Agora:</b> a chave é decodificada da URI no `PUT` (e no multipart), como o caminho do S3:
+	 * `%C3%A9` é `é`, `%20` é espaço, `+` continua `+` (em caminho, `+` não é espaço). A listagem
+	 * devolve o nome declarado, e o `GET` aceita a mesma forma.</p>
+	 */
+	@Test
+	void chave_gravada_e_o_nome_declarado_nao_a_forma_da_uri() throws Exception {
+		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		String b = "enc" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		String[] chaves = { "café.txt", "com espaço.txt", "a&b<c>.txt", "plus+1.txt", "sinal%40literal.txt",
+			"ja%20codado.txt", "cem%25+e+mais.txt" };
+		for (String k : chaves) {
+			MockHttpServletRequestBuilder r = put("/s3/" + b + "/" + k).content(corpo);
+			assinar(r, SECRET, shaDe("abc"));
+			assertThat(mockMvc.perform(r).andReturn().getResponse().getStatus()).as(k).isEqualTo(200);
+		}
+		var gravadas = jdbc.queryForList(
+			"select object_key from network_storage_objects where bucket = ? and deleted_at is null", String.class, b);
+		assertThat(gravadas).containsExactlyInAnyOrder(chaves);
+		// `%` do nome não vira escape: `sinal%40literal.txt` NÃO é `sinal@literal.txt`.
+		assertThat(gravadas).contains("sinal%40literal.txt", "ja%20codado.txt")
+			.doesNotContain("sinal@literal.txt", "ja codado.txt");
+
+		// A listagem traz o mesmo nome, e a chave listada é a que o GET entrega.
+		MockHttpServletRequestBuilder l = get("/s3/" + b + "?list-type=2");
+		assinar(l, SECRET, shaVazio());
+		var lr = mockMvc.perform(l).andReturn();
+		var resp = lr.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lr)).andReturn().getResponse() : lr.getResponse();
+		String xml = resp.getContentAsString();
+		assertThat(xml).contains("<Key>café.txt</Key>").contains("<Key>com espaço.txt</Key>")
+			.contains("<Key>a&amp;b&lt;c&gt;.txt</Key>").contains("<Key>plus+1.txt</Key>")
+			.contains("<Key>sinal%40literal.txt</Key>").contains("<Key>ja%20codado.txt</Key>");
+		for (String k : chaves) {
+			MockHttpServletRequestBuilder g = get("/s3/" + b + "/" + k);
+			assinar(g, SECRET, shaVazio());
+			var rd = mockMvc.perform(g).andReturn();
+			var doGet = rd.getRequest().isAsyncStarted()
+				? mockMvc.perform(asyncDispatch(rd)).andReturn().getResponse() : rd.getResponse();
+			assertThat(doGet.getContentAsString()).as(k).isEqualTo("abc");
 		}
 	}
 
