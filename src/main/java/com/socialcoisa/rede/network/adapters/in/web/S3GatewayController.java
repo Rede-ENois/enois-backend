@@ -3,6 +3,7 @@ package com.socialcoisa.rede.network.adapters.in.web;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
@@ -537,8 +538,11 @@ class S3GatewayController {
 		// ignorado, e o cliente que retomava a partir de uma chave relistava tudo o que já tinha.
 		// Quando há `continuation-token`, ele manda: o token já diz onde continuar, e o S3 ignora o
 		// `start-after` nesse caso.
+		// O token é opaco e assinado com o segredo da credencial e o bucket (§4.53): só vale o que este
+		// gateway emitiu para este bucket. Lixo (ou token de outro bucket) é `400`, não "acabou".
 		String after = v2
-			? (query.get("continuation-token") != null ? query.get("continuation-token") : query.get("start-after"))
+			? (query.get("continuation-token") != null
+				? tokenDeContinuacao(credential, bucket, query.get("continuation-token")) : query.get("start-after"))
 			: query.get("marker");
 		String prefix = query.get("prefix");
 		String delimiter = query.get("delimiter");
@@ -598,7 +602,8 @@ class S3GatewayController {
 		}
 		xml.element("MaxKeys", maxKeys).element("KeyCount", contados).element("IsTruncated", truncated);
 		if (truncated && ultimoEmitido != null) {
-			xml.element(v2 ? "NextContinuationToken" : "NextMarker", ultimoEmitido);
+			xml.element(v2 ? "NextContinuationToken" : "NextMarker",
+				v2 ? emitirTokenDeContinuacao(credential, bucket, ultimoEmitido) : ultimoEmitido);
 		}
 		for (StorageObject object : chaves) {
 			xml.open("Contents").element("Key", object.key())
@@ -833,6 +838,79 @@ class S3GatewayController {
 		}
 		throw s3Error(501, "NotImplemented", "A classe de armazenamento '" + classe.trim()
 			+ "' nao e suportada: este gateway so guarda STANDARD, e o objeto nao foi gravado.");
+	}
+
+	/**
+	 * Emite o {@code NextContinuationToken}: a última chave emitida, assinada com o segredo da
+	 * credencial e o bucket (§4.53).
+	 *
+	 * <p><b>Antes:</b> o token era a última chave <b>em claro</b>, usada como posição sem conferência
+	 * nenhuma. Qualquer string virava posição: {@code continuation-token=lixo} respondia {@code 200}
+	 * com lista vazia, e o cliente concluía que o bucket acabou; o token de um bucket servia no outro.</p>
+	 *
+	 * <p><b>Agora:</b> {@code base64(posição)} + {@code "."} + HMAC-SHA-256 de "bucket posição"
+	 * truncado. O que não confere é {@code 400 InvalidArgument}. Não é um MAC de segurança de dados —
+	 * é a prova de que o token veio daqui, para este bucket, com esta credencial.</p>
+	 */
+	private String emitirTokenDeContinuacao(S3Credential credential, String bucket, String ultimaChave) {
+		String segredo = segredoDoToken(credential);
+		String corpo = java.util.Base64.getUrlEncoder().withoutPadding()
+			.encodeToString(ultimaChave.getBytes(StandardCharsets.UTF_8));
+		return corpo + "." + assinaturaDoToken(segredo, bucket, ultimaChave);
+	}
+
+	/**
+	 * O segredo que assina o token: o mesmo com que a requisição foi verificada.
+	 *
+	 * <p>A requisição de listagem passou pela SigV4 com este segredo; chegar aqui sem ele é a
+	 * credencial inconsistente na base, não o cliente. Devolver um token que o leitor recusa seria
+	 * uma paginação que morre na segunda página.</p>
+	 */
+	private String segredoDoToken(S3Credential credential) {
+		String segredo = credentials.secretFor(credential.id());
+		if (segredo == null) {
+			throw s3Error(403, "SignatureDoesNotMatch",
+				"Credencial sem segredo guardado nao pode assinar; gere uma nova.");
+		}
+		return segredo;
+	}
+
+	/** A posição de uma `continuation-token`, ou {@code 400} se o token não foi emitido aqui. */
+	private String tokenDeContinuacao(S3Credential credential, String bucket, String token) {
+		String segredo = segredoDoToken(credential);
+		int ponto = token.lastIndexOf('.');
+		if (ponto <= 0 || ponto == token.length() - 1) {
+			throw s3Error(400, "InvalidArgument",
+				"O continuation-token nao foi emitido por este gateway para este bucket.");
+		}
+		String chave;
+		try {
+			chave = new String(java.util.Base64.getUrlDecoder().decode(token.substring(0, ponto)), StandardCharsets.UTF_8);
+		}
+		catch (IllegalArgumentException naoEhBase64) {
+			throw s3Error(400, "InvalidArgument",
+				"O continuation-token nao foi emitido por este gateway para este bucket.");
+		}
+		// Comparação em tempo fixo: o token é público, mas comparar sem curto-circuito é a regra.
+		if (!java.security.MessageDigest.isEqual(assinaturaDoToken(segredo, bucket, chave).getBytes(StandardCharsets.US_ASCII),
+				token.substring(ponto + 1).getBytes(StandardCharsets.US_ASCII))) {
+			throw s3Error(400, "InvalidArgument",
+				"O continuation-token nao foi emitido por este gateway para este bucket.");
+		}
+		return chave;
+	}
+
+	/** HMAC-SHA-256 de {@code bucket + "\n" + chave}, hexadecimal. */
+	private static String assinaturaDoToken(String segredo, String bucket, String chave) {
+		try {
+			javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+			mac.init(new javax.crypto.spec.SecretKeySpec(segredo.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+			return java.util.HexFormat.of().formatHex(
+				mac.doFinal((bucket + "\n" + chave).getBytes(StandardCharsets.UTF_8)));
+		}
+		catch (java.security.GeneralSecurityException semHmac) {
+			throw new IllegalStateException("HmacSHA256 nao disponivel", semHmac);
+		}
 	}
 
 	/**
@@ -1644,12 +1722,17 @@ class S3GatewayController {
 		// cliente que pagina recebia a mesma parte na primeira e na segunda página, e a lista sem
 		// `IsTruncated` fazia ele parar convencido de que tinha visto tudo.
 		int depoisDe = inteiroOu(query.get("part-number-marker"), 0);
+		// `max-parts` ausente ou ilegível é 1000; zero ou negativo cai no mesmo 1000 (o serviço já
+		// aplica esse piso). O `<MaxParts>` ecoa o valor APLICADO, não o pedido: antes, com
+		// `max-parts=0` a resposta dizia `<MaxParts>0</MaxParts>` e mandava 1000 partes — o XML se
+		// contradizia, e o cliente que soma páginas pelo `<MaxParts>` contava errado (§4.54).
 		int maxParts = inteiroOu(query.get("max-parts"), 1000);
-		var pagina = multipart.paginaDePartes(upload.uploadId(), depoisDe, maxParts);
+		int tetoDePartes = maxParts <= 0 ? 1000 : Math.min(maxParts, 1000);
+		var pagina = multipart.paginaDePartes(upload.uploadId(), depoisDe, tetoDePartes);
 		S3Xml xml = new S3Xml();
 		xml.root("ListPartsResult").element("Bucket", bucket).element("Key", upload.key())
 			.element("UploadId", upload.uploadId())
-			.element("PartNumberMarker", depoisDe).element("MaxParts", Math.max(1, Math.min(maxParts, 1000)))
+			.element("PartNumberMarker", depoisDe).element("MaxParts", tetoDePartes)
 			.element("IsTruncated", pagina.truncada());
 		for (var part : pagina.partes()) {
 			xml.open("Part").element("PartNumber", part.number()).element("ETag", "\"" + part.sha256() + "\"")
@@ -2247,7 +2330,34 @@ class S3GatewayController {
 		if (slash < 0) {
 			throw s3Error(400, "InvalidRequest", "Informe o bucket e a chave.");
 		}
-		return semBarra.substring(slash + 1);
+		return chaveDeclarada(semBarra.substring(slash + 1));
+	}
+
+	/**
+	 * A chave como o cliente a declarou: o caminho da URI decodificado.
+	 *
+	 * <p><b>Antes:</b> a chave era gravada <b>como veio na URI</b>, percent-encoded:
+	 * {@code PUT /b/café.txt} guardava {@code caf%C3%A9.txt} e a listagem devolvia essa string. O
+	 * nome do objeto no S3 é o declarado — quem compara a {@code <Key>} com o nome local, monta URL
+	 * a partir dela ou usa a chave numa cópia por cabeçalho apontava para outro objeto, e não havia
+	 * como gravar {@code caf%C3%A9.txt} de propósito.</p>
+	 *
+	 * <p><b>Agora:</b> {@code %C3%A9} vira {@code é}, {@code %20} vira espaço e {@code +} continua
+	 * {@code +} (em caminho, {@code +} não é espaço — diferente do formulário). {@code %25} vira o
+	 * {@code %} literal, então a chave que já tem {@code %} é gravável. Percent-encoding inválido é
+	 * recusa e a chave fica como veio (§4.52).</p>
+	 */
+	static String chaveDeclarada(String chaveDaUri) {
+		if (chaveDaUri.indexOf('%') < 0) {
+			return chaveDaUri;
+		}
+		try {
+			return URLDecoder.decode(chaveDaUri.replace("+", "%2B"), StandardCharsets.UTF_8);
+		}
+		catch (IllegalArgumentException percentQuebrado) {
+			// `%` solto ou hexadecimal inválido: a URI não é uma chave; responder como veio é a recusa.
+			return chaveDaUri;
+		}
 	}
 
 	/** O caminho como o protocolo S3 o vê: sem o context path e sem o prefixo `/s3` do gateway. */

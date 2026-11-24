@@ -27,6 +27,7 @@ import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.http.HttpServletRequest;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -60,6 +61,7 @@ import com.socialcoisa.rede.shared.security.SecretCipher;
  */
 @SpringBootTest
 @AutoConfigureMockMvc
+@Tag("critico")
 class S3GatewayTests {
 
 	private static final String ACCESS_KEY_PREFIX = "AKIAENOIS";
@@ -1452,8 +1454,11 @@ void put_com_if_none_match_nao_sobrescreve_chave_ocupada() throws Exception {
 
 		var doc = javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder()
 			.parse(new java.io.ByteArrayInputStream(xml1.getBytes(StandardCharsets.UTF_8)));
+		// O token é opaco e assinado (§4.53): a posição `p/sub/` vai em base64 e com HMAC, nunca em
+		// claro. Antes desta rota, o token era a chave crua; conferir o valor literal aqui seria a
+		// asserção que o ciclo 143 existe para invalidar.
 		String token = doc.getElementsByTagName("NextContinuationToken").item(0).getTextContent();
-		assertThat(token).isEqualTo("p/sub/");
+		assertThat(token).isNotEqualTo("p/sub/").contains(".");
 
 		MockHttpServletRequestBuilder segundo = get("/s3/" + bucket).queryParam("list-type", "2")
 			.queryParam("prefix", "p/").queryParam("delimiter", "/").queryParam("max-keys", "2")
@@ -1657,7 +1662,7 @@ void put_com_if_none_match_nao_sobrescreve_chave_ocupada() throws Exception {
 		// não distingue "token venceu" de "start-after venceu": seria a mesma chave de partida.
 		MockHttpServletRequestBuilder comToken = get("/s3/" + bucket).queryParam("list-type", "2")
 			.queryParam("prefix", "inicio/").queryParam("start-after", "inicio/c.txt")
-			.queryParam("continuation-token", "inicio/a.txt");
+			.queryParam("continuation-token", tokenQueDiz("inicio/a.txt"));
 		assinar(comToken, SECRET, shaVazio());
 		var comTokenResposta = mockMvc.perform(comToken).andReturn().getResponse();
 		assertThat(comTokenResposta.getStatus()).isEqualTo(200);
@@ -2698,17 +2703,20 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 	 * e o resto de outra, e a corrupção só aparecia ao abrir o arquivo.</p>
 	 *
 	 * <p><b>Agora:</b> com {@code If-Range} em ETag, a faixa é aplicada só quando o ETag é o da versão
-	 * servida; senão {@code 200} com o corpo inteiro. Com data, vale {@code Last-Modified} &lt;=
-	 * aquela data. Validador que não é nem ETag nem data ({@code lixo}) cai no corpo inteiro, como no
-	 * S3.</p>
+	 * servida, em comparação forte: {@code W/} não casa com o ETag forte. Com data, vale apenas a data
+	 * exata do {@code Last-Modified} (HTTP-date tem granularidade de segundo); data futura não vale.
+	 * Validador que não é nem ETag nem data ({@code lixo}) cai no corpo inteiro, como no S3.</p>
 	 */
 	@Test
 	void if_range_validador_que_nao_bate_devolve_o_corpo_inteiro() throws Exception {
 		gravar("ifr/a.txt", "0123456789");
 		MockHttpServletRequestBuilder h = MockMvcRequestBuilders.head("/s3/" + bucket + "/ifr/a.txt");
 		assinar(h, SECRET, shaVazio());
-		String etag = mockMvc.perform(h).andReturn().getResponse().getHeader("ETag");
+		var cabecalhos = mockMvc.perform(h).andReturn().getResponse();
+		String etag = cabecalhos.getHeader("ETag");
+		String lastModified = cabecalhos.getHeader("Last-Modified");
 		assertThat(etag).isNotNull();
+		assertThat(lastModified).isNotNull();
 
 		// ETag da versão servida: a faixa vale.
 		MockHttpServletRequestBuilder bate = get("/s3/" + bucket + "/ifr/a.txt")
@@ -2720,9 +2728,21 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		assertThat(doBate.getStatus()).isEqualTo(206);
 		assertThat(doBate.getContentAsString()).isEqualTo("01234");
 
-		// ETag de outra versão, data antiga, data futura e lixo: corpo inteiro com 200.
-		for (String validador : new String[] { "\"outro\"", "Wed, 01 Jan 2020 00:00:00 GMT",
-				"Wed, 01 Jan 2100 00:00:00 GMT", "lixo" }) {
+		// A data exata do Last-Modified também vale (o cliente devolve o que recebeu).
+		MockHttpServletRequestBuilder dataBate = get("/s3/" + bucket + "/ifr/a.txt")
+			.header("Range", "bytes=0-4").header("If-Range", lastModified);
+		assinar(dataBate, SECRET, shaVazio());
+		var rd = mockMvc.perform(dataBate).andReturn();
+		var doData = rd.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(rd)).andReturn().getResponse() : rd.getResponse();
+		assertThat(doData.getStatus()).as("If-Range Last-Modified").isEqualTo(206);
+		assertThat(doData.getContentAsString()).isEqualTo("01234");
+
+		// ETag de outra versão, ETag fraco do atual, data antiga, data futura e lixo: corpo inteiro.
+		// A data futura tem de ser um HTTP-date válido: com o dia da semana errado o parser recusa
+		// antes da comparação e o caso não prova nada.
+		for (String validador : new String[] { "\"outro\"", "W/" + etag, "Wed, 01 Jan 2020 00:00:00 GMT",
+				"Fri, 01 Jan 2100 00:00:00 GMT", "lixo" }) {
 			MockHttpServletRequestBuilder naoBate = get("/s3/" + bucket + "/ifr/a.txt")
 				.header("Range", "bytes=0-4").header("If-Range", validador);
 			assinar(naoBate, SECRET, shaVazio());
@@ -3127,6 +3147,207 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 			assinar(enviar, SECRET, shaDe("abc"));
 			assertThat(mockMvc.perform(enviar).andReturn().getResponse().getStatus())
 				.as("'" + valido + "' tem de ser aceito").isEqualTo(200);
+	 * `MaxParts` do `ListParts` é o teto que valeu de verdade — não um pedido que não foi honrado.
+	 *
+	 * <p><b>Antes:</b> o {@code <MaxParts>} era o pedido cru, não o valor aplicado. Com
+	 * {@code max-parts=0} (ou negativo) a página vinha com as partes todas, cortada em 1000, e o XML
+	 * dizia {@code <MaxParts>0</MaxParts>}; com {@code max-parts=5000} a página vinha cortada em 1000 e
+	 * o XML dizia 5000. Nos dois o XML se contradizia: quem pagina somando o que o {@code <MaxParts>}
+	 * promete conta errado quantas páginas faltam, e quem vê {@code MaxParts 0} com partes dentro
+	 * conclui que a resposta está quebrada.</p>
+	 *
+	 * <p><b>Agora:</b> {@code <MaxParts>} é o valor aplicado — o mesmo que corta a página: ausente ou
+	 * ilegível é 1000, zero e negativo recusam para 1000, acima de 1000 é 1000.</p>
+	 */
+	@Test
+	void list_parts_ecoa_o_max_parts_aplicado_nao_o_pedido() throws Exception {
+		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		String b = "mp" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		MockHttpServletRequestBuilder r = put("/s3/" + b + "/x.txt").content(corpo);
+		assinar(r, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(r).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder c = MockMvcRequestBuilders.post("/s3/" + b + "/mp.bin?uploads");
+		assinar(c, SECRET, shaVazio());
+		String uploadId = java.util.regex.Pattern.compile("<UploadId>([^<]*)</UploadId>")
+			.matcher(mockMvc.perform(c).andReturn().getResponse().getContentAsString()).results()
+			.map(m -> m.group(1)).findFirst().orElseThrow();
+		for (int n = 1; n <= 3; n++) {
+			MockHttpServletRequestBuilder p2 = put("/s3/" + b + "/mp.bin?uploadId=" + uploadId + "&partNumber=" + n)
+				.content(corpo);
+			assinar(p2, SECRET, shaDe("abc"));
+			assertThat(mockMvc.perform(p2).andReturn().getResponse().getStatus()).isEqualTo(200);
+		}
+
+		String[][] casos = { { "max-parts=2", "2" }, { "max-parts=0", "1000" }, { "max-parts=-1", "1000" },
+			{ "max-parts=5000", "1000" }, { "max-parts=abc", "1000" } };
+		for (String[] caso : casos) {
+			MockHttpServletRequestBuilder l = get("/s3/" + b + "/mp.bin?uploadId=" + uploadId + "&" + caso[0]);
+			assinar(l, SECRET, shaVazio());
+			var resp = mockMvc.perform(l).andReturn().getResponse();
+			assertThat(resp.getStatus()).as(caso[0]).isEqualTo(200);
+			String xml = resp.getContentAsString();
+			assertThat(xml).as(caso[0]).contains("<MaxParts>" + caso[1] + "</MaxParts>");
+			// A página nunca entrega mais partes do que o `<MaxParts>` ecoado diz.
+			long entregues = java.util.regex.Pattern.compile("<PartNumber>").matcher(xml).results().count();
+			assertThat(entregues).as(caso[0]).isLessThanOrEqualTo(Long.parseLong(caso[1]));
+		}
+		// `max-parts=2` com marcador pagina de dois em dois: o que o `<MaxParts>` ecoa É o corte.
+		MockHttpServletRequestBuilder l = get("/s3/" + b + "/mp.bin?uploadId=" + uploadId
+			+ "&max-parts=2&part-number-marker=1");
+		assinar(l, SECRET, shaVazio());
+		String xml = mockMvc.perform(l).andReturn().getResponse().getContentAsString();
+		assertThat(xml).contains("<MaxParts>2</MaxParts>").contains("<PartNumber>2</PartNumber>")
+			.contains("<PartNumber>3</PartNumber>").doesNotContain("<PartNumber>1</PartNumber>")
+			.contains("<IsTruncated>false</IsTruncated>");
+	 * `continuation-token` que o gateway não emitiu (ou de outro bucket) é `400`, não lista vazia.
+	 *
+	 * <p><b>Antes:</b> o token era o <b>último nome emitido</b>, em claro, e o gateway o usava como
+	 * posição sem conferir nada. Qualquer string era aceita como posição: {@code continuation-token=lixo}
+	 * respondia {@code 200} com {@code KeyCount 0}, e o cliente que retoma a paginação conclui que o
+	 * bucket acabou — perde o resto da listagem sem ver erro. Um token de <b>outro bucket</b> também
+	 * servia de posição, então listagens de buckets diferentes misturavam estados.</p>
+	 *
+	 * <p><b>Agora:</b> o token é opaco e assinado com o segredo da credencial e o bucket (HMAC): só
+	 * vale o que este gateway emitiu para este bucket. Token que não confere — lixo, inventado, de
+	 * outro bucket ou de outra credencial — é {@code 400 InvalidArgument}. A paginação normal continua
+	 * andando objeto por objeto.</p>
+	 */
+	@Test
+	void continuation_token_que_o_gateway_nao_emitiu_e_400() throws Exception {
+		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		String b = "tk" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		for (String k : new String[] { "a1.txt", "a2.txt", "a3.txt" }) {
+			MockHttpServletRequestBuilder r = put("/s3/" + b + "/" + k).content(corpo);
+			assinar(r, SECRET, shaDe("abc"));
+			assertThat(mockMvc.perform(r).andReturn().getResponse().getStatus()).isEqualTo(200);
+		}
+		// Token que não veio de nenhuma listagem: recusa em vez de "acabou".
+		for (String token : new String[] { "lixo", "a1.txt", "AAA", "%41%41" }) {
+			MockHttpServletRequestBuilder l = get("/s3/" + b + "?list-type=2&continuation-token=" + token);
+			assinar(l, SECRET, shaVazio());
+			var recusa = mockMvc.perform(l).andReturn().getResponse();
+			assertThat(recusa.getStatus()).as(token).isEqualTo(400);
+			assertThat(recusa.getContentAsString()).contains("<Code>InvalidArgument</Code>");
+		}
+
+		// A paginação normal: três páginas de um, cada uma devolvendo o próximo objeto.
+		String token = null;
+		java.util.List<String> vistos = new java.util.ArrayList<>();
+		for (int volta = 0; volta < 4; volta++) {
+			String url = "/s3/" + b + "?list-type=2&max-keys=1"
+				+ (token == null ? "" : "&continuation-token=" + java.net.URLEncoder.encode(token, StandardCharsets.UTF_8));
+			MockHttpServletRequestBuilder l = get(url);
+			assinar(l, SECRET, shaVazio());
+			var rr = mockMvc.perform(l).andReturn();
+			var resp = rr.getRequest().isAsyncStarted()
+				? mockMvc.perform(asyncDispatch(rr)).andReturn().getResponse() : rr.getResponse();
+			assertThat(resp.getStatus()).as("volta " + volta).isEqualTo(200);
+			String xml = resp.getContentAsString();
+			java.util.regex.Pattern.compile("<Key>([^<]*)</Key>").matcher(xml).results()
+				.map(m -> m.group(1)).forEach(vistos::add);
+			token = java.util.regex.Pattern.compile("<NextContinuationToken>([^<]*)</NextContinuationToken>")
+				.matcher(xml).results().map(m -> m.group(1)).findFirst().orElse(null);
+			if (token == null) {
+				break;
+			}
+		}
+		assertThat(vistos).containsExactly("a1.txt", "a2.txt", "a3.txt");
+		// O token emitido não é o nome do objeto: é opaco.
+		assertThat(vistos).doesNotContain(token);
+
+		// Token de um bucket não vale no outro.
+		String outro = "tk" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		MockHttpServletRequestBuilder r = put("/s3/" + outro + "/z.txt").content(corpo);
+		assinar(r, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(r).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder p1 = get("/s3/" + b + "?list-type=2&max-keys=1");
+		assinar(p1, SECRET, shaVazio());
+		var pr = mockMvc.perform(p1).andReturn();
+		var px = (pr.getRequest().isAsyncStarted() ? mockMvc.perform(asyncDispatch(pr)).andReturn().getResponse()
+			: pr.getResponse()).getContentAsString();
+		String tokenDoB = java.util.regex.Pattern.compile("<NextContinuationToken>([^<]*)</NextContinuationToken>")
+			.matcher(px).results().map(m -> m.group(1)).findFirst().orElse(null);
+		assertThat(tokenDoB).isNotNull();
+		// Assinatura alterada: a forma está certa e a posição existe, mas o gateway não emitiu este
+		// token — só a verificação da assinatura separa os dois casos.
+		char ultimo = tokenDoB.charAt(tokenDoB.length() - 1);
+		String forjado = tokenDoB.substring(0, tokenDoB.length() - 1) + (ultimo == 'a' ? 'b' : 'a');
+		MockHttpServletRequestBuilder pf = get("/s3/" + b + "?list-type=2&continuation-token="
+			+ java.net.URLEncoder.encode(forjado, StandardCharsets.UTF_8));
+		assinar(pf, SECRET, shaVazio());
+		assertThat(mockMvc.perform(pf).andReturn().getResponse().getStatus()).isEqualTo(400);
+		MockHttpServletRequestBuilder p2 = get("/s3/" + outro + "?list-type=2&continuation-token="
+			+ java.net.URLEncoder.encode(tokenDoB, StandardCharsets.UTF_8));
+		assinar(p2, SECRET, shaVazio());
+		assertThat(mockMvc.perform(p2).andReturn().getResponse().getStatus()).isEqualTo(400);
+	}
+
+	/**
+	 * Um {@code continuation-token} válido para a chave, com a assinatura que o gateway confere.
+	 *
+	 * <p>Desde o §4.53 o token carrega HMAC do bucket e da chave: o valor em claro é recusado com
+	 * {@code 400}. Para testar "o token vence o start-after" o token precisa ser legítimo.</p>
+	 */
+	private String tokenQueDiz(String chave) {
+		try {
+			String corpo = java.util.Base64.getUrlEncoder().withoutPadding()
+				.encodeToString(chave.getBytes(StandardCharsets.UTF_8));
+			javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+			mac.init(new javax.crypto.spec.SecretKeySpec(SECRET.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+			return corpo + "." + java.util.HexFormat.of().formatHex(
+				mac.doFinal((bucket + "\n" + chave).getBytes(StandardCharsets.UTF_8)));
+		}
+		catch (java.security.GeneralSecurityException semHmac) {
+			throw new IllegalStateException(semHmac);
+	 * A chave gravada é a que o cliente declarou, não a forma da URI.
+	 *
+	 * <p><b>Antes:</b> o `PUT` gravava a chave <b>como veio na URI</b> (percent-encoded, sem
+	 * decodificar). `PUT /b/café.txt` guardava `caf%C3%A9.txt`; a listagem devolvia essa string e o
+	 * `GET` com a chave listada até funcionava — mas o <b>nome do objeto</b> era outro. O nome no S3 é
+	 * o que o cliente declarou: quem compara a `<Key>` com o nome do arquivo local, gera URL a partir
+	 * dela ou usa a chave numa cópia por cabeçalho (`x-amz-copy-source`, que decodifica) apontava
+	 * para um objeto que não existe. E não havia como gravar `caf%C3%A9.txt` de propósito: toda
+	 * chave com `%` virava outra.</p>
+	 *
+	 * <p><b>Agora:</b> a chave é decodificada da URI no `PUT` (e no multipart), como o caminho do S3:
+	 * `%C3%A9` é `é`, `%20` é espaço, `+` continua `+` (em caminho, `+` não é espaço). A listagem
+	 * devolve o nome declarado, e o `GET` aceita a mesma forma.</p>
+	 */
+	@Test
+	void chave_gravada_e_o_nome_declarado_nao_a_forma_da_uri() throws Exception {
+		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		String b = "enc" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		String[] chaves = { "café.txt", "com espaço.txt", "a&b<c>.txt", "plus+1.txt", "sinal%40literal.txt",
+			"ja%20codado.txt", "cem%25+e+mais.txt" };
+		for (String k : chaves) {
+			MockHttpServletRequestBuilder r = put("/s3/" + b + "/" + k).content(corpo);
+			assinar(r, SECRET, shaDe("abc"));
+			assertThat(mockMvc.perform(r).andReturn().getResponse().getStatus()).as(k).isEqualTo(200);
+		}
+		var gravadas = jdbc.queryForList(
+			"select object_key from network_storage_objects where bucket = ? and deleted_at is null", String.class, b);
+		assertThat(gravadas).containsExactlyInAnyOrder(chaves);
+		// `%` do nome não vira escape: `sinal%40literal.txt` NÃO é `sinal@literal.txt`.
+		assertThat(gravadas).contains("sinal%40literal.txt", "ja%20codado.txt")
+			.doesNotContain("sinal@literal.txt", "ja codado.txt");
+
+		// A listagem traz o mesmo nome, e a chave listada é a que o GET entrega.
+		MockHttpServletRequestBuilder l = get("/s3/" + b + "?list-type=2");
+		assinar(l, SECRET, shaVazio());
+		var lr = mockMvc.perform(l).andReturn();
+		var resp = lr.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lr)).andReturn().getResponse() : lr.getResponse();
+		String xml = resp.getContentAsString();
+		assertThat(xml).contains("<Key>café.txt</Key>").contains("<Key>com espaço.txt</Key>")
+			.contains("<Key>a&amp;b&lt;c&gt;.txt</Key>").contains("<Key>plus+1.txt</Key>")
+			.contains("<Key>sinal%40literal.txt</Key>").contains("<Key>ja%20codado.txt</Key>");
+		for (String k : chaves) {
+			MockHttpServletRequestBuilder g = get("/s3/" + b + "/" + k);
+			assinar(g, SECRET, shaVazio());
+			var rd = mockMvc.perform(g).andReturn();
+			var doGet = rd.getRequest().isAsyncStarted()
+				? mockMvc.perform(asyncDispatch(rd)).andReturn().getResponse() : rd.getResponse();
+			assertThat(doGet.getContentAsString()).as(k).isEqualTo("abc");
 		}
 	}
 
