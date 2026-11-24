@@ -202,6 +202,42 @@ class ColecoesFlowTests {
 			.andExpect(jsonPath("$.code").value("COLECAO_NOT_FOUND"));
 	}
 
+	/**
+	 * Coleção não tem link público: o endereço de uma coleção aberto por quem NÃO é o dono não
+	 * entrega nada — nem sessão, nem outra conta. É a diferença para o mural, que se compartilha.
+	 */
+	@Test
+	void colecaoNaoAbrePorLinkDeFora() throws Exception {
+		var dona = auth("colecao_linkdona");
+		var outra = auth("colecao_linkoutra");
+		var autor = auth("colecao_linkautor");
+		String colecaoId = createColecao(dona, "Pasta só minha");
+		String postId = publishPost(autor, "post guardado na pasta privada");
+		save(dona, postId);
+		guardar(dona, colecaoId, postId);
+
+		// Sem sessão: 401 antes de qualquer busca — o endereço sozinho não abre a coleção.
+		mockMvc.perform(get("/colecoes/" + colecaoId))
+			.andExpect(status().isUnauthorized());
+		mockMvc.perform(get("/colecoes/" + colecaoId + "/posts"))
+			.andExpect(status().isUnauthorized());
+
+		// Com sessão de outra pessoa: 404, sem confirmar que a coleção existe e sem vazar o post.
+		mockMvc.perform(get("/colecoes/" + colecaoId).header("X-Session-Token", outra.token()))
+			.andExpect(status().isNotFound())
+			.andExpect(jsonPath("$.code").value("COLECAO_NOT_FOUND"));
+		mockMvc.perform(get("/colecoes/" + colecaoId + "/posts").header("X-Session-Token", outra.token()))
+			.andExpect(status().isNotFound())
+			.andExpect(result -> org.assertj.core.api.Assertions
+				.assertThat(result.getResponse().getContentAsString())
+				.doesNotContain(postId));
+
+		// A dona continua abrindo normalmente.
+		mockMvc.perform(get("/colecoes/" + colecaoId).header("X-Session-Token", dona.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.title").value("Pasta só minha"));
+	}
+
 	@Test
 	void onlyOwnerEditsRemovesAndTakesPostsOut() throws Exception {
 		var owner = auth("colecao_edowner");
