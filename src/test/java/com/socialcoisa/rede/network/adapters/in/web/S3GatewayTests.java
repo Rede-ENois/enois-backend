@@ -3557,7 +3557,7 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 	 *
 	 * <p><b>Agora:</b> XML em todas as recusas do {@code Complete} — {@code EntityTooSmall},
 	 * {@code InvalidPart}, {@code NoSuchUpload}, {@code MalformedXML} —, com {@code Code} do S3 e
-	 * {@code 4xx} (§4.4.57). O sucesso continua igual.</p>
+	 * {@code 4xx} (§4.64). O sucesso continua igual.</p>
 	 */
 	@Test
 	void complete_multipart_recusa_em_xml_e_nao_em_json() throws Exception {
