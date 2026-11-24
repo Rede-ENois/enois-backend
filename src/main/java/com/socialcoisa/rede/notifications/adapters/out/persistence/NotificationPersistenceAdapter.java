@@ -40,6 +40,15 @@ class NotificationPersistenceAdapter implements NotificationRepository {
 	}
 
 	@Override
+	public List<Notification> findUnreadFirstByUserId(String userId, long offset, NotificationContext context,
+			int limit) {
+		return springData.unreadFirstPage(userId, context == null ? null : context.name(), limit, offset)
+			.stream()
+			.map(NotificationJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
 	public List<UnreadCount> countUnreadByKindAndActor(String userId, NotificationContext context) {
 		return springData.countUnreadByKindAndActor(userId, context == null ? null : context.name())
 			.stream()

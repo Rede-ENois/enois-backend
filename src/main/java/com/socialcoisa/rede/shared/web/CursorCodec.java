@@ -12,12 +12,15 @@ import org.springframework.util.StringUtils;
 public class CursorCodec {
 
 	/**
-	 * Teto do cursor aceito. O cursor legitimo e um ISO-8601 (20-24 chars) ou o par
-	 * instante|desempate em base64url (pouco mais de 50). 256 da folga larga e mantem a
-	 * entrada longe de qualquer buffer grande no stub intrinseco de decode Base64
-	 * (CVE-2026-114938).
+	 * Teto do cursor aceito. O cursor legitimo e um ISO-8601 (20-24 chars), o par
+	 * instante|desempate em base64url (pouco mais de 50) ou a posicao "o:" com digitos. 256 da a
+	 * folga larga e mantem a entrada longe de qualquer buffer grande no stub intrinseco de decode
+	 * Base64 (CVE-2026-114938).
 	 */
 	static final int MAX_CURSOR_LENGTH = 256;
+
+	/** Marca do cursor de posicao; nenhum cursor de instante comeca com ela. */
+	static final String OFFSET_PREFIX = "o:";
 
 	/** Alfabeto base64url; recusar antes do decode evita passar lixo ao decoder nativo. */
 	private static final java.util.regex.Pattern BASE64URL = java.util.regex.Pattern.compile("[A-Za-z0-9_-]+={0,2}");
@@ -66,6 +69,33 @@ public class CursorCodec {
 				throw new ApiException(400, "INVALID_CURSOR", "Cursor invalido.");
 			}
 		}
+	}
+
+	/**
+	 * Cursor de posicao: a proxima pagina comeca depois de {@code offset} linhas da mesma ordenacao
+	 * (que precisa ser total, ou seja, com desempate unico). Formato proprio, so para quem usa.
+	 */
+	public Optional<Long> decodeOffset(String cursor) {
+		if (!StringUtils.hasText(cursor)) {
+			return Optional.empty();
+		}
+		if (!cursor.startsWith(OFFSET_PREFIX) || cursor.length() > MAX_CURSOR_LENGTH) {
+			throw new ApiException(400, "INVALID_CURSOR", "Cursor invalido.");
+		}
+		try {
+			long offset = Long.parseLong(cursor.substring(OFFSET_PREFIX.length()));
+			if (offset < 0) {
+				throw new IllegalArgumentException("deslocamento negativo");
+			}
+			return Optional.of(offset);
+		}
+		catch (IllegalArgumentException invalid) {
+			throw new ApiException(400, "INVALID_CURSOR", "Cursor invalido.");
+		}
+	}
+
+	public String encodeOffset(long offset) {
+		return OFFSET_PREFIX + offset;
 	}
 
 	public String encodePage(Instant instant, String tieBreak) {

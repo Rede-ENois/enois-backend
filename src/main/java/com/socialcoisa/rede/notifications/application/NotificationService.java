@@ -182,6 +182,16 @@ public class NotificationService {
 	}
 
 	/**
+	 * Lista com os nao lidos primeiro, na ordem de chegada, e depois os lidos (issue #1147): o sino
+	 * conta os nao lidos do resumo, e eles ficavam atras dos lidos mais recentes nas paginas.
+	 * {@code offset} e quantas linhas desta mesma ordem o cliente ja recebeu.
+	 */
+	public List<Notification> listUnreadFirst(String userId, long offset,
+			com.socialcoisa.rede.notifications.domain.NotificationContext context, int limit) {
+		return repository.findUnreadFirstByUserId(userId, offset, context, limit);
+	}
+
+	/**
 	 * Unread notifications per interface area and per community, for the menu indicators, plus the
 	 * confirmed events happening today. Notifications from {@code hiddenActorIds} (blocked either
 	 * way) are left out, as in the list. Events are social, so the professional context has none.
