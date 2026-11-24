@@ -353,6 +353,41 @@ class ColecoesFlowTests {
 			.andExpect(status().isUnauthorized());
 	}
 
+	/** A busca acha pelo título ou pela descrição, sem ligar para maiúsculas — e só entre as minhas. */
+	@Test
+	void buscaAchaColecaoPorTituloOuDescricaoSoEntreAsMinhas() throws Exception {
+		var dona = auth("colecao_bdona");
+		var outra = auth("colecao_boutra");
+		String receitas = createColecao(dona, "Receitas da vó");
+		createColecao(dona, "Peladas do bairro");
+		String deOutra = createColecao(outra, "Receitas alheias");
+
+		// Título, sem ligar para maiúsculas; a coleção de outra pessoa não aparece.
+		org.assertj.core.api.Assertions.assertThat(idsDaBusca(dona, "receitas")).containsExactly(receitas);
+		org.assertj.core.api.Assertions.assertThat(idsDaBusca(dona, "RECEITAS")).containsExactly(receitas);
+		org.assertj.core.api.Assertions.assertThat(idsDaBusca(dona, "alheias")).isEmpty();
+
+		// A lista de outra pessoa continua só com as dela.
+		org.assertj.core.api.Assertions.assertThat(idsDaBusca(outra, "receitas")).containsExactly(deOutra);
+
+		// Termo inexistente é lista vazia; espaço em volta não atrapalha; `%` e `_` são texto.
+		org.assertj.core.api.Assertions.assertThat(idsDaBusca(dona, "maratona")).isEmpty();
+		org.assertj.core.api.Assertions.assertThat(idsDaBusca(dona, "  peladas  ")).hasSize(1);
+		org.assertj.core.api.Assertions.assertThat(idsDaBusca(dona, "%")).isEmpty();
+	}
+
+	private java.util.List<String> idsDaBusca(TestAuthHelper.AuthSession dona, String termo) throws Exception {
+		MvcResult lista = mockMvc
+			.perform(get("/colecoes").param("search", termo).header("X-Session-Token", dona.token()))
+			.andExpect(status().isOk())
+			.andReturn();
+		java.util.List<String> ids = new java.util.ArrayList<>();
+		for (JsonNode item : objectMapper.readTree(lista.getResponse().getContentAsString()).get("items")) {
+			ids.add(item.get("id").asText());
+		}
+		return ids;
+	}
+
 	private TestAuthHelper.AuthSession auth(String name) throws Exception {
 		return new TestAuthHelper(mockMvc, objectMapper).authenticate(name);
 	}

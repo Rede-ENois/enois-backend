@@ -49,9 +49,10 @@ public class ColecoesController {
 
 	@GetMapping("/colecoes")
 	ColecoesViews.ColecoesPage list(@RequestHeader("X-Session-Token") String sessionToken,
-			@RequestParam(required = false) String cursor, @RequestParam(defaultValue = "24") int limit) {
+			@RequestParam(required = false) String cursor, @RequestParam(required = false) String search,
+			@RequestParam(defaultValue = "24") int limit) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		return colecoes.list(user.id(), cursorCodec.decode(cursor), limit);
+		return colecoes.list(user.id(), cursorCodec.decode(cursor), search, limit);
 	}
 
 	/** As minhas coleções na ótica de um post: alimenta o seletor "guardar em coleção" do card. */

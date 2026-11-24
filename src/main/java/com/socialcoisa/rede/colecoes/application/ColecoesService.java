@@ -43,6 +43,7 @@ public class ColecoesService {
 
 	private static final int MAX_PAGE_SIZE = 48;
 	private static final int MAX_TITULO = 120;
+	private static final int MAX_BUSCA = 120;
 	private static final int MAX_DESCRICAO = 500;
 
 	private final ColecoesRepository repository;
@@ -152,9 +153,19 @@ public class ColecoesService {
 
 	@Transactional(readOnly = true)
 	public ColecoesPage list(UserId ownerId, Optional<Instant> before, int limit) {
+		return list(ownerId, before, null, limit);
+	}
+
+	/**
+	 * As coleções do dono. Com `search`, só entram as pastas cujo título ou descrição têm o termo
+	 * (sem diferenciar maiúsculas) — o espaço vazio é o filtro desligado, não "nada". Continua
+	 * valendo só para o dono: a busca não abre coleção alheia.
+	 */
+	@Transactional(readOnly = true)
+	public ColecoesPage list(UserId ownerId, Optional<Instant> before, String search, int limit) {
 		int tamanho = Math.min(Math.max(limit, 1), MAX_PAGE_SIZE);
 		Instant marca = before.orElseGet(() -> clock.instant().plusSeconds(1));
-		List<ColecaoSalva> colecoes = repository.findByOwnerBefore(ownerId, marca, tamanho);
+		List<ColecaoSalva> colecoes = repository.findByOwnerBefore(ownerId, marca, termoDaBusca(search), tamanho);
 		Map<String, Long> contagens = repository.countPosts(ids(colecoes));
 		List<ColecaoResumo> items = colecoes.stream()
 			.map(colecao -> resumo(colecao, contagens.getOrDefault(colecao.id(), 0L)))
@@ -196,6 +207,11 @@ public class ColecoesService {
 		return repository.findColecaoById(colecaoId)
 			.filter(colecao -> colecao.ownedBy(userId))
 			.orElseThrow(() -> new ApiException(404, "COLECAO_NOT_FOUND", "Coleção não encontrada."));
+	}
+
+	/** O termo como vai para a consulta: sem espaços nas pontas, no máximo 120 e sem o vazio. */
+	private static String termoDaBusca(String search) {
+		return StringUtils.hasText(search) ? search.trim().substring(0, Math.min(search.trim().length(), MAX_BUSCA)) : "";
 	}
 
 	private String validarTitulo(String title) {

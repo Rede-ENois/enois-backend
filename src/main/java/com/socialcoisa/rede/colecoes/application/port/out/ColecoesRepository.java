@@ -17,8 +17,8 @@ public interface ColecoesRepository {
 
 	Optional<ColecaoSalva> findColecaoById(String id);
 
-	/** Coleções do dono criadas antes da marca, mais novas primeiro. */
-	List<ColecaoSalva> findByOwnerBefore(UserId ownerId, Instant before, int limit);
+	/** Coleções do dono criadas antes da marca, mais novas primeiro; `search` vazio é a lista inteira. */
+	List<ColecaoSalva> findByOwnerBefore(UserId ownerId, Instant before, String search, int limit);
 
 	/** Todas as coleções do dono, mais novas primeiro — o seletor do post lista tudo. */
 	List<ColecaoSalva> findAllByOwner(UserId ownerId);
