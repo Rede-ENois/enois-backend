@@ -1588,6 +1588,46 @@ e ` STANDARD ` (chaves distintas) → `200`; cópia e multipart com classe → `
 só mostra o que foi gravado. Vermelho antes: `200` no `GLACIER`. Mutações **4/4**: sem a guarda no
 `PUT`; sem a guarda no multipart; guarda que aceita tudo; comparação sem caixa/espaço.
 
+## 4.56 Escopo do SigV4: serviço e região são conferidos (ciclo 146)
+
+O escopo do cabeçalho — `<data>/<região>/<serviço>/aws4_request` — era lido e **usado** no cálculo
+(a chave de assinatura deriva de região e serviço), mas nunca conferido contra o gateway:
+
+```
+GET /s3/<b>/x.txt   Authorization: ... Credential=<ak>/20260101/enois-1/s3/aws4_request ...   → 200
+GET /s3/<b>/x.txt   Authorization: ... Credential=<ak>/20260101/enois-1/ec2/aws4_request ...  → 200
+GET /s3/<b>/x.txt   Authorization: ... Credential=<ak>/20260101/qualquer-regiao/s3/... ...    → 200
+```
+
+O segredo é o mesmo, então a assinatura confere nos três. Mas o escopo é a única coisa que diz **para o
+quê** o cliente assinou: uma credencial usada em outro serviço (ou fora da região) não deixa rastro de
+erro nenhum — o cliente assinou errado e foi servido. O S3 recusa o escopo que não é o dele.
+
+### Agora
+
+| serviço | região | antes | agora |
+|---|---|---|---|
+| `s3` | `enois-1` (a da instalação) | `200` | `200` |
+| `s3` | `us-east-1` (região global do S3) | `200` | `200` |
+| `ec2`, `execute-api`, `s3-object-lambda`, … | qualquer | `200` | `403 SignatureDoesNotMatch` |
+| `s3` | outra região que não `enois-1` | `200` | `403 SignatureDoesNotMatch` |
+| vazio (`//`) em qualquer posição | | `403` "ausente" | `403` "ausente" |
+
+- `us-east-1` é aceita porque o SigV4 do S3 é global e é o padrão de todo cliente que não escolhe
+  região (`aws s3` sem `--region`). Recusar só por a instalação se declarar `enois-1` quebraria esses.
+- A mesma regra vale para a **URL pré-assinada**: `authenticatePresigned` chama a mesma conferência.
+  Uma URL re-assinada para `ec2` (mesmo com o segredo certo) não abre o objeto.
+- A regra vive em um lugar só, `SigV4Verifier.motivoDeEscopoInvalido`, usada pelos dois caminhos.
+- A mensagem nomeia o serviço/região recebidos, para o cliente ver o que assinou.
+
+**Verificação:** `S3GatewayTests` **+1** (`assinatura_de_outro_servico_ou_regiao_e_recusada`, com
+assinatura real de cada escopo) e **+1** (`url_pre_assinada_com_escopo_de_outro_servico_e_recusada`,
+URL emitida pelo gateway como controle, re-assinada para `ec2` e recusada), mais
+`SigV4PresignedTests` **+1** (`url_com_escopo_de_outro_servico_ou_regiao_e_recusada`). Vermelho antes:
+`200` no `ec2`. Mutações **5/5**: serviço nunca conferido; região nunca conferida; `us-east-1` recusada;
+URL pré-assinada sem a guarda (mutações 1–4 sobreviveram até o teste de integração da URL existir);
+cabeçalho sem a guarda.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:

@@ -2873,6 +2873,149 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		assertThat(doLista.getContentAsString()).doesNotContain("copia.txt");
 	}
 
+	/**
+	 * Assinatura para outro serviço ou outra região é recusada — o escopo do SigV4 amarra os dois.
+	 *
+	 * <p><b>Antes:</b> o escopo do cabeçalho ({@code <data>/<região>/<serviço>/aws4_request}) era lido
+	 * e <b>usado no cálculo</b> — a chave de assinatura deriva de região e serviço — mas nunca
+	 * conferido contra o gateway. Uma requisição assinada para {@code ec2}, {@code execute-api} ou
+	 * qualquer região era aceita com {@code 200} e lia o objeto. O segredo é o mesmo, então a
+	 * assinatura confere; o escopo é a única coisa que diz <i>para o quê</i> o cliente assinou. O S3
+	 * responde {@code 403 SignatureDoesNotMatch} para escopo que não é o dele ({@code s3} na região da
+	 * instalação), e é o que detecta uma credencial vazada sendo usada fora do serviço.</p>
+	 *
+	 * <p><b>Agora:</b> o serviço tem de ser {@code s3}; a região pode ser a da instalação ou
+	 * {@code us-east-1} (a região global do S3, que todo cliente usa por padrão — o {@code AWS CLI} do
+	 * S3 sem {@code --region}). O resto é {@code 403 SignatureDoesNotMatch}. O escopo vazio
+	 * ({@code //}) já não parseia.</p>
+	 */
+	@Test
+	void assinatura_de_outro_servico_ou_regiao_e_recusada() throws Exception {
+		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		String b = "sc" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		MockHttpServletRequestBuilder r = put("/s3/" + b + "/x.txt").content(corpo);
+		assinar(r, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(r).andReturn().getResponse().getStatus()).isEqualTo(200);
+
+		String[][] escopos = { { "enois-1", "s3", "200" }, { "us-east-1", "s3", "200" },
+			{ "enois-1", "ec2", "403" }, { "us-east-1", "execute-api", "403" },
+			{ "enois-1", "s3-object-lambda", "403" },
+			{ "outra-regiao-existe", "s3", "403" } };
+		for (String[] e : escopos) {
+			MockHttpServletRequestBuilder g = get("/s3/" + b + "/x.txt");
+			String amzDate = AMZ.format(CLOCK.instant());
+			g.header("x-amz-date", amzDate).header("x-amz-content-sha256", shaVazio());
+			String uri = g.buildRequest(null).getRequestURI();
+			java.util.Map<String, String> headers = new java.util.LinkedHashMap<>();
+			headers.put("host", "localhost");
+			headers.put("x-amz-content-sha256", shaVazio());
+			headers.put("x-amz-date", amzDate);
+			var req = new SigV4Verifier.Request("GET", uri.substring(S3GatewayController.PREFIX.length()),
+				java.util.Map.of(), headers, shaVazio());
+			var parsed = new SigV4Verifier.Parsed(accessKey, e[0], e[1], "host;x-amz-content-sha256;x-amz-date", "");
+			String sig = SigV4Verifier.signature(req, parsed, SECRET, amzDate.substring(0, 8));
+			String valor = "AWS4-HMAC-SHA256 Credential=" + accessKey + "/" + amzDate.substring(0, 8) + "/"
+				+ e[0] + "/" + e[1] + "/aws4_request, "
+				+ "SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=" + sig;
+			g.header(HttpHeaders.AUTHORIZATION, valor);
+			var rr = mockMvc.perform(g).andReturn().getResponse();
+			assertThat(rr.getStatus()).as("regiao '" + e[0] + "' servico '" + e[1] + "'").isEqualTo(Integer.parseInt(e[2]));
+			if (!"200".equals(e[2])) {
+				assertThat(rr.getContentAsString()).contains("<Code>SignatureDoesNotMatch</Code>")
+					.doesNotContain("abc");
+			}
+		}
+		// Escopo incompleto (//) já não é credencial: vem como ausência de assinatura.
+		for (String valor : new String[] {
+				"AWS4-HMAC-SHA256 Credential=" + accessKey + "/20260101//aws4_request, SignedHeaders=host, Signature="
+					+ "0".repeat(64),
+				"AWS4-HMAC-SHA256 Credential=" + accessKey + "/20260101/enois-1//aws4_request, SignedHeaders=host,"
+					+ " Signature=" + "0".repeat(64),
+				"AWS4-HMAC-SHA256 Credential=" + accessKey + "/20260101//s3/aws4_request, SignedHeaders=host, Signature="
+					+ "0".repeat(64) }) {
+			MockHttpServletRequestBuilder g = get("/s3/" + b + "/x.txt");
+			g.header(HttpHeaders.AUTHORIZATION, valor);
+			var rr = mockMvc.perform(g).andReturn().getResponse();
+			assertThat(rr.getStatus()).as(valor).isEqualTo(403);
+			assertThat(rr.getContentAsString()).doesNotContain("abc");
+		}
+	}
+
+	/**
+	 * A URL pré-assinada também passa pela conferência de escopo (§4.56).
+	 *
+	 * <p><b>Antes:</b> a verificação da URL usava o escopo que a própria URL declarava e nunca o
+	 * conferia — emitir para {@code ec2} (ou re-assinar com outro serviço) dava uma URL que o gateway
+	 * abria. A regra existe no verificador e é a mesma do cabeçalho, mas ela só vale se o caminho da
+	 * URL a chamar: este teste é o que prova a chamada, não a regra.</p>
+	 */
+	@Test
+	void url_pre_assinada_com_escopo_de_outro_servico_e_recusada() throws Exception {
+		var dono = new TestAuthHelper(mockMvc, objectMapper).authenticate("s3_presign_scope");
+		String accessKeyDono = "AKIAENOISSCOPE" + UUID.randomUUID().toString().replace("-", "").substring(0, 6).toUpperCase();
+		jdbc.update("""
+			insert into network_storage_s3_credentials (id, access_key, secret_hash, secret_encrypted, owner_user_id,
+				allowed_bucket, allowed_operations, created_at)
+			values (?, ?, ?, ?, ?, ?, 'GET PUT', ?)
+			""", "s3c_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12), accessKeyDono,
+			com.socialcoisa.rede.shared.security.Hashes.sha256Hex(SECRET), cipher.encrypt(SECRET), dono.userId(),
+			bucket, java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00Z")));
+		gravarPeloDono("fotos/escopo.jpg", "objeto do dono para o escopo", accessKeyDono);
+
+		var emissao = mockMvc.perform(MockMvcRequestBuilders
+			.post("/s3/" + bucket + "/presign").param("key", "fotos/escopo.jpg").param("method", "GET")
+			.param("expires", "600").header("X-Session-Token", dono.token())).andReturn();
+		assertThat(emissao.getResponse().getStatus()).as(emissao.getResponse().getContentAsString()).isEqualTo(200);
+		String url = objectMapper.readTree(emissao.getResponse().getContentAsString()).get("url").asText();
+		String caminho = url.substring(url.indexOf("/s3/"), url.indexOf('?'));
+
+		// Controle: a URL como saiu do gateway abre o objeto.
+		var comoEmitida = mockMvc.perform(get(caminho + "?" + decodificaUmaVez(url.substring(url.indexOf('?') + 1)))
+			.header("Host", "localhost")).andReturn();
+		if (comoEmitida.getRequest().isAsyncStarted()) {
+			comoEmitida = mockMvc.perform(asyncDispatch(comoEmitida)).andReturn();
+		}
+		assertThat(comoEmitida.getResponse().getStatus()).isEqualTo(200);
+
+		// A mesma URL com o escopo trocado e RE-ASSINADA com o mesmo segredo: a assinatura confere,
+		// o escopo não é deste gateway.
+		String consulta = decodificaUmaVez(url.substring(url.indexOf('?') + 1));
+		java.util.Map<String, String> q = new java.util.TreeMap<>();
+		for (String par : consulta.split("&")) {
+			int eq = par.indexOf('=');
+			q.put(par.substring(0, eq), par.substring(eq + 1));
+		}
+		String assinaturaOriginal = q.get("X-Amz-Signature");
+		q.remove("X-Amz-Signature");
+		String amzDate = q.get("X-Amz-Date");
+		// A consulta decodificada traz o `%2F` do emissor; a troca vale nas duas grafias.
+		String credencial = q.get("X-Amz-Credential").replace("/enois-1/s3/aws4_request", "/enois-1/ec2/aws4_request")
+			.replace("%2Fenois-1%2Fs3%2Faws4_request", "%2Fenois-1%2Fec2%2Faws4_request");
+		assertThat(credencial).as(q.get("X-Amz-Credential")).contains("ec2");
+		q.put("X-Amz-Credential", credencial);
+		var pedido = new SigV4Verifier.Request("GET", caminho.substring(S3GatewayController.PREFIX.length()), q,
+			java.util.Map.of("host", "localhost"), "UNSIGNED-PAYLOAD");
+		var escopoEc2 = new SigV4Verifier.Parsed(accessKeyDono, "enois-1", "ec2", "host", "");
+		String assinaturaEc2 = SigV4Verifier.signature(pedido, escopoEc2, SECRET, amzDate.substring(0, 8));
+		assertThat(assinaturaEc2).as("a URL tem de ser re-assinavel").isNotEqualTo(assinaturaOriginal);
+		StringBuilder urlEc2 = new StringBuilder(caminho).append('?');
+		q.forEach((k, v) -> {
+			// O emissor põe `X-Amz-Credential` em claro (a camada da URL é de quem usa); o resto vai
+			// codificado como na URL de origem.
+			String texto = k.equals("X-Amz-Credential") ? v.replace("%2F", "/")
+				: java.net.URLEncoder.encode(v, StandardCharsets.UTF_8);
+			urlEc2.append(k).append('=').append(texto).append('&');
+		});
+		urlEc2.append("X-Amz-Signature=").append(assinaturaEc2);
+
+		var recusa = mockMvc.perform(get(urlEc2.toString()).header("Host", "localhost")).andReturn();
+		if (recusa.getRequest().isAsyncStarted()) {
+			recusa = mockMvc.perform(asyncDispatch(recusa)).andReturn();
+		}
+		assertThat(recusa.getResponse().getStatus()).as(recusa.getResponse().getContentAsString()).isEqualTo(403);
+		assertThat(recusa.getResponse().getContentAsString()).contains("ec2").doesNotContain("objeto do dono");
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {
