@@ -96,9 +96,10 @@ public class StorageContentService {
 	 * cliente recomeça. Aqui ele recebia {@code 206} com o pedaço da versão nova na posição da velha,
 	 * e o arquivo remontado ficava com metade de cada versão — sem nenhum erro.</p>
 	 *
-	 * <p><b>Agora:</b> validador em ETag vale só quando é o ETag da versão servida; em data, só com
-	 * {@code Last-Modified <=} aquela data. Sem bater (ou sem ser nem um nem outro, como
-	 * {@code lixo}) o {@code Range} é ignorado e o corpo inteiro sai com {@code 200} (§4.47).</p>
+	 * <p><b>Agora:</b> validador em ETag vale só quando é o ETag da versão servida, em comparação
+	 * forte ({@code W/} não casa com o ETag forte); em data, só com a data exata do
+	 * {@code Last-Modified}. Sem bater (ou sem ser nem um nem outro, como {@code lixo}) o
+	 * {@code Range} é ignorado e o corpo inteiro sai com {@code 200} (§4.47).</p>
 	 */
 	public ResponseEntity<StreamingResponseBody> respond(StorageObject object, String rangeHeader, String ifNoneMatch,
 			String ifModifiedSince, String ifRange) {
@@ -205,9 +206,10 @@ public class StorageContentService {
 	/**
 	 * O validador do {@code If-Range} corresponde à versão que vai ser servida?
 	 *
-	 * <p>ETag comparado exatamente, como o cliente o recebeu; data comparada em segundos — a
-	 * granularidade do HTTP-date — do mesmo jeito que {@link #notModified}. O que não for nenhum dos
-	 * dois não corresponde, e o pedido vira o do arquivo inteiro: é o que o S3 faz (§4.47).</p>
+	 * <p>ETag comparado com a regra FORTE do RFC 9110 §13.1.5: um ETag fraco ({@code W/}) nunca
+	 * corresponde ao ETag forte da representação. Data comparada por igualdade, em segundos — a
+	 * granularidade do HTTP-date; uma data futura não valida o recurso. O que não for nenhum dos dois
+	 * não corresponde, e o pedido vira o do arquivo inteiro: é o que o S3 faz (§4.47).</p>
 	 */
 	private static boolean ifRangeVale(String ifRange, String etag, java.time.Instant atualizado) {
 		if (ifRange == null || ifRange.isBlank()) {
@@ -216,7 +218,7 @@ public class StorageContentService {
 		}
 		String valor = ifRange.trim();
 		if (valor.startsWith("\"") || valor.startsWith("W/")) {
-			return valor.replace("W/", "").equals(etag.replace("W/", ""));
+			return !valor.startsWith("W/") && valor.equals(etag);
 		}
 		if (atualizado == null) {
 			return false;
@@ -229,8 +231,8 @@ public class StorageContentService {
 		catch (java.time.format.DateTimeParseException naoEhData) {
 			return false;
 		}
-		return !atualizado.truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
-			.isAfter(pedido.truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
+		return atualizado.truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
+			.equals(pedido.truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
 	}
 
 	/**
