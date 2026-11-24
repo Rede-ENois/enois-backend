@@ -735,6 +735,11 @@ Status: `PENDING`, `ACCEPTED`, `REMOVED`, `BLOCKED`, `NONE`
 quem consulta, `false` quando foi recebido e em qualquer outro status. O `status` é o mesmo para os
 dois lados da conexão; é esse campo que diferencia "cancelar" de "aceitar".
 
+Pedir conexão cria, para quem recebe, o aviso `CONNECTION_REQUEST` com `href`
+`/api/network/connections/{quem pediu}/accept`. Ele continua não lido enquanto o convite está
+pendente e fica lido quando o convite é aceito, recusado ou cancelado. Avisos de convites resolvidos
+antes desta regra não são alterados.
+
 Pedir conexão a uma conta que não existe responde `404 USER_NOT_FOUND`.
 
 ---
