@@ -1628,6 +1628,45 @@ URL emitida pelo gateway como controle, re-assinada para `ec2` e recusada), mais
 URL pré-assinada sem a guarda (mutações 1–4 sobreviveram até o teste de integração da URL existir);
 cabeçalho sem a guarda.
 
+## 4.57 `If-Match` no `GET` e no `HEAD` (ciclo 147)
+
+O `GET` avaliava `If-None-Match` e `If-Modified-Since`; `If-Match` era **ignorado** (só o `PUT` o
+conferia, §4.29):
+
+```
+GET /s3/<b>/x.txt   If-Match: "velho"                          → 200 com o objeto
+GET /s3/<b>/x.txt   If-Match: "velho"   Range: bytes=0-3       → 206 com o pedaço da versão NOVA
+HEAD /s3/<b>/x.txt  If-Match: "velho"                          → 200
+```
+
+O segundo caso é o pior: é o download condicional do S3 (`If-Match: <etag>` + `Range`), e o cliente
+remontava o arquivo com metade de cada versão — o mesmo defeito que o `If-Range` (§4.47) foi criado
+para evitar, por outra porta.
+
+### Agora
+
+| pedido | antes | agora |
+|---|---|---|
+| `If-Match` com o ETag atual | `200` | `200` (fluxo normal) |
+| `If-Match` com `"velho"`, `W/"velho"` ou lista sem o atual | `200` / `206` | `412 PreconditionFailed`, sem corpo, com `ETag` |
+| `If-Match: *` | `200` | `200` (o objeto existe) |
+| `If-Match` com lista que **contém** o atual | `200` | `200` |
+| `If-Match` atual + `If-None-Match` atual | `200` | `304` (o `If-Match` não engole o 304) |
+| `HEAD` com `If-Match` divergente | `200` | `412` |
+
+- A ordem é a do HTTP: `If-Match` antes de `If-None-Match`, e antes de abrir a cópia — o `412` não
+  precisa do corpo, e um objeto sem cópia registrada responde `412` antes de `409`.
+- Vale no `GET` e no `HEAD`; a mesma rotina (`StorageContentService.matches`) usada pelo
+  `If-None-Match`. `*` casa porque a chave existe — o objeto desta rota sempre existe.
+- `If-Range` continua com a semântica dele (§4.47): sem casar, o corpo inteiro sai com `200`.
+
+**Verificação:** `S3GatewayTests` **+1** (`get_e_head_com_if_match_divergente_sao_412`): quatro
+divergentes × com e sem `Range`, no `GET` e no `HEAD` → `412` com o `ETag` e sem corpo; quatro formas
+que casam (ETag, `*`, lista com o atual) → `200` com o corpo; `If-Match` + `Range` válido → `206`;
+`If-Match` atual + `If-None-Match` atual → `304`. Vermelho antes: `200` em `"velho"`. Mutações
+**5/5**: `GET` sem a condição; `HEAD` sem a condição; `GET` sem repassar o cabeçalho; `HEAD` sem
+repassar; aceitando qualquer ETag "parecido".
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:

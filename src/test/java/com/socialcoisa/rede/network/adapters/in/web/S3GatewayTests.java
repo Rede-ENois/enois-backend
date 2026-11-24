@@ -3016,6 +3016,91 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		assertThat(recusa.getResponse().getContentAsString()).contains("ec2").doesNotContain("objeto do dono");
 	}
 
+	/**
+	 * `GET`/`HEAD` com `If-Match` que não casa é `412 PreconditionFailed`, não o objeto.
+	 *
+	 * <p><b>Antes:</b> o `GET` avaliava só `If-None-Match` e `If-Modified-Since`. `If-Match` era
+	 * ignorado — e como `Range` também é aceito, o cliente que pedia uma faixa condicionada ao ETag
+	 * recebia {@code 206} com o pedaço da versão <b>nova</b> na posição da velha: exatamente o
+	 * arquivo remontado com metade de cada versão que o {@code If-Range} foi criado para evitar, mas
+	 * na forma que o S3 usa para download condicional ({@code If-Match: <etag>} + {@code Range}). O
+	 * S3 aplica {@code If-Match} ao {@code GET} e ao {@code HEAD}: é o "só me dê este se ainda for
+	 * esta versão", sem a semântica de "sem alteração" do {@code If-None-Match}.</p>
+	 *
+	 * <p><b>Agora:</b> na ordem do HTTP, {@code If-Match} vem antes de {@code If-None-Match}: se não
+	 * casa (ETag diferente, ou {@code *} com o objeto ausente — aqui o objeto já existe, então
+	 * {@code *} casa), a resposta é {@code 412} com o ETag, sem corpo. Quando casa, o resto do fluxo
+	 * segue: faixa, 304 e 200 normalmente (§4.4.57).</p>
+	 */
+	@Test
+	void get_e_head_com_if_match_divergente_sao_412() throws Exception {
+		String b = "im" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		String corpo = "0123456789";
+		MockHttpServletRequestBuilder r = put("/s3/" + b + "/x.txt").content(corpo.getBytes(StandardCharsets.UTF_8));
+		assinar(r, SECRET, shaDe(corpo));
+		assertThat(mockMvc.perform(r).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder h = MockMvcRequestBuilders.head("/s3/" + b + "/x.txt");
+		assinar(h, SECRET, shaVazio());
+		String etag = mockMvc.perform(h).andReturn().getResponse().getHeader("ETag");
+		assertThat(etag).isNotNull().startsWith("\"");
+
+		// Divergente, com e sem faixa, no GET e no HEAD.
+		for (String ifMatch : new String[] { "\"velho\"", "\"outro-1\"", "\"velho\", \"tambem-velho\"", "W/\"velho\"" }) {
+			for (String faixa : new String[] { null, "bytes=0-3" }) {
+				MockHttpServletRequestBuilder g = get("/s3/" + b + "/x.txt").header("If-Match", ifMatch);
+				if (faixa != null) {
+					g.header("Range", faixa);
+				}
+				assinar(g, SECRET, shaVazio());
+				var rr = mockMvc.perform(g).andReturn();
+				var resp = rr.getRequest().isAsyncStarted()
+					? mockMvc.perform(asyncDispatch(rr)).andReturn().getResponse() : rr.getResponse();
+				String rotulo = "GET If-Match=" + ifMatch + (faixa == null ? "" : " Range=" + faixa);
+				assertThat(resp.getStatus()).as(rotulo + ": " + resp.getContentAsString()).isEqualTo(412);
+				assertThat(resp.getContentAsByteArray()).as(rotulo).isEmpty();
+				assertThat(resp.getHeader("ETag")).as(rotulo).isEqualTo(etag);
+			}
+			MockHttpServletRequestBuilder hh = MockMvcRequestBuilders.head("/s3/" + b + "/x.txt")
+				.header("If-Match", ifMatch);
+			assinar(hh, SECRET, shaVazio());
+			assertThat(mockMvc.perform(hh).andReturn().getResponse().getStatus()).as("HEAD " + ifMatch).isEqualTo(412);
+		}
+
+		// Casando: o fluxo normal continua — inteiro, faixa, e o 304 do If-None-Match continua valendo.
+		// A lista com um etag velho E o certo casa (o S3 casa qualquer um da lista).
+		for (String casando : new String[] { etag, "*", "\"velho\", " + etag }) {
+			MockHttpServletRequestBuilder lista = get("/s3/" + b + "/x.txt").header("If-Match", casando);
+			assinar(lista, SECRET, shaVazio());
+			var lr = mockMvc.perform(lista).andReturn();
+			var lresp = lr.getRequest().isAsyncStarted()
+				? mockMvc.perform(asyncDispatch(lr)).andReturn().getResponse() : lr.getResponse();
+			assertThat(lresp.getStatus()).as("If-Match=" + casando).isEqualTo(200);
+			assertThat(lresp.getContentAsString()).isEqualTo(corpo);
+		}
+		MockHttpServletRequestBuilder ok = get("/s3/" + b + "/x.txt").header("If-Match", etag);
+		assinar(ok, SECRET, shaVazio());
+		var okr = mockMvc.perform(ok).andReturn();
+		var okresp = okr.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(okr)).andReturn().getResponse() : okr.getResponse();
+		assertThat(okresp.getStatus()).isEqualTo(200);
+		assertThat(okresp.getContentAsString()).isEqualTo(corpo);
+
+		MockHttpServletRequestBuilder faixaOk = get("/s3/" + b + "/x.txt").header("If-Match", etag)
+			.header("Range", "bytes=2-4");
+		assinar(faixaOk, SECRET, shaVazio());
+		var fok = mockMvc.perform(faixaOk).andReturn();
+		var fresp = fok.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(fok)).andReturn().getResponse() : fok.getResponse();
+		assertThat(fresp.getStatus()).isEqualTo(206);
+		assertThat(fresp.getContentAsString()).isEqualTo("234");
+
+		// If-Match casa e If-None-Match do mesmo ETag pede 304 — If-Match não engole o 304.
+		MockHttpServletRequestBuilder d304 = MockMvcRequestBuilders.head("/s3/" + b + "/x.txt")
+			.header("If-Match", etag).header("If-None-Match", etag);
+		assinar(d304, SECRET, shaVazio());
+		assertThat(mockMvc.perform(d304).andReturn().getResponse().getStatus()).isEqualTo(304);
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {

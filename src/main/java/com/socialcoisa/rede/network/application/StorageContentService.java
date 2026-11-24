@@ -87,6 +87,12 @@ public class StorageContentService {
 		return respond(object, rangeHeader, ifNoneMatch, ifModifiedSince, null);
 	}
 
+	/** O {@code GET} com {@code If-Match} (§4.57). */
+	public ResponseEntity<StreamingResponseBody> respond(StorageObject object, String rangeHeader, String ifNoneMatch,
+			String ifModifiedSince, String ifRange, String ifMatch) {
+		return respond(object, rangeHeader, ifNoneMatch, ifModifiedSince, ifRange, ifMatch, true);
+	}
+
 	/**
 	 * O mesmo GET, com {@code If-Range}.
 	 *
@@ -102,6 +108,28 @@ public class StorageContentService {
 	 */
 	public ResponseEntity<StreamingResponseBody> respond(StorageObject object, String rangeHeader, String ifNoneMatch,
 			String ifModifiedSince, String ifRange) {
+		return respond(object, rangeHeader, ifNoneMatch, ifModifiedSince, ifRange, null, true);
+	}
+
+	/**
+	 * O corpo do {@code GET} com todas as condições.
+	 *
+	 * <p><b>Antes:</b> {@code If-Match} não existia aqui: o cliente que condicionava o download ao
+	 * ETag ({@code If-Match: <etag>} + {@code Range}) recebia {@code 206} com o pedaço da versão nova
+	 * na posição da velha — o arquivo remontado com metade de cada versão, sem erro. O S3 aplica
+	 * {@code If-Match} ao {@code GET} e ao {@code HEAD}.</p>
+	 *
+	 * <p><b>Agora:</b> na ordem do HTTP, {@code If-Match} vem antes de {@code If-None-Match}: o que
+	 * não casa é {@code 412} com o ETag e sem corpo; o que casa deixa o resto do fluxo igual (§4.57).
+	 * {@code paraGet=false} é o {@code HEAD}, que não abre a cópia só para o 412.</p>
+	 */
+	private ResponseEntity<StreamingResponseBody> respond(StorageObject object, String rangeHeader, String ifNoneMatch,
+			String ifModifiedSince, String ifRange, String ifMatch, boolean abrirCopia) {
+		// `If-Match` antes de abrir a cópia (§4.57): a pergunta é sobre a versão do catálogo, e o
+		// 412 não precisa do corpo. O ETag é o mesmo que a resposta devolve.
+		if (ifMatch != null && !ifMatch.isBlank() && !matches(etag(object), ifMatch)) {
+			return resposta(412).header(HttpHeaders.ETAG, etag(object)).build();
+		}
 		List<StoragePlacement> location = storage.location(object.id());
 		if (location.isEmpty()) {
 			throw new ApiException(409, "STORAGE_PLACEMENT_MISSING",
@@ -165,6 +193,15 @@ public class StorageContentService {
 	 * HEAD para decidir se baixa o objeto; 200 sempre é "baixe de novo", mesmo com os bytes em mãos.</p>
 	 */
 	public ResponseEntity<StreamingResponseBody> head(StorageObject object, String ifNoneMatch, String ifModifiedSince) {
+		return head(object, ifNoneMatch, ifModifiedSince, null);
+	}
+
+	/** O {@code HEAD} com {@code If-Match} (§4.57): a mesma pergunta do {@code GET}, sem corpo. */
+	public ResponseEntity<StreamingResponseBody> head(StorageObject object, String ifNoneMatch, String ifModifiedSince,
+			String ifMatch) {
+		if (ifMatch != null && !ifMatch.isBlank() && !matches(etag(object), ifMatch)) {
+			return resposta(412).header(HttpHeaders.ETAG, etag(object)).build();
+		}
 		List<StoragePlacement> location = storage.location(object.id());
 		if (location.isEmpty()) {
 			throw new ApiException(409, "STORAGE_PLACEMENT_MISSING",

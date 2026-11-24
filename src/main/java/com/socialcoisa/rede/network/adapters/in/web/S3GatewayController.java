@@ -1714,9 +1714,10 @@ class S3GatewayController {
 		recusarSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		recusarLeituraDeSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		StorageObject object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, keyOf(request)));
+		// `If-Match` é a pré-condição do download condicional (§4.57), como no S3.
 		return comVocabularioDoS3(() -> content.respond(object, request.getHeader(HttpHeaders.RANGE),
 			request.getHeader(HttpHeaders.IF_NONE_MATCH), request.getHeader(HttpHeaders.IF_MODIFIED_SINCE),
-			request.getHeader("If-Range")));
+			request.getHeader("If-Range"), request.getHeader(HttpHeaders.IF_MATCH)));
 	}
 
 	/** HeadObject: mesmos cabeçalhos do GetObject, sem corpo. */
@@ -1733,7 +1734,7 @@ class S3GatewayController {
 		recusarLeituraDeSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		StorageObject object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, keyOf(request), "HEAD"));
 		return comVocabularioDoS3(() -> content.head(object, request.getHeader(HttpHeaders.IF_NONE_MATCH),
-			request.getHeader(HttpHeaders.IF_MODIFIED_SINCE)));
+			request.getHeader(HttpHeaders.IF_MODIFIED_SINCE), request.getHeader(HttpHeaders.IF_MATCH)));
 	}
 
 	/** DeleteObject: lápide no catálogo. A resposta é 204 mesmo se a chave não existir (igual ao S3). */
