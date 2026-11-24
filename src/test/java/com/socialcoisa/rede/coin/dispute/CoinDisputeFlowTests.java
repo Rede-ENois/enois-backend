@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.util.Map;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -27,6 +28,7 @@ import com.socialcoisa.rede.shared.web.TestAuthHelper;
  */
 @SpringBootTest
 @AutoConfigureMockMvc
+@Tag("critico")
 class CoinDisputeFlowTests {
 
 	@Autowired

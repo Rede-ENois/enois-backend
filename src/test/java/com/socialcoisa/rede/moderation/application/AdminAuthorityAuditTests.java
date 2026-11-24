@@ -13,12 +13,14 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import com.socialcoisa.rede.shared.audit.AuditTrail;
 
 /** Trilha das recusas administrativas: o conteúdo da linha e o comportamento sob falha da trilha. */
+@Tag("critico")
 class AdminAuthorityAuditTests {
 
 	private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-11-15T12:00:00Z"), ZoneOffset.UTC);

@@ -8,6 +8,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.UUID;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -26,6 +27,7 @@ import org.junit.jupiter.api.Test;
  * <p>As migrações não rodam aqui de propósito: o que está sendo fixado é o comportamento do driver
  * sobre um CREATE TABLE com CHECK criado e lido em conexões diferentes, na mesma base em memória.</p>
  */
+@Tag("critico")
 class H2DriverConstraintTests {
 
 	private static final String URL_TEMPLATE = "jdbc:h2:mem:%s;MODE=MySQL;DB_CLOSE_DELAY=-1";

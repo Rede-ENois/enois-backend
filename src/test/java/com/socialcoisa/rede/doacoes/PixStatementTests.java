@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.List;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.doacoes.domain.PixStatement;
@@ -13,6 +14,7 @@ import com.socialcoisa.rede.doacoes.domain.PixStatement;
  * sem valor não entra — errar para o lado de não reconhecer é o jeito seguro, porque a conferência
  * do lado de quem recebe ainda existe.
  */
+@Tag("critico")
 class PixStatementTests {
 
 	@Test

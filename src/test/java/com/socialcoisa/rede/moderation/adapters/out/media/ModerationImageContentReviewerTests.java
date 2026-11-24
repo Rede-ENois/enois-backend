@@ -11,12 +11,14 @@ import java.util.Optional;
 
 import javax.imageio.ImageIO;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.media.application.port.out.ImageContentReviewer.Result;
 import com.socialcoisa.rede.moderation.ai.MediaSafetyAnalyzer;
 import com.socialcoisa.rede.moderation.domain.MediaSafetyVerdict;
 
+@Tag("critico")
 class ModerationImageContentReviewerTests {
 
 	private final MediaSafetyAnalyzer analyzer = mock();

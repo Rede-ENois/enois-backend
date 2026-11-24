@@ -11,6 +11,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -18,6 +19,7 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 
 /** A fila do prêmio: quem entra, em que ordem, e quanto cada posição leva. */
+@Tag("critico")
 class DailyGamePayoutTest {
 
     private static final LocalDate DAY = LocalDate.of(2026, 10, 16);

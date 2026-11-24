@@ -23,9 +23,53 @@
 ./mvnw verify
 ```
 
-Na CI, todo PR roda a suíte inteira (job `test-suite` em `.github/workflows/build-and-push.yml`).
-O build da imagem usa `-DskipTests` e o schema check só sobe o contexto, então é esse job que pega
-teste quebrado antes de chegar na `qa`. Ele não roda no push de `qa`/`main` e não segura deploy.
+### Dois modos: críticos (gate de PR) e completo
+
+O gate de PR roda **só as classes de risco**, marcadas com `@Tag("critico")`:
+
+```bash
+# Gate de PR — autenticação, autorização, dinheiro, moderação, migração,
+# idempotência/concorrência e contratos de API usados pelo front
+./mvnw test -Pcriticos
+
+# Suíte completa (comportamento padrão, sem filtro)
+./mvnw test
+```
+
+O profile `criticos` só configura o `maven-surefire-plugin` com `<groups>critico</groups>`; não
+há `@Disabled`, skip nem asserção alterada. O filtro é por classe: quem não tem a tag continua no
+repositório e roda em `./mvnw test`. A tag é de classe, então todos os métodos daquela classe
+entram no gate.
+
+O conjunto é uma fotografia de risco, não uma prova de que nada fora dele quebrou. A suíte
+completa continua sendo a verificação final e deve rodar antes de release, em mudança de
+infraestrutura ou quando o PR mexer em área não coberta. Storage/rede distribuída e contratos
+têm uma amostra dos cenários de perda de dado e de contrato do front; a ampliação do conjunto
+cobre o restante, e mudanças nesses módulos pedem a suíte completa até lá.
+
+Hoje o conjunto tem **145 classes** (67 sobem o contexto Spring; 78 são testes puros). Áreas e
+classes marcadas (o porquê é o ativo protegido):
+
+| Área | Pacotes/classes marcadas |
+|---|---|
+| Autenticação, sessão, 2FA, reset de senha e rate limit de auth | `identity` (21: signup, sessão, OAuth, 2FA, troca de senha, throttle, retenção), `shared/security` (17: rate limit, enumeração, IP, TOTP, panic), `apiv1` (6: login limit, origins), `shared/web` (`MissingSessionHeaderTests`, `SessaoLimitadaAuditoriaTests`, `SecurityHeadersFilterTests`, `AutomatedWritePathsTests`, `PiiMaskTests`), `CorporateIdentitySecurityTests`, `PersonalizationSecurityTests`, `MediaUploadAuthTests` |
+| Autorização e propriedade de recurso | `groups` (`GroupSecurityTests`, `GroupPermissionsTests`, `GroupModerationTests`), `CommunityOwnershipTests`, `eroleplay/*SecurityTests` (6), `NetworkAuthorityTests`, `NetworkNodeAuthRateLimitTests`, `TaskTypeAuthorizationTests` |
+| Dinheiro (Faísca, carteira, doações, compras) | `coin` (11: fluxo, extrato, transferência, disputa, economia, streak), `doacoes` (3), `dailygames` (3: payout/rewards), `idempotency` (2), `MentorSparksPaymentTests`, `MarketplaceIdempotencyTests`, `MessageSendIdempotencyTests` |
+| Moderação, denúncias e sanções | `moderation` (37: regras, triagem, quarentena, sanções, ban, IA), `feed` (`PostQuarantineVisibilityTests`, `PostPublishingPolicyTests`, `BannedAuthorAnonymizedTests`), `GroupReportsTests`, `WriteGateCoverageTests`, `RiskEngineTests`, `SafeHtmlAttackTests` |
+| Migração, schema e boot | `RedeApplicationTests`, `shared/persistence` (Flyway, H2, MariaDB, lock), `shared/LookupIndexMigrationTests`, `NotificationColumnQuotingTests`, `LazyMigrationPersistenceTests` |
+| Idempotência e concorrência | `idempotency` (2), `MessageSendIdempotencyTests`, `MarketplaceIdempotencyTests`, `PostCounterConcurrencyTests`, `PollVoteConcurrencyTests`, `PessimisticLockSqlTests` |
+| Contratos de API usados pelo front | `ContractControllerTests`, `FeedControllerTests`, `NotificationContractControllerTests`, `MessagingContractControllerTests` |
+| Storage/rede distribuída (amostra de perda de dado) | `NetworkStorageTests`, `MediaDeletionWorkerTransactionTests` |
+
+Para listar as classes marcadas hoje:
+
+```bash
+grep -rl '@Tag("critico")' src/test/java | wc -l
+```
+
+Na CI, todo PR roda o job `test-suite` (`🧪 Testes (PR)`) com `-Pcriticos`. O build da imagem usa
+`-DskipTests` e o schema check só sobe o contexto; o gate de testes críticos é o que pega a
+regressão de risco antes da `qa`. Ele não roda no push de `qa`/`main` e não segura deploy.
 
 Envio que roda em pool de threads (push) não é verificado de forma síncrona: o teste troca o
 executor por um que roda na hora (`@MockitoBean(name = "pushExecutor")` + `doAnswer`) ou usa

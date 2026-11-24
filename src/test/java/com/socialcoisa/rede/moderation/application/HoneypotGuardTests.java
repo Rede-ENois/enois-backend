@@ -12,6 +12,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Optional;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository;
@@ -20,6 +21,7 @@ import com.socialcoisa.rede.moderation.application.port.out.SanctionRepository;
 import com.socialcoisa.rede.moderation.domain.UserSanction;
 import com.socialcoisa.rede.shared.web.AdminGuard;
 
+@Tag("critico")
 class HoneypotGuardTests {
 
 	private final Clock clock = Clock.fixed(Instant.parse("2026-10-21T12:00:00Z"), ZoneOffset.UTC);

@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -34,6 +35,7 @@ import com.socialcoisa.rede.profile.domain.UserProfile;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 /** Settlement pays each credit on its own, retries a busy ledger, and pays only eligible accounts. */
+@Tag("critico")
 class DailyGameRewardsServiceTest {
 
 	private static final LocalDate DAY = LocalDate.of(2026, 10, 16);

@@ -308,4 +308,23 @@
 		</plugins>
 	</build>
 
+	<profiles>
+		<!-- Gate de PR: roda apenas as classes marcadas com @Tag("critico"). A suíte completa
+		     continua sendo `./mvnw test`, sem profile e sem filtro. -->
+		<profile>
+			<id>criticos</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-surefire-plugin</artifactId>
+						<configuration>
+							<groups>critico</groups>
+						</configuration>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
+
 </project>

@@ -3,6 +3,7 @@ package com.socialcoisa.rede;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -15,6 +16,7 @@ import jakarta.persistence.EntityManagerFactory;
  * entity against it: a table or column that exists in an entity but in no migration fails here.
  */
 @SpringBootTest(properties = "spring.jpa.hibernate.ddl-auto=validate")
+@Tag("critico")
 class RedeApplicationTests {
 
 	@Autowired

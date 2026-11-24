@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -20,6 +21,7 @@ import com.socialcoisa.rede.shared.web.ApiException;
  * Prefixo "idemp_flow_" em todos os valores para nao colidir com outros testes no H2 compartilhado.
  */
 @SpringBootTest
+@Tag("critico")
 class IdempotencyFlowTests {
 
 	@Autowired

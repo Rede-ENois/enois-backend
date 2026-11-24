@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -44,6 +45,7 @@ import tools.jackson.databind.ObjectMapper;
  * aplicado sem um PENALIZAR confirmado — e é isso que os casos abaixo travam.
  */
 @ExtendWith(MockitoExtension.class)
+@Tag("critico")
 class PostSpamAutomodTests {
 
 	private static final String USER = "user_spam_tests";

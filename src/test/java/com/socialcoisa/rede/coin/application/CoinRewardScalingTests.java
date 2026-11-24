@@ -2,6 +2,7 @@ package com.socialcoisa.rede.coin.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.coin.domain.CoinRate;
@@ -10,6 +11,7 @@ import com.socialcoisa.rede.coin.domain.CoinRate;
  * A emissão automática preserva o VALOR em reais: se a faísca subiu, paga-se menos faíscas pelo
  * mesmo valor; se caiu, mais. Sempre sobra pelo menos 1 milésimo.
  */
+@Tag("critico")
 class CoinRewardScalingTests {
 
 	@Test

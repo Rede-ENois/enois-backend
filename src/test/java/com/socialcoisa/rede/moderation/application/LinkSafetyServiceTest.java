@@ -19,6 +19,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.feed.application.port.in.ModerationRemovePostUseCase;
@@ -41,6 +42,7 @@ import tools.jackson.databind.ObjectMapper;
  * A barreira de links: o que ela barra sozinha, o que manda para revisão humana e o que ela deixa
  * em paz. O modelo é substituído por um veredito fixo — o que se prova aqui é a DECISÃO do serviço.
  */
+@Tag("critico")
 class LinkSafetyServiceTest {
 
 	private static final Instant AGORA = Instant.parse("2026-10-29T12:00:00Z");

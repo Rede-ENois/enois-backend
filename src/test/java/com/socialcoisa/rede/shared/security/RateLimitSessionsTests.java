@@ -13,11 +13,13 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Optional;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 
 import com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository;
 
+@Tag("critico")
 class RateLimitSessionsTests {
 
 	private final Clock clock = Clock.fixed(Instant.parse("2026-10-26T00:00:00Z"), ZoneOffset.UTC);

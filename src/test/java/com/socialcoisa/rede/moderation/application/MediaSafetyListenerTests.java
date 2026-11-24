@@ -12,6 +12,7 @@ import java.util.Optional;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.feed.application.PostPublishedEvent;
@@ -21,6 +22,7 @@ import com.socialcoisa.rede.feed.domain.PostId;
 import com.socialcoisa.rede.feed.domain.PostType;
 import com.socialcoisa.rede.feed.domain.UserId;
 
+@Tag("critico")
 class MediaSafetyListenerTests {
 
 	private final MediaSafetyService mediaSafety = mock();

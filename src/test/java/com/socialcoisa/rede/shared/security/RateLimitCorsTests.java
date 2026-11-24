@@ -6,6 +6,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -17,6 +18,7 @@ import com.socialcoisa.rede.shared.web.TrustedOriginCors;
  * O 429 dos filtros precisa carregar CORS: sem ele o navegador lê a recusa como falha de rede e a
  * pessoa vê "não foi possível..." sem status nenhum — foi assim que a reação pareceu quebrada.
  */
+@Tag("critico")
 class RateLimitCorsTests {
 
 	private final ClientIpResolver resolver = new ClientIpResolver();

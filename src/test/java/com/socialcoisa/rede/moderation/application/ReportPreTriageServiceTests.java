@@ -13,6 +13,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Optional;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.moderation.application.port.out.ReportRepository;
@@ -24,6 +25,7 @@ import com.socialcoisa.rede.moderation.domain.TargetType;
 import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.profile.domain.UserProfile;
 
+@Tag("critico")
 class ReportPreTriageServiceTests {
 
 	private final Instant now = Instant.parse("2026-10-21T12:00:00Z");

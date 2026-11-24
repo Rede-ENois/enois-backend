@@ -3,11 +3,13 @@ package com.socialcoisa.rede.moderation.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.shared.web.ApiException;
 
 /** The per-subject strike and cooldown maps stay bounded however many distinct origins show up. */
+@Tag("critico")
 class SuspiciousSignupGuardBoundTests {
 
 	@Test

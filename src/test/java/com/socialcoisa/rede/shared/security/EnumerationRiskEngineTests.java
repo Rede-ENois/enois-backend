@@ -6,6 +6,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.Test;
  * usernames, enumeração distribuída entre endpoints, bypass por troca de rota e — o mais
  * importante — a navegação legítima de uma pessoa real, que não pode ser bloqueada.</p>
  */
+@Tag("critico")
 class EnumerationRiskEngineTests {
 
 	private final Clock clock = Clock.fixed(Instant.parse("2026-11-09T12:00:00Z"), ZoneOffset.UTC);

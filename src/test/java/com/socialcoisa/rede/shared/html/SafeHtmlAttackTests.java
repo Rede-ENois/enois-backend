@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.List;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -17,6 +18,7 @@ import org.junit.jupiter.api.Test;
  * Nenhum payload aqui pode sobreviver: nem tag executavel, nem atributo de evento, nem esquema
  * `javascript:`, nem markup formado por entidade HTML.
  */
+@Tag("critico")
 class SafeHtmlAttackTests {
 
 	/** Cada linha e um ataque classico; o resultado nao pode conter nada disso. */

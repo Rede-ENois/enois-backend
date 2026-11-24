@@ -11,6 +11,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Optional;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository;
@@ -29,6 +30,7 @@ import com.socialcoisa.rede.shared.web.ApiException;
  * pessoa fica sem saber se errou o código, se a conta travou ou se o site caiu. Cada estado
  * inesperado precisa de uma resposta explícita.</p>
  */
+@Tag("critico")
 class TwoFactorVerifyHardeningTests {
 
 	private static final Instant NOW = Instant.parse("2026-10-26T22:00:00Z");

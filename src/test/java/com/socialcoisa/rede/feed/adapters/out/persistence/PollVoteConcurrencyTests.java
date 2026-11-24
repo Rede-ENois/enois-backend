@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -40,6 +41,7 @@ import com.socialcoisa.rede.shared.web.TestDatabaseSupport;
 @SpringBootTest
 @TestPropertySource(properties =
 	"spring.datasource.url=jdbc:h2:mem:poll_vote_concurrency;MODE=MySQL;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=20000")
+@Tag("critico")
 class PollVoteConcurrencyTests {
 
 	@Autowired private VotePollUseCase votos;

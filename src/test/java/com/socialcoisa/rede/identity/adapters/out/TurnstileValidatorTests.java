@@ -4,10 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import tools.jackson.databind.json.JsonMapper;
 
+@Tag("critico")
 class TurnstileValidatorTests {
 
 	private static final String TEST_SECRET = "1x0000000000000000000000000000000AA";

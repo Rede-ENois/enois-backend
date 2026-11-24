@@ -2,6 +2,7 @@ package com.socialcoisa.rede.coin.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.coin.application.CoinEconomyCalculator.Metrics;
@@ -11,6 +12,7 @@ import com.socialcoisa.rede.coin.application.CoinEconomyCalculator.Params;
  * A cotação automática: sobe com giro e escassez, desce com emissão e com economia parada, e
  * respeita piso, teto e passo.
  */
+@Tag("critico")
 class CoinEconomyCalculatorTests {
 
 	private final Params params = Params.defaults();

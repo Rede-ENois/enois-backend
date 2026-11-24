@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.colagem.application.port.in.ColagemModerationPort;
@@ -43,6 +44,7 @@ import com.socialcoisa.rede.profile.domain.UserProfile;
  * banida. Os outros garantem que a automação NÃO age quando não tem certeza — falso positivo aqui
  * apaga post de gente honesta.</p>
  */
+@Tag("critico")
 class MediaSafetyServiceTests {
 
 	private static final Instant AGORA = Instant.parse("2026-10-29T12:00:00Z");

@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.moderation.domain.ContentAutomationVerdict;
@@ -23,6 +24,7 @@ import tools.jackson.databind.ObjectMapper;
  * O contrato do classificador de conteúdo automatizado e o único gate que autoriza a automação a
  * tirar um post do ar sozinha: automatizado confirmado e confiança acima do piso.
  */
+@Tag("critico")
 class ContentAutomationAnalyzerTests {
 
 	private ModerationAiService ai;

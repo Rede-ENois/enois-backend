@@ -2,12 +2,14 @@ package com.socialcoisa.rede.apiv1.origins;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /**
  * A lista de origens do app é uma só para o portão e para o CORS, e o curinga só existe onde é
  * necessário (QA e dev).
  */
+@Tag("critico")
 class AppOriginRegistryTests {
 
 	private static final String QA = "https://enois-qa.b7cloud.tech";

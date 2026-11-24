@@ -3,6 +3,7 @@ package com.socialcoisa.rede.apiv1.origins;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.Test;
  * qualquer site chamar a API. Curinga de SUBDOMÍNIO é outra coisa — ele só existe no QA/dev e o
  * registro decide isso por ambiente (ver {@link AppOriginRegistryTests}).
  */
+@Tag("critico")
 class AppOriginRegistryWildcardTests {
 
 	@Test

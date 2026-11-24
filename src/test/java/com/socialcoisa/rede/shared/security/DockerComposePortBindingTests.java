@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.shared.security;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.yaml.snakeyaml.Yaml;
 
@@ -26,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * não publicar. A aplicação já consegue acessar o banco pela
  * rede interna do Compose, sem precisar expor essa porta.
  */
+@Tag("critico")
 class DockerComposePortBindingTests {
 
     private static final Set<String> DATABASE_SERVICES = Set.of("mariadb", "mysql", "postgres", "redis", "mongo");

@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.net.URI;
 import java.util.Optional;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.moderation.domain.LinkSafetyVerdict;
@@ -12,6 +13,7 @@ import com.socialcoisa.rede.moderation.domain.PageSummary;
 
 import tools.jackson.databind.ObjectMapper;
 
+@Tag("critico")
 class LinkSafetyAnalyzerTest {
 
 	private final ObjectMapper objectMapper = new ObjectMapper();

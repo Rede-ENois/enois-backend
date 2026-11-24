@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
@@ -28,6 +29,7 @@ import tools.jackson.databind.json.JsonMapper;
  * Testa os branches de replayOrReject que sao dificeis de alcancar via integracao:
  * PROCESSING (concorrencia), FAILED (defensivo), e a corrida de insert com fallback.
  */
+@Tag("critico")
 class IdempotencyReplayTests {
 
 	private static final Instant NOW = Instant.parse("2026-10-31T12:00:00Z");

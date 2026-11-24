@@ -8,6 +8,7 @@ import java.util.Map;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -17,6 +18,7 @@ import com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository;
 
 /** Credencial de sessão não fica em texto no banco; a migração mantém o token antigo funcionando. */
 @SpringBootTest
+@Tag("critico")
 class SessionTokenHashingTests {
 
 	private static final String USER = "hash_test_user";

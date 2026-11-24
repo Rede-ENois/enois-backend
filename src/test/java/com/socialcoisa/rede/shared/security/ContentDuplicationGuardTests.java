@@ -11,10 +11,12 @@ import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.shared.web.ApiException;
 
+@Tag("critico")
 class ContentDuplicationGuardTests {
 
 	@Test

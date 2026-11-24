@@ -6,10 +6,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.shared.web.ApiException;
 
+@Tag("critico")
 class TotpAndCipherTests {
 
 	/** Segredo dos vetores do RFC 6238 ("12345678901234567890") em base32. */

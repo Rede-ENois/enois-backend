@@ -10,6 +10,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -23,6 +24,7 @@ import org.springframework.mock.web.MockHttpServletResponse;
  * identidade passa a contar por ele, e o restante continua contando pela rede (ver
  * {@link ClientIpResolverProxiedClientTests}).</p>
  */
+@Tag("critico")
 class SharedFrontRateLimitTests {
 
 	private static final String FRONT_ORIGIN = "https://enois-qa.b7cloud.tech";

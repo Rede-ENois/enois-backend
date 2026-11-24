@@ -21,6 +21,7 @@ import org.flywaydb.core.api.MigrationInfo;
 import org.flywaydb.core.api.MigrationInfoService;
 import org.flywaydb.core.api.MigrationState;
 import org.flywaydb.core.api.MigrationVersion;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InOrder;
@@ -32,6 +33,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
  * do MariaDB de producao). Por isso a decisao de reparar e testada com o Flyway mockado.
  */
 @ExtendWith(MockitoExtension.class)
+@Tag("critico")
 class FlywayMigrationConfigTests {
 
 	private static final Pattern VERSIONED_MIGRATION = Pattern.compile("^V([0-9]+(?:\\.[0-9]+)?)__.+\\.sql$");

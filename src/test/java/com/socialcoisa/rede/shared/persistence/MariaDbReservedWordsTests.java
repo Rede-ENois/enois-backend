@@ -16,6 +16,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -37,6 +38,7 @@ import org.junit.jupiter.api.Test;
  * A regra: no DDL, o nome reservado tem de vir **citado** (entre crases); no mapeamento JPA, o
  * nome da coluna não pode ser reservado (o Hibernate monta o SQL e não cita).
  */
+@Tag("critico")
 class MariaDbReservedWordsTests {
 
 	private static final Path MIGRACOES = Path.of("src", "main", "resources", "db", "migration");

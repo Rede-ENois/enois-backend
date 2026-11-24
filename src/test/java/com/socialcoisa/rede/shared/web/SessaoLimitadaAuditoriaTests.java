@@ -15,6 +15,7 @@ import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.Optional;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -31,6 +32,7 @@ import com.socialcoisa.rede.shared.security.RateLimitSessions;
 
 import jakarta.servlet.FilterChain;
 
+@Tag("critico")
 class SessaoLimitadaAuditoriaTests {
 
 	private static final Instant AGORA = Instant.parse("2026-11-16T12:00:00Z");

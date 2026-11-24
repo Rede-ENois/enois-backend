@@ -6,6 +6,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
@@ -23,6 +24,7 @@ import jakarta.servlet.FilterChain;
  * <p>A linha fina: quem usa o app produz 200 e, às vezes, um 409 de estado (e-mail já cadastrado).
  * Nada disso conta. E o health check do cluster nunca entra: derrubá-lo derruba o pod.
  */
+@Tag("critico")
 class AbuseGuardFilterTests {
 
 	/** Relógio que anda quando o teste manda. */

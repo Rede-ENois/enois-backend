@@ -15,6 +15,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
@@ -34,6 +35,7 @@ import com.socialcoisa.rede.shared.web.ApiException;
  * Testa o fluxo de banimento com bloqueio de IPs: bane o usuario e bloqueia todos os IPs
  * conhecidos numa operacao so.
  */
+@Tag("critico")
 class BanWithIpsTest {
 
 	private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-11-05T12:00:00Z"), ZoneOffset.UTC);

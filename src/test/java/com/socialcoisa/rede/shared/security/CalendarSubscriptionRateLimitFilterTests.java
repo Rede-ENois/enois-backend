@@ -11,6 +11,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
@@ -23,6 +24,7 @@ import org.springframework.mock.web.MockHttpServletResponse;
  * custa de ser folgado, porque um serviço de calendário legítimo busca de poucos endereços em
  * nome de muita gente.
  */
+@Tag("critico")
 class CalendarSubscriptionRateLimitFilterTests {
 
 	private static final Instant NOW = Instant.parse("2026-11-11T12:00:00Z");

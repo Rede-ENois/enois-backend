@@ -9,6 +9,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.Map;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -32,6 +33,7 @@ import com.socialcoisa.rede.shared.web.TestDatabase;
  */
 @SpringBootTest
 @AutoConfigureMockMvc
+@Tag("critico")
 class AgePolicyTests {
 
 	private static final ZoneId BRAZIL = ZoneId.of("America/Sao_Paulo");

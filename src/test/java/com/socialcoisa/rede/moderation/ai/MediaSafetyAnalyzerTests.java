@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.List;
 import java.util.Optional;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.moderation.application.port.out.ReportedContentReader;
@@ -15,6 +16,7 @@ import com.socialcoisa.rede.moderation.domain.MediaSafetyVerdict;
  * O contrato do classificador de imagem: o que ele aceita como palpite, o que invalida, e quando a
  * automação pode agir sem uma pessoa olhar.
  */
+@Tag("critico")
 class MediaSafetyAnalyzerTests {
 
 	private static final tools.jackson.databind.ObjectMapper MAPPER = new tools.jackson.databind.ObjectMapper();

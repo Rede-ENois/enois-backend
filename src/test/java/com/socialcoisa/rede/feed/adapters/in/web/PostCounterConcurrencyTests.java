@@ -17,6 +17,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -42,6 +43,7 @@ import com.socialcoisa.rede.shared.web.TestAuthHelper.AuthSession;
  */
 @SpringBootTest
 @AutoConfigureMockMvc
+@Tag("critico")
 class PostCounterConcurrencyTests {
 
 	private static final int PEOPLE = 8;

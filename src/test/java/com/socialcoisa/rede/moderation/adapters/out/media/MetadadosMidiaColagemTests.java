@@ -1,5 +1,7 @@
 package com.socialcoisa.rede.moderation.adapters.out.media;
 
+import org.junit.jupiter.api.Tag;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -41,6 +43,7 @@ import com.socialcoisa.rede.moderation.domain.UserSanction;
 
 import tools.jackson.databind.ObjectMapper;
 
+@Tag("critico")
 class MetadadosMidiaColagemTests {
 
 	private static final Instant AGORA = Instant.parse("2026-11-16T12:00:00Z");

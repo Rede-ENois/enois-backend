@@ -8,9 +8,11 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /** Streak transitions: consecutive days, the weekly freeze, breaks and the lazy rebuild. */
+@Tag("critico")
 class UserStreakTests {
 
 	// 2026-10-26 is a Monday.

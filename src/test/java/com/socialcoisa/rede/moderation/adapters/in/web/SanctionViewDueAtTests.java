@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.time.Duration;
 import java.time.Instant;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.moderation.domain.UserSanction;
@@ -14,6 +15,7 @@ import com.socialcoisa.rede.moderation.domain.UserSanction;
  * prazo que o usuário punido precisa ver — a punição sem data é a que vira ticket de suporte.
  * O `dueAt` do view da listagem de penalidades carrega a data; restrição e ban ficam sem data.
  */
+@Tag("critico")
 class SanctionViewDueAtTests {
 
 	private UserSanction active(String type, Instant createdAt) {

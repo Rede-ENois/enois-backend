@@ -2,9 +2,11 @@ package com.socialcoisa.rede.moderation.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /** Formato da configuração da varredura: 5 partes e identificadores válidos. */
+@Tag("critico")
 class SuspiciousContentTargetsTests {
 
 	@Test

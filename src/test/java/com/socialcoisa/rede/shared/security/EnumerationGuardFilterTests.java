@@ -8,6 +8,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
@@ -22,6 +23,7 @@ import jakarta.servlet.FilterChain;
  * negada, mesmo que a pontuação dispare — é o que permite validar os limiares com tráfego real
  * antes de ligar o bloqueio.</p>
  */
+@Tag("critico")
 class EnumerationGuardFilterTests {
 
 	private final Clock clock = Clock.fixed(Instant.parse("2026-11-09T12:00:00Z"), ZoneOffset.UTC);

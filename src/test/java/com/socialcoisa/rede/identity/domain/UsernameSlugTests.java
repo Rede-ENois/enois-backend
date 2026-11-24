@@ -2,8 +2,10 @@ package com.socialcoisa.rede.identity.domain;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
+@Tag("critico")
 class UsernameSlugTests {
 
 	@Test

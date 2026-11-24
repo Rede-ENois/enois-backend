@@ -2,12 +2,14 @@ package com.socialcoisa.rede.shared.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /**
  * A superfície monitorada só aponta rotas que existem: linha para rota removida vira falso sinal de
  * varredura no painel de enumeração.
  */
+@Tag("critico")
 class EnumerationSurfaceTests {
 
 	private String labelOf(String path) {

@@ -6,6 +6,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -20,6 +21,7 @@ import org.springframework.mock.web.MockHttpServletResponse;
  * leitura é da direita para a esquerda, pulando os proxies confiáveis, e assim serve às duas
  * convenções do proxy: o que substitui o cabeçalho e o que o acrescenta.
  */
+@Tag("critico")
 class ClientIpSpoofingTests {
 
 	private static final String REAL_IP = "203.0.113.7";

@@ -13,6 +13,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -41,6 +42,7 @@ import com.socialcoisa.rede.shared.web.TestAuthHelper;
  */
 @SpringBootTest
 @AutoConfigureMockMvc
+@Tag("critico")
 class SanctionFlowTests {
 
 	@Autowired

@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.feed.application.port.in.ModerationQuarantinePostUseCase;
@@ -36,6 +37,7 @@ import com.socialcoisa.rede.profile.domain.UserProfile;
  * A fila de revisão da quarentena: as duas únicas saídas são liberar ou remover — e nenhuma delas
  * pune a conta. Quem pune é uma pessoa, por um fluxo próprio.
  */
+@Tag("critico")
 class ContentQuarantineReviewServiceTests {
 
 	private static final String POST = "post_revisao_1";

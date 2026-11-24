@@ -11,6 +11,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -35,6 +36,7 @@ import com.socialcoisa.rede.shared.security.ActionThrottle;
  * gatilho abrir demais, todo post denunciado por qualquer coisa sai do ar sozinho.
  */
 @ExtendWith(MockitoExtension.class)
+@Tag("critico")
 class SexualContentReportWiringTests {
 
 	private static final Instant NOW = Instant.parse("2026-10-30T12:00:00Z");

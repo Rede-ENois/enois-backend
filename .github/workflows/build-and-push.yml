@@ -167,8 +167,11 @@ jobs:
           java-version: '25'
           cache: maven
 
-      - name: 🧪 mvnw test
-        run: ./mvnw -B -q test
+      # Gate do PR: só as classes de risco (autenticação, autorização, dinheiro, moderação,
+      # migração, idempotência/concorrência e contratos). A suíte completa continua disponível
+      # sob demanda com `./mvnw -B -q test`, sem profile.
+      - name: 🧪 Testes críticos (PR)
+        run: ./mvnw -B -q -Pcriticos test
 
   # ===========================================================================
   # Schema check: boot against MariaDB 11.4 (the production engine) built only from the Flyway

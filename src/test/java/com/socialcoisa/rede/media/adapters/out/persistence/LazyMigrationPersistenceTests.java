@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Instant;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -34,6 +35,7 @@ import jakarta.persistence.EntityManager;
 // MockMvc e o TestDatabase a lê por outro JdbcTemplate. Numa transação de teste a conta fica
 // não-commitada e a leitura (conexão diferente quando o contexto é trocado) não a vê — era o
 // "usuario nao criado" que só aparecia na suíte completa.
+@Tag("critico")
 class LazyMigrationPersistenceTests {
 
 	@Autowired

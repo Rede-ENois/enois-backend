@@ -10,12 +10,14 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.moderation.application.port.out.ModerationLearningRepository;
 
 import tools.jackson.databind.ObjectMapper;
 
+@Tag("critico")
 class ModerationLearningServiceTests {
 
 	@Test

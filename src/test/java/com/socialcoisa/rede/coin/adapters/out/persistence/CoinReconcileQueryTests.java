@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.hibernate.resource.jdbc.spi.StatementInspector;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,6 +35,7 @@ import ch.qos.logback.core.read.ListAppender;
  * detectada e logada, exatamente como antes.</p>
  */
 @SpringBootTest
+@Tag("critico")
 class CoinReconcileQueryTests {
 
 	@TestConfiguration

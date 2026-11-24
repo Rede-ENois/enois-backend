@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -38,6 +39,7 @@ import com.socialcoisa.rede.shared.web.TestDatabaseSupport;
 		"spring.datasource.url=jdbc:h2:mem:media_deletion_transaction;MODE=MySQL;DB_CLOSE_DELAY=-1",
 		"rede.media.deletion-worker-delay-ms=3600000",
 		"rede.media.deletion-worker-initial-delay-ms=3600000" })
+@Tag("critico")
 class MediaDeletionWorkerTransactionTests {
 
 	/** Evita a associação no boot; o listener vincula o helper somente ao contexto do teste atual. */

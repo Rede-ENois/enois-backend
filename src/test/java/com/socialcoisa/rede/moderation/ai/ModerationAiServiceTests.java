@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.moderation.application.port.out.ReportRepository;
@@ -18,6 +19,7 @@ import com.socialcoisa.rede.shared.web.ApiException;
 import tools.jackson.databind.JsonNode;
 
 /** Validacao do palpite do agente de IA e do fail-safe sem chave (sem rede). */
+@Tag("critico")
 class ModerationAiServiceTests {
 
 	private static final String VALID_VERDICT = """

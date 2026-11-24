@@ -8,6 +8,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataAccessResourceFailureException;
@@ -19,6 +20,7 @@ import org.springframework.jdbc.core.RowMapper;
  * de banco vira parada total: nenhuma thread de requisicao pode ficar parada esperando a recarga,
  * e uma falha de leitura nao pode ser repetida a cada requisicao.
  */
+@Tag("critico")
 class PanicModeServiceTests {
 
 	/** JdbcTemplate que responde o que o teste mandar, contando as consultas. */

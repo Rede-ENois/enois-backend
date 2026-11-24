@@ -13,6 +13,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -40,6 +41,7 @@ import com.socialcoisa.rede.moderation.domain.TargetType;
  * palpite sobrescreve a revisão; no novo, a gravação relê a denúncia e só anexa o palpite se ela
  * continua PENDING sem palpite.</p>
  */
+@Tag("critico")
 class AiTriageStaleSaveTests {
 
 	/** Palpite válido (HUMAN_REVIEW, confiança 0.9) em uma linha, para embutir na resposta. */

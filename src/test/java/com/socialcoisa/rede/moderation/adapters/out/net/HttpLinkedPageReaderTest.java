@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.net.URI;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.moderation.domain.PageSummary;
@@ -12,6 +13,7 @@ import com.socialcoisa.rede.moderation.domain.PageSummary;
  * O leitor de destino: o que ele extrai da página e, principalmente, o que ele se RECUSA a visitar.
  * Quem publica escolhe o endereço, então o endereço é dado não confiável.
  */
+@Tag("critico")
 class HttpLinkedPageReaderTest {
 
 	private final HttpLinkedPageReader reader = new HttpLinkedPageReader();

@@ -2,6 +2,7 @@ package com.socialcoisa.rede.moderation.domain;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.Test;
  * com lista curta — não pode acender (senão o custo do modelo explode e o post de gente honesta
  * entra na fila).</p>
  */
+@Tag("critico")
 class AutomationSignalsTests {
 
 	@Test

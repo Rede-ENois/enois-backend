@@ -2,6 +2,7 @@ package com.socialcoisa.rede.shared.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 
@@ -15,6 +16,7 @@ import org.springframework.mock.web.MockHttpServletRequest;
  * proxy nosso e a origem declarada é a de um dos NOSSOS fronts (HTTPS). Fora disso o resolvedor
  * devolve o salto que o proxy gravou, como sempre fez.</p>
  */
+@Tag("critico")
 class ClientIpResolverProxiedClientTests {
 
 	private static final String FRONT_ORIGIN = "https://enois-qa.b7cloud.tech";

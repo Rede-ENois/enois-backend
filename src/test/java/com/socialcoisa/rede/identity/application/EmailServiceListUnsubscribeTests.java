@@ -7,6 +7,7 @@ import static org.mockito.Mockito.when;
 
 import java.util.Properties;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.mail.javamail.JavaMailSender;
@@ -18,6 +19,7 @@ import jakarta.mail.Session;
 import jakarta.mail.internet.MimeMessage;
 
 /** Bulk e-mails (blog newsletter, weekly digest) carry RFC 2369 and RFC 8058 one-click headers. */
+@Tag("critico")
 class EmailServiceListUnsubscribeTests {
 
 	@Test

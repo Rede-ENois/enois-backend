@@ -16,6 +16,7 @@ import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -44,6 +45,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
  */
 @SpringBootTest
 @AutoConfigureMockMvc
+@Tag("critico")
 class AutomatedWritePathsTests {
 
 	/** Os fluxos que existem justamente para quem ainda nao tem sessao. */

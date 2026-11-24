@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.time.Instant;
 import java.util.List;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.groups.domain.GroupCapability;
@@ -28,6 +29,7 @@ import com.socialcoisa.rede.groups.domain.GroupRole;
  * É o que impede a interface de virar a autoridade: cada endpoint pergunta por uma capacidade
  * daqui, então "escondi o botão" não é o que protege o grupo.
  */
+@Tag("critico")
 class GroupPermissionsTests {
 
 	private static final List<GroupCapability> DO_GRUPO = List.of(

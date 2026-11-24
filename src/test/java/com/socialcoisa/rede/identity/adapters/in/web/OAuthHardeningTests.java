@@ -15,6 +15,7 @@ import java.time.Instant;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -51,6 +52,7 @@ import tools.jackson.databind.ObjectMapper;
 		"rede.oauth.apple.client-id=test-apple-client-id",
 		"rede.oauth.apple.redirect-uri=http://localhost:8081/api/auth/oauth/apple/callback",
 		"rede.oauth.frontend-redirect-url=http://localhost:5173/auth/callback" })
+@Tag("critico")
 class OAuthHardeningTests {
 
 	@Autowired

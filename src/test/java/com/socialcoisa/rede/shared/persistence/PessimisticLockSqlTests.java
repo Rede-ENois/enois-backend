@@ -1,5 +1,7 @@
 package com.socialcoisa.rede.shared.persistence;
 
+import org.junit.jupiter.api.Tag;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -42,6 +44,7 @@ import jakarta.persistence.LockModeType;
  * as the application (so the dialect version is the one Hibernate assumes in production), and captures
  * the SQL of each locked query before it reaches a database.
  */
+@Tag("critico")
 class PessimisticLockSqlTests {
 
 	private static final String BASE_PACKAGE = "com.socialcoisa.rede";

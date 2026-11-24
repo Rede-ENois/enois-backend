@@ -3,6 +3,7 @@ package com.socialcoisa.rede.doacoes;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.doacoes.domain.BrCode;
@@ -11,6 +12,7 @@ import com.socialcoisa.rede.doacoes.domain.BrCode;
  * O BR Code da doação: o mesmo formato que o app do banco já aceitou (chave de CNPJ em 14 dígitos,
  * nome sem acento, CRC sobre o payload inteiro), com o txid de cada pessoa no campo 62-05.
  */
+@Tag("critico")
 class BrCodeTests {
 
 	private final BrCode codigo = new BrCode(new BrCode.Pix("51839682000161", "Apoie o Énóis", "SAO PAULO"));

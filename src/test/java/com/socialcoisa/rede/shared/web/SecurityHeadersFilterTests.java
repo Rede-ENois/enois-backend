@@ -2,6 +2,7 @@ package com.socialcoisa.rede.shared.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -9,6 +10,7 @@ import org.springframework.mock.web.MockHttpServletResponse;
 
 import jakarta.servlet.http.Cookie;
 
+@Tag("critico")
 class SecurityHeadersFilterTests {
 
 	private MockHttpServletResponse run(MockHttpServletRequest request) throws Exception {

@@ -14,6 +14,7 @@ import java.util.Base64;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -24,6 +25,7 @@ import com.socialcoisa.rede.shared.web.ApiException;
  * O desafio do cadastro é de quem pediu: sessão e aparelho entram na assinatura, e o tempo mínimo
  * entre a pergunta e a resposta é o de um humano digitando.
  */
+@Tag("critico")
 class SignupChallengeBindingTests {
 
 	private static final Pattern SUM = Pattern.compile("(\\d+) \\+ (\\d+)");

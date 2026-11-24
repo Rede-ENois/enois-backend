@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.feed.application.port.in.ModerationQuarantinePostUseCase;
@@ -38,6 +39,7 @@ import com.socialcoisa.rede.shared.web.CurrentUser;
  * A regra pedida: nada de banir sozinho. Post suspeito vai para QUARENTENA (some da rede, continua
  * no banco), é marcado e entra na fila de revisão humana — e nenhum caminho aqui aplica sanção.
  */
+@Tag("critico")
 class ContentAutomationServiceTests {
 
 	private static final String AUTOR = "user_bot_tests";

@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -53,6 +54,7 @@ import tools.jackson.databind.ObjectMapper;
  * fila humana.</p>
  */
 @ExtendWith(MockitoExtension.class)
+@Tag("critico")
 class SexualContentReportTests {
 
 	private static final String POST_ID = "post_sexual_tests";

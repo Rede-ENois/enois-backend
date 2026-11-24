@@ -5,10 +5,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.shared.web.ApiException;
 
+@Tag("critico")
 class CoinTestSupportTests {
 
 	private static ApiException concurrency() {

@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -16,6 +17,7 @@ import org.junit.jupiter.api.Test;
  * (doc 04 §1). Estes testes fixam o mapa para que um tipo novo não seja autorizado "de carona" e
  * um perfil novo não receba tarefa sem alguém ter decidido isso.
  */
+@Tag("critico")
 class TaskTypeAuthorizationTests {
 
 	@Test

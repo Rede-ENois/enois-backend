@@ -2,6 +2,7 @@ package com.socialcoisa.rede.moderation.ai;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import tools.jackson.databind.ObjectMapper;
@@ -23,6 +24,7 @@ import tools.jackson.databind.ObjectMapper;
  * Teste sem provedor de IA de propósito: o que se verifica aqui é o que o SISTEMA faz com o que
  * chega — que é justamente a parte que não depende do humor do modelo.
  */
+@Tag("critico")
 class AiTriageGuardTests {
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();

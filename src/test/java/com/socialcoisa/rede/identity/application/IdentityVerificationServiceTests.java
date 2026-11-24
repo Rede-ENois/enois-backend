@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.identity.adapters.out.provider.IdentityVerificationProviderRegistry;
@@ -24,6 +25,7 @@ import com.socialcoisa.rede.shared.web.ApiException;
  * Maquina de estados e fail-safe da verificacao de identidade, sem Spring: repositorio em memoria e
  * um provedor falso (usado SO nos testes — nao existe em producao).
  */
+@Tag("critico")
 class IdentityVerificationServiceTests {
 
 	private static final String USER = "user_ident_test";

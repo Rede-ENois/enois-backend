@@ -3,11 +3,13 @@ package com.socialcoisa.rede.identity.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.shared.web.ApiException;
 
 /** Failed logins slow down only the network that produced them, never the account owner elsewhere. */
+@Tag("critico")
 class AuthThrottleKeyTests {
 
 	@Test

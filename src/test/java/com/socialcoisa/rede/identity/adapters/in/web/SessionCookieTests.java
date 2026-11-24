@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.util.List;
 import java.util.Map;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -27,6 +28,7 @@ import tools.jackson.databind.ObjectMapper;
 // The test profile is dev, which turns Secure off for plain-http local runs; production keeps the default.
 @SpringBootTest(properties = "rede.auth.cookie-secure=true")
 @AutoConfigureMockMvc
+@Tag("critico")
 class SessionCookieTests {
 
 	@Autowired
