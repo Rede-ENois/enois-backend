@@ -1516,6 +1516,42 @@ cópia com SSE → `501` e a cópia não aparece; `PUT` sem o cabeçalho, num bu
 Vermelho antes: `200` no `PUT`. Mutações **4/4**: sem a guarda no `PUT`; sem a guarda no multipart;
 guarda que aceita tudo; lista reduzida só ao KMS.
 
+## 4.50 `Content-Type` com controle ou gigante é `400` (ciclo 140)
+
+O tipo declarado no `PUT` era gravado como veio — e voltado como veio no `HEAD`/`GET`:
+
+```
+PUT /s3/<b>/x.txt   Content-Type: text/plain\r\nX-Injetado: 1   → 200
+HEAD /s3/<b>/x.txt  → Content-Type: text/plain
+                      X-Injetado: 1                    ← segunda linha do valor
+```
+
+A injeção só não virava cabeçalho novo porque o Tomcat descarta o que não é nome de campo válido; a
+linha extra ia junto com o valor. Um tipo de 300 caracteres também era gravado e devolvido inteiro.
+O `Cache-Control` e o `Content-Disposition` já tinham a mesma regra; o tipo — que é o que o
+navegador usa para decidir o que fazer com o arquivo — não tinha.
+
+### Agora
+
+| `Content-Type` | antes | agora |
+|---|---|---|
+| `text/plain; charset=utf-8` | `200`, literal | `200`, literal |
+| com `\r\n` / `\n` / `\0` | `200`, gravado | `400 InvalidArgument` |
+| acima de 200 caracteres | `200`, gravado | `400 InvalidArgument` |
+| em branco | `application/octet-stream` | `application/octet-stream` |
+| `PUT` com `x-amz-copy-source` e `REPLACE` | gravado | mesma regra, `400` |
+
+- A regra é a mesma função do `Cache-Control`/`Content-Disposition` (`validateHeaderValue`), aplicada
+  no `beginUpload` — o multipart e a cópia passam pelo mesmo ponto, então a recusa vale para os três
+  caminhos sem guarda duplicada.
+- A recusa vem **antes** de abrir upload: nada é criado nem substituído.
+
+**Verificação:** `S3GatewayTests` **+1** (`content_type_com_controle_ou_gigante_e_recusado_e_nao_grava`):
+`\r\n`, `\n`, `\0` e 300 caracteres → `400 InvalidArgument`; `text/plain; charset=utf-8` grava e
+volta literal no `HEAD`; tipo em branco vira `application/octet-stream`; cópia com `REPLACE` e tipo
+inválido → `400`. Vermelho antes: `200` no tipo com `\r\n`. Mutações **4/4**: sem a validação; sem o
+teto de tamanho; sem a recusa de controle; tipo em branco não virando o padrão.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
