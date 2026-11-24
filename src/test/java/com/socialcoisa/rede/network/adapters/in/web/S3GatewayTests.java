@@ -3101,6 +3101,52 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 	}
 
 	/**
+	 * Nome que o S3 não aceita como bucket é `400`, seja qual for a rota.
+	 *
+	 * <p><b>Antes:</b> só o tamanho (≤ 63) e a maiúscula eram conferidos. {@code com_underline},
+	 * {@code com espaço}, {@code traco-no-fim-}, {@code -traco-no-inicio} e {@code dois..pontos} criavam
+	 * bucket com {@code 200} — e o S3 recusa todos: o nome do bucket vira <b>host</b> do virtual-host
+	 * ({@code <bucket>.s3...}) e rótulo DNS não tem {@code _}, espaço, ponto no fim nem hífen no fim.
+	 * O cliente que grava com um nome que o S3 rejeita descobre o problema <b>só ao apontar um cliente
+	 * de verdade</b> para o bucket, com erro de DNS; e o bucket criado assim fica com um nome que
+	 * ninguém consegue usar no caminho virtual-host.</p>
+	 *
+	 * <p><b>Agora:</b> o nome é conferido como o S3 do caminho ({@code path-style}) confere: minúscula,
+	 * dígito, ponto e hífen; começa e termina com letra ou dígito; sem ponto consecutivo; sem ponto
+	 * antes de hífen; de 3 a 63 caracteres; e não pode ter a forma de um IPv4 (ambiguidade com endereço).
+	 * {@code 400} com o motivo, na criação e no primeiro {@code PUT} de objeto (§4.58).</p>
+	 */
+	@Test
+	void nome_de_bucket_fora_do_alfabeto_do_s3_e_400() throws Exception {
+		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		String[] invalidos = { "com_underline", "com espaço", "traco-no-fim-", "-traco-no-inicio",
+			"dois..pontos", "ponto-hifen.-x", "10.0.0.1", "ab" };
+		for (String nome : invalidos) {
+			MockHttpServletRequestBuilder criar = put("/s3/" + nome).content(new byte[0]);
+			assinar(criar, SECRET, shaVazio());
+			var recusa = mockMvc.perform(criar).andReturn().getResponse();
+			assertThat(recusa.getStatus()).as("criacao de '" + nome + "'").isEqualTo(400);
+			assertThat(recusa.getContentAsString()).contains("<Code>InvalidBucketName</Code>")
+				.contains("<Message>");
+			// O mesmo nome no primeiro PUT de objeto: recusa antes de gravar qualquer coisa.
+			MockHttpServletRequestBuilder enviar = put("/s3/" + nome + "/x.txt").content(corpo);
+			assinar(enviar, SECRET, shaDe("abc"));
+			var recusaObjeto = mockMvc.perform(enviar).andReturn().getResponse();
+			assertThat(recusaObjeto.getStatus()).as("objeto em '" + nome + "'").isEqualTo(400);
+			assertThat(recusaObjeto.getContentAsString()).contains("<Code>InvalidBucketName</Code>");
+		}
+		// Nada foi criado sob os nomes recusados.
+		assertThat(jdbc.queryForObject(
+			"select count(*) from network_storage_objects where bucket in (?, ?, ?, ?, ?, ?, ?, ?) and deleted_at is null",
+			Long.class, (Object[]) invalidos)).isZero();
+
+		// O que o S3 aceita continua aceito, inclusive nos limites.
+		for (String valido : new String[] { "a-b-c", "a.b.c", "abc", "1-2-3",
+			"a" + "b".repeat(61) + "c" }) {
+			MockHttpServletRequestBuilder enviar = put("/s3/" + valido + "/x.txt").content(corpo);
+			assinar(enviar, SECRET, shaDe("abc"));
+			assertThat(mockMvc.perform(enviar).andReturn().getResponse().getStatus())
+				.as("'" + valido + "' tem de ser aceito").isEqualTo(200);
 	 * `MaxParts` do `ListParts` é o teto que valeu de verdade — não um pedido que não foi honrado.
 	 *
 	 * <p><b>Antes:</b> o {@code <MaxParts>} era o pedido cru, não o valor aplicado. Com

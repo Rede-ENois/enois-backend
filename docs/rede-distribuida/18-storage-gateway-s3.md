@@ -1670,6 +1670,53 @@ Vermelho antes: `200` no `Expires`. Mutações **4/4**: sem a guarda no `PUT`; s
 (o teste passou a cobri-la depois que a mutação sobreviveu); guarda que aceita tudo; lista reduzida só
 ao `Expires`.
 
+## 4.58 Nome de bucket fora do alfabeto do S3 é `400 InvalidBucketName` (ciclo 145)
+
+A criação de bucket conferia só o tamanho (≤ 63) e a maiúscula:
+
+```
+PUT /s3/com_underline      → 200, bucket criado
+PUT /s3/com espaço         → 200
+PUT /s3/traco-no-fim-      → 200
+PUT /s3/-traco-no-inicio   → 200
+PUT /s3/dois..pontos       → 200
+```
+
+O S3 recusa os cinco, e por um motivo de protocolo: o nome do bucket vira **host** no caminho
+virtual-host (`<bucket>.s3.<host>`), e rótulo DNS não aceita `_`, espaço, ponto consecutivo, hífen ou
+ponto nas pontas. O bucket criado assim funcionava no caminho path-style, então o defeito só aparecia
+quando alguém apontava um cliente de verdade para ele — com erro de DNS, longe da causa.
+
+### Agora
+
+| nome | antes | agora |
+|---|---|---|
+| `com_underline`, `com espaço` | `200` | `400 InvalidBucketName` |
+| `traco-no-fim-`, `-traco-no-inicio`, `ponto-hifen.-x` | `200` | `400 InvalidBucketName` |
+| `dois..pontos` | `200` | `400 InvalidBucketName` |
+| `10.0.0.1` (forma de IPv4) | `200` | `400 InvalidBucketName` |
+| `ab` (menos de 3) | `400` | `400 InvalidBucketName` |
+| `A-maiusculo`, nome com 64 | `400` | `400 InvalidBucketName` |
+| `abc`, `a-b-c`, `a.b.c`, `1-2-3`, 63 caracteres | `200` | `200` |
+
+Regras (as do caminho path-style do S3): 3 a 63 caracteres; começa e termina com letra ou dígito;
+só minúscula, dígito, hífen e ponto; sem `..` nem `.-`; não pode ter forma de IPv4 (o S3 reserva
+endereço para o TLS do caminho virtual-host). A mensagem diz qual regra foi violada.
+
+- A conferência vale no **`CreateBucket`** e no primeiro `PUT` de objeto (o bucket nasce no primeiro
+  upload) — `PutBucketPolicy`, `DeleteBucket` e as demais rotas que passam por `validateBucket`
+  herdam a regra.
+- O código do erro é o do S3, **`InvalidBucketName`**, não o interno `STORAGE_BUCKET_INVALID` do Énóis:
+  a tradução em `noVocabularioDoS3` é a única exceção à regra de repassar o código interno, porque o
+  SDK procura `InvalidBucketName` para mostrar a mensagem.
+- Nome no estado antigo (criado antes desta versão com `_` ou espaço) continua **listável e legível**;
+  só a criação é recusada. Não há migração.
+
+**Verificação:** `S3GatewayTests` **+1** (`nome_de_bucket_fora_do_alfabeto_do_s3_e_400`): oito nomes
+inválidos recusados na criação e no `PUT` de objeto, com `InvalidBucketName`, e nenhuma linha criada;
+cinco nomes válidos (inclusive os limites de 3 e 63) aceitos. Vermelho antes: `200` em
+`com_underline`. Mutações **5/5**: alfabeto aceitando `_` e espaço; sem a regra das pontas; sem a dos
+pontos; sem a do IPv4; sem a tradução para `InvalidBucketName`.
 ## 4.59 `<MaxParts>` do `ListParts` é o valor aplicado, não o pedido (ciclo 144)
 
 O `<MaxParts>` da resposta era o `max-parts` **cru** da consulta, enquanto o corte da página usava o
