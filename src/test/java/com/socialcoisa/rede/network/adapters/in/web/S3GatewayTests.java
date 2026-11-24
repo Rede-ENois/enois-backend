@@ -3147,6 +3147,10 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 			assinar(enviar, SECRET, shaDe("abc"));
 			assertThat(mockMvc.perform(enviar).andReturn().getResponse().getStatus())
 				.as("'" + valido + "' tem de ser aceito").isEqualTo(200);
+		}
+	}
+
+	/**
 	 * `MaxParts` do `ListParts` é o teto que valeu de verdade — não um pedido que não foi honrado.
 	 *
 	 * <p><b>Antes:</b> o {@code <MaxParts>} era o pedido cru, não o valor aplicado. Com
@@ -3199,6 +3203,9 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		assertThat(xml).contains("<MaxParts>2</MaxParts>").contains("<PartNumber>2</PartNumber>")
 			.contains("<PartNumber>3</PartNumber>").doesNotContain("<PartNumber>1</PartNumber>")
 			.contains("<IsTruncated>false</IsTruncated>");
+	}
+
+	/**
 	 * `continuation-token` que o gateway não emitiu (ou de outro bucket) é `400`, não lista vazia.
 	 *
 	 * <p><b>Antes:</b> o token era o <b>último nome emitido</b>, em claro, e o gateway o usava como
@@ -3299,6 +3306,10 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		}
 		catch (java.security.GeneralSecurityException semHmac) {
 			throw new IllegalStateException(semHmac);
+		}
+	}
+
+	/**
 	 * A chave gravada é a que o cliente declarou, não a forma da URI.
 	 *
 	 * <p><b>Antes:</b> o `PUT` gravava a chave <b>como veio na URI</b> (percent-encoded, sem
@@ -3348,6 +3359,96 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 			var doGet = rd.getRequest().isAsyncStarted()
 				? mockMvc.perform(asyncDispatch(rd)).andReturn().getResponse() : rd.getResponse();
 			assertThat(doGet.getContentAsString()).as(k).isEqualTo("abc");
+		}
+	}
+
+	/**
+	 * O `OPTIONS` no gateway S3 autentica como o S3, e o verbo errado sai no XML do S3.
+	 *
+	 * <p><b>Antes:</b> o preflight de CORS do Control Plane responde a **todo** `OPTIONS` antes de
+	 * qualquer autenticação:</p>
+	 *
+	 * <pre>
+	 * OPTIONS /s3/&lt;b&gt;/x.txt   (sem assinatura nenhuma)
+	 * → 200   Allow: PUT,GET,HEAD,DELETE,POST,OPTIONS
+	 * </pre>
+	 *
+	 * <p>Duas mentiras: quem pergunta "quais métodos este objeto aceita" sem credencial recebe a lista
+	 * do servidor inteiro, não a da credencial que não mandou — a de leitura também ouve `PUT` e
+	 * `DELETE`; e o verbo de escrita que não existe aqui (`PATCH`) sai como <b>JSON do Control
+	 * Plane</b> (`{"code":"METHOD_NOT_ALLOWED"}`), não como o `405` XML do S3 com `Allow`. O cliente
+	 * que sonda capacidades (`Allow`) para decidir a estratégia de upload lê o servidor, não a
+	 * credencial.</p>
+	 *
+	 * <p><b>Agora:</b> no `/s3/**` o `OPTIONS` passa pela SigV4 como qualquer verbo (§4.62): sem
+	 * assinatura é `403 AccessDenied` em XML; com assinatura, `200` com `Allow` montado a partir das
+	 * operações da credencial e do dono do bucket. Verbo não suportado (`PATCH`, `TRACE`) é
+	 * `405 MethodNotAllowed` em XML com `Allow` da rota. Preflight de navegador (com
+	 * `Origin` e `Access-Control-Request-Method`) continua respondido pelo CORS, que é o navegador
+	 * perguntando antes de mandar a credencial — esse não pode exigir assinatura.</p>
+	 */
+	@Test
+	void options_autentica_e_o_verbo_invalido_e_xml() throws Exception {
+		String b = "op" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		MockHttpServletRequestBuilder r = put("/s3/" + b);
+		assinar(r, SECRET, shaVazio());
+		assertThat(mockMvc.perform(r).andReturn().getResponse().getStatus()).isEqualTo(200);
+		String corpo = "0123456789";
+		MockHttpServletRequestBuilder p = put("/s3/" + b + "/x.txt").content(corpo.getBytes(StandardCharsets.UTF_8));
+		assinar(p, SECRET, shaDe(corpo));
+		assertThat(mockMvc.perform(p).andReturn().getResponse().getStatus()).isEqualTo(200);
+
+		// Sem credencial nenhuma: o OPTIONS não é uma porta aberta no gateway S3.
+		var semAssinatura = mockMvc.perform(MockMvcRequestBuilders.options("/s3/" + b + "/x.txt")).andReturn()
+			.getResponse();
+		assertThat(semAssinatura.getStatus()).as(semAssinatura.getContentAsString()).isEqualTo(403);
+		assertThat(semAssinatura.getContentType()).contains("xml");
+		assertThat(semAssinatura.getHeader("Allow")).as("Allow de quem não se identificou").isNull();
+
+		// Com assinatura de credencial SÓ DE LEITURA: 200 e um Allow que NÃO mente sobre escrita. É o
+		// discriminante: a lista do servidor (e a do preflight) contém PUT e DELETE, e quem só lê não
+		// pode ouvi-los.
+		String accessKeyLeitura = "AKIAENOISRDONLY" + UUID.randomUUID().toString().replace("-", "").substring(0, 5).toUpperCase();
+		jdbc.update("""
+			insert into network_storage_s3_credentials (id, access_key, secret_hash, secret_encrypted, owner_user_id,
+				allowed_bucket, allowed_operations, created_at)
+			values (?, ?, ?, ?, ?, null, 'GET', ?)
+			""", "s3c_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12), accessKeyLeitura,
+			com.socialcoisa.rede.shared.security.Hashes.sha256Hex(SECRET), cipher.encrypt(SECRET), admin,
+			java.sql.Timestamp.from(Instant.parse("2026-11-01T00:00:00Z")));
+		MockHttpServletRequestBuilder o = MockMvcRequestBuilders.options("/s3/" + b + "/x.txt");
+		assinar(o, SECRET, shaVazio(), accessKeyLeitura);
+		var comAssinatura = mockMvc.perform(o).andReturn().getResponse();
+		assertThat(comAssinatura.getStatus()).as(comAssinatura.getContentAsString()).isEqualTo(200);
+		assertThat(comAssinatura.getHeader("Allow")).as("Allow da credencial de leitura").isNotNull()
+			.contains("GET").contains("HEAD").contains("OPTIONS")
+			.doesNotContain("PUT").doesNotContain("DELETE").doesNotContain("POST");
+
+		// A credencial do cenário (GET PUT LIST DELETE) ouve os três verbos de objeto que tem — e
+		// "LIST" (que é de bucket, não de objeto) não vira método HTTP nenhum.
+		MockHttpServletRequestBuilder completo = MockMvcRequestBuilders.options("/s3/" + b + "/x.txt");
+		assinar(completo, SECRET, shaVazio());
+		var allowCompleto = mockMvc.perform(completo).andReturn().getResponse().getHeader("Allow");
+		assertThat(allowCompleto).as("Allow de GET PUT DELETE").contains("GET").contains("PUT")
+			.contains("DELETE").doesNotContain("LIST").doesNotContain("POST");
+
+		// Preflight de navegador (Origin + Access-Control-Request-Method) não é o OPTIONS de capacidade.
+		var preflight = mockMvc.perform(MockMvcRequestBuilders.options("/s3/" + b + "/x.txt")
+			.header("Origin", "https://enois.ia.br").header("Access-Control-Request-Method", "PUT"))
+			.andReturn().getResponse();
+		assertThat(preflight.getStatus()).as("o navegador pergunta antes de ter credencial").isLessThan(300);
+
+		// Verbo que o gateway não tem: 405 no XML do S3, com Allow — não JSON do Control Plane.
+		for (String verbo : new String[] { "PATCH", "TRACE" }) {
+			MockHttpServletRequestBuilder v = MockMvcRequestBuilders.request(
+				org.springframework.http.HttpMethod.valueOf(verbo), "/s3/" + b + "/x.txt");
+			assinar(v, SECRET, shaVazio());
+			var resp = mockMvc.perform(v).andReturn().getResponse();
+			assertThat(resp.getStatus()).as(verbo).isEqualTo(405);
+			assertThat(resp.getContentType()).as(verbo).contains("xml");
+			assertThat(resp.getHeader("Allow")).as(verbo + " Allow").isNotNull().contains("GET");
+			assertThat(resp.getContentAsString()).as(verbo).contains("MethodNotAllowed")
+				.doesNotContain("\"code\"");
 		}
 	}
 

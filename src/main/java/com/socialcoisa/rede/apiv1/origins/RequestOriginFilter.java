@@ -298,7 +298,15 @@ class RequestOriginFilter extends OncePerRequestFilter {
 		// X-Node-Id + X-Node-Key (e a prova de resultado em /tasks) no resto. Sem esta exceção todo
 		// enroll morria em 403 ORIGIN_REQUIRED e o bootstrap dizia "token inválido, expirado ou já
 		// usado?", culpando a chave do participante por uma recusa que era do gate.
-		return path.startsWith("/network/");
+		if (path.startsWith("/network/")) {
+			return true;
+		}
+		// Gateway S3 (§4.59): aws-cli, SDK, rclone e o backup do nó falam SigV4, não navegador, e
+		// nunca mandam Origin. Sem esta exceção, com `enforce=true` (produção) TODO cliente S3 levava
+		// 403 ORIGIN_REQUIRED — o gateway só funcionava porque a suíte roda com o gate desligado. A
+		// porteira é a assinatura, que é mais forte que a origem; uma origem inventada não passa por
+		// cima dela.
+		return path.startsWith("/s3") && (path.length() == 3 || path.charAt(3) == '/');
 	}
 
 	private static boolean isBlogFeedPath(String path) {

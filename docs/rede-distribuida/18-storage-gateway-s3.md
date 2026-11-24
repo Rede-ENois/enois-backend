@@ -1749,7 +1749,7 @@ valores de `max-parts`, cada um conferindo o `<MaxParts>` ecoado **e** que a pá
 partes do que ele diz; e a página com marcador. Vermelho antes: `MaxParts 0` com 3 partes. Mutações
 **4/4**: ecoando o pedido cru; sem o teto de 1000; sem o piso de zero/negativo; página cortada em 1000
 com o eco dizendo outro número.
-## 4.58 `continuation-token` é opaco e assinado (ciclo 143)
+## 4.60 `continuation-token` é opaco e assinado (ciclo 143)
 
 O token era o **último nome emitido**, em claro, usado como posição sem conferência:
 
@@ -1793,7 +1793,7 @@ tokens inválidos → `400 InvalidArgument`; paginação de três páginas com `
 Dois testes existentes usavam o nome como token e foram atualizados para o contrato novo. Vermelho antes:
 `200` em `lixo`. Mutações **4/4**: sem verificar a assinatura; emitindo o nome em claro; assinatura que
 não amarra o bucket; conferindo só a forma hexadecimal da assinatura.
-## 4.58 A chave gravada é o nome declarado, não a forma da URI (ciclo 142)
+## 4.61 A chave gravada é o nome declarado, não a forma da URI (ciclo 142)
 
 A chave era gravada **como vinha na URI**, percent-encoded:
 
@@ -1834,6 +1834,46 @@ coluna `object_key` tem exatamente os sete nomes declarados (inclusive `%` e `+`
 mesmo nome com `&amp;`/`&lt;` só como XML; o `GET` com a chave listada devolve o corpo. Vermelho antes:
 as linhas com `%C3%A9`, `%20` e `%3C`. Mutações **4/4**: sem decodificar; `+` virando espaço;
 decodificar duas vezes (`%25`→`%`→outra coisa); `%25` único tratado à parte.
+
+## 4.62 `OPTIONS` autentica e o verbo errado é XML (ciclo 149)
+
+O `OPTIONS` nunca chegava ao gateway:
+
+```
+OPTIONS /s3/<b>/x.txt   (sem credencial)   → 200   Allow: PUT,GET,HEAD,DELETE,POST,OPTIONS
+OPTIONS /s3/<b>/x.txt   (credencial só de leitura) → 200   Allow: PUT,GET,HEAD,DELETE,POST,OPTIONS
+PATCH   /s3/<b>/x.txt                      → 405 {"code":"METHOD_NOT_ALLOWED"}   ← JSON
+```
+
+O preflight de CORS do Control Plane responder todo `OPTIONS` é correto para a API do app, mas no
+gateway S3 a lista é a do **servidor**: uma credencial que só lê ouvindo que pode `PUT`/`DELETE` é o
+cliente montando a estratégia de upload errada. Quando aquele filtro não respondia, o
+`DispatcherServlet` montava o `Allow` com os métodos mapeados — inclusive `TRACE` e `PATCH`, que
+nenhuma rota atende.
+
+### Agora
+
+| pedido | antes | agora |
+|---|---|---|
+| `OPTIONS` sem assinatura | `200` com a lista do servidor | `403 AccessDenied` em XML, sem `Allow` |
+| `OPTIONS` com credencial de leitura | `Allow` com `PUT, DELETE` | `200`, `Allow: GET, HEAD, OPTIONS` |
+| `OPTIONS` com credencial completa | igual | `200`, `Allow: GET, HEAD, PUT, DELETE, OPTIONS` |
+| `OPTIONS` de navegador (`Origin` + `Access-Control-Request-Method`) | CORS | CORS (o navegador pergunta antes de ter credencial) |
+| `PATCH`, `TRACE` | `405` JSON | `405 MethodNotAllowed` em XML, com `Allow` da rota |
+
+- O `S3OptionsFilter` intercepta `OPTIONS` (sem preflight) e os verbos desconhecidos em `/s3/**`,
+  **antes** do `DispatcherServlet` — que responderia o `OPTIONS` sozinho. Ele chama a autenticação
+  do gateway, então a regra de credencial, dono do bucket e chave existente é a mesma dos outros
+  verbos.
+- `LIST` no escopo da credencial não vira método HTTP (é operação de bucket); `GET` vira `GET` e
+  `HEAD`, porque `HEAD` é o `GET` sem corpo.
+
+**Verificação:** `S3GatewayTests` **+1** (`options_autentica_e_o_verbo_invalido_e_xml`): `OPTIONS`
+sem credencial → `403` XML sem `Allow`; com credencial só de leitura → `200` e o `Allow` **sem**
+`PUT`/`DELETE`/`POST`; com a completa → com `GET`/`PUT`/`DELETE` e sem `LIST`/`POST`; preflight com
+`Origin` real → `< 300`; `PATCH` e `TRACE` → `405` XML com `Allow`. Mutações **4/4**: sem a isenção
+de origem; `Allow` da lista do servidor (sobreviveu até o teste diferenciar a credencial de leitura);
+`Allow` de leitura sem `HEAD`; 405 em JSON.
 
 ## 5. Erros
 
