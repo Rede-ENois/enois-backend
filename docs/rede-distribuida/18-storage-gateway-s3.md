@@ -1666,51 +1666,6 @@ Vermelho antes: `200` no `Expires`. Mutações **4/4**: sem a guarda no `PUT`; s
 (o teste passou a cobri-la depois que a mutação sobreviveu); guarda que aceita tudo; lista reduzida só
 ao `Expires`.
 
-## 4.58 `continuation-token` é opaco e assinado (ciclo 143)
-
-O token era o **último nome emitido**, em claro, usado como posição sem conferência:
-
-```
-GET /s3/<b>?list-type=2&max-keys=1      → <NextContinuationToken>a1.txt</NextContinuationToken>
-GET /s3/<b>?list-type=2&continuation-token=lixo    → 200, KeyCount 0
-GET /s3/<b>?list-type=2&continuation-token=a1.txt  → 200, a partir de a1.txt
-```
-
-O `200` com lista vazia é o pior dos casos: o cliente que retoma a paginação com um token corrompido
-(novo upload entre páginas, token de outra sessão, string truncada) conclui que **o bucket acabou** e
-para de listar, sem erro. O token de um bucket também servia de posição em outro.
-
-### Agora
-
-| `continuation-token` | antes | agora |
-|---|---|---|
-| emitido por esta listagem, neste bucket | `200`, continua | `200`, continua |
-| `lixo`, `AAA`, `%41%41`, nome inventado | `200` vazio | `400 InvalidArgument` |
-| token deste bucket com um caractere da assinatura trocado | `200` | `400 InvalidArgument` |
-| token emitido para **outro** bucket | usado como posição | `400 InvalidArgument` |
-| token antigo (nome em claro, sem `.`) | `200` | `400 InvalidArgument` |
-
-- Forma: `base64url(posição)` + `.` + HMAC-SHA-256 de `bucket + "\n" + posição`, em hexadecimal, com o
-  **segredo da credencial** que assinou a listagem (`credentials.secretFor`, o mesmo do URL
-  pré-assinado). Expira junto com a credencial porque o segredo é dela.
-- O `NextContinuationToken` deixa de coincidir com o nome do objeto — é o que o S3 faz (o token dele é
-  opaco). O `NextMarker` do V1 **não** muda: no V1 o marcador é a chave, por contrato.
-- Confere também o **bucket**: token de um bucket em outro é recusa, e o cliente relista do zero com
-  `400` visível em vez de receber uma página vazia.
-- Comparação com `MessageDigest.isEqual` (tempo fixo). Não é confidencialidade — o token continua
-  público —, é a prova de que veio daqui.
-
-**Efeito declarado:** tokens emitidos por versões anteriores (o nome em claro) passam a ser `400`; o
-cliente que guardou um token entre deploys refaz a listagem. Vale só para o `list-type=2`; o `marker` do
-V1 e o `start-after` seguem aceitando a chave.
-
-**Verificação:** `S3GatewayTests` **+1** (`continuation_token_que_o_gateway_nao_emitiu_e_400`): quatro
-tokens inválidos → `400 InvalidArgument`; paginação de três páginas com `max-keys=1` devolvendo
-`a1,a2,a3`; token forjado (forma certa, assinatura trocada) → `400`; token deste bucket em outro → `400`.
-Dois testes existentes usavam o nome como token e foram atualizados para o contrato novo. Vermelho antes:
-`200` em `lixo`. Mutações **4/4**: sem verificar a assinatura; emitindo o nome em claro; assinatura que
-não amarra o bucket; conferindo só a forma hexadecimal da assinatura.
-
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
