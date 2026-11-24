@@ -33,6 +33,7 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 import com.socialcoisa.rede.network.application.SigV4Verifier;
 import com.socialcoisa.rede.network.application.StorageCatalogService;
 import com.socialcoisa.rede.network.application.StorageContentService;
+import com.socialcoisa.rede.network.application.StorageMultipartService;
 import com.socialcoisa.rede.network.application.port.out.S3CredentialRepository;
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
 import com.socialcoisa.rede.network.domain.ObjectMetadata;
@@ -263,10 +264,21 @@ class S3GatewayController {
 		S3Credential credential = authenticate(request, "LIST");
 		requireBucket(credential, bucket);
 		requireBucketDoDono(credential, bucket);
+		Map<String, String> consulta = query(request);
+		// Teto e marcadores como o S3 (§4.64): o valor aplicado é o que a resposta ecoa, e o
+		// `IsTruncated` reflete se há mais — não é constante.
+		int teto = StorageMultipartService.tetoDeUploads(numeroDoParametro(consulta.get("max-uploads"), 1000));
+		var pagina = multipart.paginaDeAbertos(bucket, credential.ownerUserId(), consulta.get("prefix"),
+			consulta.get("key-marker"), consulta.get("upload-id-marker"), teto);
 		S3Xml xml = new S3Xml();
 		xml.root("ListMultipartUploadsResult").element("Bucket", bucket)
-			.element("IsTruncated", "false");
-		for (var upload : multipart.abertos(bucket, credential.ownerUserId(), query(request).get("prefix"))) {
+			.element("MaxUploads", Integer.toString(teto))
+			.element("IsTruncated", pagina.truncada() ? "true" : "false");
+		if (pagina.truncada() && !pagina.uploads().isEmpty()) {
+			var ultimo = pagina.uploads().get(pagina.uploads().size() - 1);
+			xml.element("NextKeyMarker", ultimo.key()).element("NextUploadIdMarker", ultimo.uploadId());
+		}
+		for (var upload : pagina.uploads()) {
 			xml.open("Upload")
 				.element("Key", upload.key())
 				.element("UploadId", upload.uploadId())
@@ -2321,6 +2333,21 @@ class S3GatewayController {
 		// fim passaria — por isso a pergunta é feita na GRAVAÇÃO, cujo objeto entra na lista.
 		return catalog.list(bucket, null, null, 1000).stream()
 			.allMatch(o -> ownerUserId.equals(o.createdBy()));
+	}
+
+	/** O inteiro de um parâmetro de paginação; ausente, ilegível ou negativo vale o teto (§4.64). */
+	private static int numeroDoParametro(String valor, int padrao) {
+		if (valor == null || valor.isBlank()) {
+			return padrao;
+		}
+		try {
+			int n = Integer.parseInt(valor.trim());
+			// `Math.min` já está no serviço; aqui o piso: zero e negativo viram o padrão.
+			return n <= 0 ? padrao : n;
+		}
+		catch (NumberFormatException naoEhNumero) {
+			return padrao;
+		}
 	}
 
 	/** Os cabeçalhos declarados em SignedHeaders, normalizados como o cliente assinou. */
