@@ -290,11 +290,31 @@ class S3GatewayController {
 		S3Credential credential = authenticate(request, "LIST");
 		requireBucket(credential, bucket);
 		requireBucketDoDono(credential, bucket);
+		Map<String, String> consulta = query(request);
+		// Teto e marcadores como o S3 (§4.61): o `<MaxKeys>` ecoa o valor APLICADO, o `IsTruncated`
+		// reflete se há mais, e o marcador de versão é o número da versão da última linha emitida.
+		Long versionMarker = null;
+		String versionIdMarker = consulta.get("version-id-marker");
+		if (versionIdMarker != null) {
+			try {
+				versionMarker = Long.parseLong(versionIdMarker.trim());
+			}
+			catch (NumberFormatException naoEhNumero) {
+				throw s3Error(400, "InvalidArgument",
+					"O version-id-marker do ListObjectVersions e o numero da versao.");
+			}
+		}
+		var pagina = storage.versionsNoBucket(bucket, consulta.get("prefix"), consulta.get("key-marker"),
+			versionMarker, numeroDoParametro(consulta.get("max-keys"), 1000));
 		S3Xml xml = new S3Xml();
 		xml.root("ListVersionsResult").element("Name", bucket)
-			.element("IsTruncated", "false")
-			.element("MaxKeys", "1000");
-		for (StorageObject objeto : storage.versionsNoBucket(bucket, query(request).get("prefix"))) {
+			.element("MaxKeys", Integer.toString(numeroDoParametro(consulta.get("max-keys"), 1000)))
+			.element("IsTruncated", pagina.truncada() ? "true" : "false");
+		if (pagina.truncada() && !pagina.versoes().isEmpty()) {
+			var ultima = pagina.versoes().get(pagina.versoes().size() - 1);
+			xml.element("NextKeyMarker", ultima.key()).element("NextVersionIdMarker", Long.toString(ultima.version()));
+		}
+		for (StorageObject objeto : pagina.versoes()) {
 			if (!credential.ownerUserId().equals(objeto.createdBy())) {
 				continue;
 			}
@@ -2176,6 +2196,21 @@ class S3GatewayController {
 		// fim passaria — por isso a pergunta é feita na GRAVAÇÃO, cujo objeto entra na lista.
 		return catalog.list(bucket, null, null, 1000).stream()
 			.allMatch(o -> ownerUserId.equals(o.createdBy()));
+	}
+
+	/** O inteiro de um parâmetro de paginação; ausente, ilegível ou negativo vale o teto (§4.61). */
+	private static int numeroDoParametro(String valor, int padrao) {
+		if (valor == null || valor.isBlank()) {
+			return padrao;
+		}
+		try {
+			int n = Integer.parseInt(valor.trim());
+			// `Math.min` já está no banco; aqui o piso: zero e negativo viram o padrão.
+			return n <= 0 ? padrao : n;
+		}
+		catch (NumberFormatException naoEhNumero) {
+			return padrao;
+		}
 	}
 
 	/** Os cabeçalhos declarados em SignedHeaders, normalizados como o cliente assinou. */

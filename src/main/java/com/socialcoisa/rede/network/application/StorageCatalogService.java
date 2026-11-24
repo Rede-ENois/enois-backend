@@ -24,6 +24,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
+import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository.PaginaDeVersoes;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.ObjectMetadata;
 import com.socialcoisa.rede.network.domain.NodeStatus;
@@ -888,9 +889,10 @@ public class StorageCatalogService {
 	 * {@code ListObjects}, que ignora o subrecurso, e o cliente recebia os objetos correntes com
 	 * {@code 200} — nem erro, nem versão.</p>
 	 */
-	public List<StorageObject> versionsNoBucket(String bucket, String prefix) {
+	public PaginaDeVersoes versionsNoBucket(String bucket, String prefix, String keyMarker, Long versionMarker,
+			int maxKeys) {
 		validateBucket(bucket);
-		return catalog.versionsNoBucket(bucket, prefix);
+		return catalog.paginaDeVersoes(bucket, prefix, keyMarker, versionMarker, maxKeys);
 	}
 
 	/** O histórico da chave, da versão mais antiga para a mais nova. */
