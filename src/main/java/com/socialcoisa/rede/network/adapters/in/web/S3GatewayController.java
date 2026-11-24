@@ -2503,6 +2503,14 @@ class S3GatewayController {
 		// Énóis é legível o bastante (`NoSuchUpload`, `InvalidArgument`, `MalformedXML`, `InvalidPart`
 		// são os do S3) e o `Code` é o que o SDK lê. Antes, só os dois casos acima eram traduzidos e
 		// o resto saía como JSON do Control Plane — corpo que o SDK não sabe deserializar.
+		//
+		// A validação de nome de bucket (§4.55) é exceção à regra de repassar o código interno: o
+		// `STORAGE_BUCKET_INVALID` do Énóis não é código do S3, e o SDK que procura `InvalidBucketName`
+		// para mostrar a mensagem certa não o reconhece. A mensagem (que diz qual regra violou) vai
+		// inteira.
+		if ("STORAGE_BUCKET_INVALID".equals(recusado.code())) {
+			return s3Error(recusado.status(), "InvalidBucketName", recusado.getMessage());
+		}
 		return s3Error(recusado.status(), recusado.code(), recusado.getMessage());
 	}
 
@@ -2545,7 +2553,14 @@ class S3GatewayController {
 				"O bucket ja existe em outra conta.");
 		}
 		if (donoAtual == null) {
-			storage.putBucketPolicy(credential.ownerUserId(), bucket, false, null, null);
+			// O nome é conferido aqui — e não só no primeiro objeto (§4.55): `PUT /com_underline`
+			// respondia 200 e registrava o bucket com um nome que o S3 recusa como host.
+			try {
+				storage.putBucketPolicy(credential.ownerUserId(), bucket, false, null, null);
+			}
+			catch (ApiException recusado) {
+				throw noVocabularioDoS3(recusado);
+			}
 		}
 		return ResponseEntity.ok().build();
 	}

@@ -2941,6 +2941,7 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		}
 	}
 
+<<<<<<< HEAD
 	/**
 	 * A URL pré-assinada também passa pela conferência de escopo (§4.56).
 	 *
@@ -3016,6 +3017,7 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		assertThat(recusa.getResponse().getContentAsString()).contains("ec2").doesNotContain("objeto do dono");
 	}
 
+<<<<<<< HEAD
 	/**
 	 * `Expires`, `Content-Language` e `x-amz-website-redirect-location` declarados são `501`.
 	 *
@@ -3080,6 +3082,10 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		}
 	}
 
+=======
+=======
+>>>>>>> 3a9febcb (fix(storage): nome de bucket fora do alfabeto do S3 e 400 InvalidBucketName (doc 18 §4.55))
+>>>>>>> 2d8aa2f2 (fix(storage): nome de bucket fora do alfabeto do S3 e 400 InvalidBucketName (doc 18 §4.55))
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {
