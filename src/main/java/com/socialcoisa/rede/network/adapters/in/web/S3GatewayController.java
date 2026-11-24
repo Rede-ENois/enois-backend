@@ -44,6 +44,7 @@ import com.socialcoisa.rede.network.domain.StoragePlacement;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 
 /**
  * O gateway <b>API compatível com S3</b> do Énóis Storage (brief §11).
@@ -1831,6 +1832,66 @@ class S3GatewayController {
 		return comVocabularioDoS3(() -> content.respond(object, request.getHeader(HttpHeaders.RANGE),
 			request.getHeader(HttpHeaders.IF_NONE_MATCH), request.getHeader(HttpHeaders.IF_MODIFIED_SINCE),
 			request.getHeader("If-Range")));
+	}
+
+	/**
+	 * O {@code OPTIONS} do gateway: as operações que **esta** credencial e **esta** chave deixam
+	 * fazer (§4.62). Chamado pelo {@link S3OptionsFilter}, que intercepta antes do
+	 * {@code DispatcherServlet} — ele responderia {@code OPTIONS} sozinho, com o {@code Allow} dos
+	 * métodos mapeados (inclusive os que nenhuma rota atende).
+	 *
+	 * <p><b>Antes:</b> o preflight de CORS do Control Plane respondia todo {@code OPTIONS} antes de
+	 * qualquer autenticação, com o {@code Allow} do servidor
+	 * (<code>PUT,GET,HEAD,DELETE,POST,OPTIONS</code>): uma credencial só de leitura ouvia que podia
+	 * apagar, e quem não se identificou ouvia a mesma lista.</p>
+	 *
+	 * <p><b>Agora:</b> o {@code OPTIONS} passa pela SigV4 como qualquer verbo. Sem assinatura é
+	 * {@code 403} em XML; com assinatura, {@code 200} e um {@code Allow} montado das operações da
+	 * credencial. A chave precisa existir e ser do dono da credencial — o gateway não diz, nem a
+	 * quem tem credencial válida, que uma chave que não é sua está lá.</p>
+	 */
+	void responderOptions(HttpServletRequest request, HttpServletResponse response) throws IOException {
+		String caminho = request.getRequestURI().substring(request.getContextPath().length());
+		String[] partes = caminho.length() > S3GatewayController.PREFIX.length() + 1
+			? caminho.substring(S3GatewayController.PREFIX.length() + 1).split("/", 2) : new String[0];
+		if (partes.length == 0 || partes[0].isBlank()) {
+			// `/s3` e `/s3/`: a pergunta é sobre a instalação, e a assinatura já basta.
+			S3Credential credencial = authenticate(request, "GET");
+			escreverAllow(response, allowDe(credencial));
+			return;
+		}
+		String bucket = partes[0];
+		S3Credential credential = authenticate(request, "GET");
+		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
+		if (partes.length > 1) {
+			// A chave que não existe não ganha lista de métodos: `OPTIONS` de chave fantasma é o
+			// `404 NoSuchKey` do `HEAD`, não o `403` do bucket (§4.62).
+			String chave = partes[1];
+			comVocabularioDoS3(() -> storage.requireDownloadable(bucket, chave, "OPTIONS"));
+		}
+		escreverAllow(response, allowDe(credential));
+	}
+
+	/** O {@code Allow} desta credencial: exatamente o que ela pode fazer aqui, mais {@code OPTIONS}. */
+	private static String allowDe(S3Credential credential) {
+		List<String> verbos = new java.util.ArrayList<>();
+		if (credential.allows("GET")) {
+			verbos.addAll(List.of("GET", "HEAD"));
+		}
+		if (credential.allows("PUT")) {
+			verbos.add("PUT");
+		}
+		if (credential.allows("DELETE")) {
+			verbos.add("DELETE");
+		}
+		verbos.add("OPTIONS");
+		return String.join(", ", verbos);
+	}
+
+	private static void escreverAllow(HttpServletResponse response, String allow) throws IOException {
+		response.setStatus(200);
+		response.setHeader(HttpHeaders.ALLOW, allow);
 	}
 
 	/** HeadObject: mesmos cabeçalhos do GetObject, sem corpo. */
