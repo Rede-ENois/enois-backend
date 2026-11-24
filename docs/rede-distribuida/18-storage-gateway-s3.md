@@ -1443,6 +1443,43 @@ errado mantém o conteúdo anterior. Vermelho antes: `200` em todos os casos. Mu
 conferência do digest; algoritmo não conferido aceito; sem a normalização de maiúsculas; comparação
 desligada.
 
+## 4.48 SSE declarado é recusado, não ignorado (ciclo 138)
+
+O SDK manda `x-amz-server-side-encryption` quando SSE está configurado. Aqui ele era ignorado:
+
+```
+PUT /s3/<b>/x.txt   x-amz-server-side-encryption: AES256   → 200, objeto gravado em claro
+HEAD /s3/<b>/x.txt                                         → sem x-amz-server-side-encryption
+```
+
+Quem configurou SSE tinha a certeza de que a borda cifrava o objeto; quem lê a cópia em disco vê o
+conteúdo. A `HEAD` não devolvia nem o eco do cabeçalho, então nem havia como descobrir pela leitura.
+
+### Agora
+
+| pedido | antes | agora |
+|---|---|---|
+| `PUT` com `x-amz-server-side-encryption: AES256` | `200`, gravado | `501 NotImplemented`, nomeia o cabeçalho |
+| `PUT` com `x-amz-server-side-encryption: aws:kms` (+ chave) | `200`, gravado | `501` |
+| `POST ?uploads` com SSE | `200`, upload aberto | `501`, nenhum upload aberto |
+| `PUT` com `x-amz-copy-source` e SSE | `200`, cópia gravada | `501`, cópia não gravada |
+| `x-amz-server-side-encryption-customer-algorithm` | ignorado | `501` |
+| `PUT` sem SSE | `200` | `200` |
+
+- A guarda roda **antes** de abrir upload e antes do `requireBucket` do multipart: com a recusa a
+  chave nunca existe, e a donagem responderia `403` em vez de dizer o que não é suportado. Num bucket
+  cujo dono só nasce do primeiro `PUT`, a leitura depois da recusa é `403` — o contrato do "não
+  gravado" é "não veio `200` com o conteúdo".
+- **Recusar em vez de cifrar:** cifrar por requisição exigiria guardar a chave na linha e decifrar no
+  `GET`; a cifra em repouso aqui é a do sistema de arquivos do nó. Responder `200` a um pedido de
+  cifra que ninguém aplicou é a mesma escolha do subrecurso não implementado (§4.21).
+
+**Verificação:** `S3GatewayTests` **+1** (`sse_declarado_no_put_e_recusado_e_nao_grava`): `PUT` com
+`AES256` → `501` e a leitura não devolve o corpo; `aws:kms` + chave → `501`; `POST ?uploads` → `501`;
+cópia com SSE → `501` e a cópia não aparece; `PUT` sem o cabeçalho, num bucket novo, → `200`.
+Vermelho antes: `200` no `PUT`. Mutações **4/4**: sem a guarda no `PUT`; sem a guarda no multipart;
+guarda que aceita tudo; lista reduzida só ao KMS.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
