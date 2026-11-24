@@ -2547,6 +2547,77 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		assertThat(teto).contains("<MaxKeys>1000</MaxKeys>").contains("<Key>mk/raiz.txt</Key>");
 	}
 
+	/**
+	 * {@code x-amz-checksum-*} é conferido: digest que não bate é {@code 400 BadDigest}, e o algoritmo
+	 * fora do SHA-256 é recusado, não ignorado.
+	 *
+	 * <p><b>Antes:</b> os cabeçalhos de integridade do SDK v2 eram ignorados. {@code PUT} com o
+	 * checksum de <b>outro</b> corpo respondia {@code 200} e gravava; {@code x-amz-checksum-sha256}
+	 * com 4 caracteres, com maiúsculas, com o digest de outro algoritmo e um
+	 * {@code x-amz-checksum-crc32} também passavam. O cliente que usa o checksum para pegar corrupção
+	 * no caminho recebia "gravado" para um corpo que ele não mandou — o mesmo defeito que o
+	 * {@code Content-MD5} tinha (§4.44).</p>
+	 *
+	 * <p><b>Agora:</b> os bytes são conferidos com o algoritmo declarado quando ele é SHA-256 (a
+	 * família que a sonda provou); digest que não bate é {@code 400 BadDigest} antes de abrir upload —
+	 * nada é criado nem substituído. Um {@code x-amz-checksum-<algoritmo>} que o gateway não confere
+	 * (CRC32, SHA-1…) é {@code 400 NotImplemented} em vez de sucesso silencioso: o cliente prefere
+	 * saber que a conferência não existiu. Maiúsculas são equivalentes ao hexadecimal em minúsculas,
+	 * como no S3.</p>
+	 */
+	@Test
+	void checksum_do_sdk_declara_algoritmo_e_e_conferido() throws Exception {
+		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		String sha = java.util.HexFormat.of().formatHex(
+			java.security.MessageDigest.getInstance("SHA-256").digest(corpo));
+		String outro = java.util.HexFormat.of().formatHex(
+			java.security.MessageDigest.getInstance("SHA-256").digest("outro".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+
+		// Não bate: recusa, sem objeto.
+		MockHttpServletRequestBuilder ruim = put("/s3/" + bucket + "/cks/ruim.txt").content(corpo)
+			.header("x-amz-checksum-sha256", outro);
+		assinar(ruim, SECRET, shaDe("abc"));
+		var resposta = mockMvc.perform(ruim).andReturn().getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(400);
+		assertThat(resposta.getContentAsString()).contains("<Code>BadDigest</Code>");
+		MockHttpServletRequestBuilder gRuim = get("/s3/" + bucket + "/cks/ruim.txt");
+		assinar(gRuim, SECRET, shaVazio());
+		var lidoRuim = mockMvc.perform(gRuim).andReturn();
+		var doRuim = lidoRuim.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lidoRuim)).andReturn().getResponse() : lidoRuim.getResponse();
+		assertThat(doRuim.getStatus()).as("objeto gravado apesar do checksum errado").isNotEqualTo(200);
+
+		// Valor malformado e algoritmo não conferido: recusa explícita, não sucesso.
+		for (String[] invalido : new String[][] { { "sha256", "abcd" }, { "crc32", "DUoRhQ==" },
+				{ "sha1", sha } }) {
+			MockHttpServletRequestBuilder r = put("/s3/" + bucket + "/cks/inv-" + invalido[0] + ".txt").content(corpo)
+				.header("x-amz-checksum-" + invalido[0], invalido[1]);
+			assinar(r, SECRET, shaDe("abc"));
+			var recusa = mockMvc.perform(r).andReturn().getResponse();
+			assertThat(recusa.getStatus()).as("checksum " + invalido[0]).isBetween(400, 499);
+			assertThat(recusa.getContentAsString()).contains("<Code>");
+		}
+
+		// Bate: grava, inclusive em maiúsculas.
+		MockHttpServletRequestBuilder bom = put("/s3/" + bucket + "/cks/bom.txt").content(corpo)
+			.header("x-amz-checksum-sha256", sha.toUpperCase(java.util.Locale.ROOT));
+		assinar(bom, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(bom).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder gBom = get("/s3/" + bucket + "/cks/bom.txt");
+		assinar(gBom, SECRET, shaVazio());
+		var lidoBom = mockMvc.perform(gBom).andReturn();
+		var doBom = lidoBom.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lidoBom)).andReturn().getResponse() : lidoBom.getResponse();
+		assertThat(doBom.getContentAsString()).isEqualTo("abc");
+
+		// Mesmo corpo com checksum errado não substitui o que já está lá.
+		MockHttpServletRequestBuilder troca = put("/s3/" + bucket + "/cks/bom.txt")
+			.content("xyz".getBytes(java.nio.charset.StandardCharsets.UTF_8))
+			.header("x-amz-checksum-sha256", sha);
+		assinar(troca, SECRET, shaDe("xyz"));
+		assertThat(mockMvc.perform(troca).andReturn().getResponse().getStatus()).isEqualTo(400);
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {

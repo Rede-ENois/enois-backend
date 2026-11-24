@@ -1405,6 +1405,43 @@ Quem pedia "apague a versão 1" ou "apague as tags" perdia o objeto inteiro, com
 defeito que o `DELETE` do **bucket** tinha com `?cors` (§4.38) — e o `GET`/`HEAD` já recusavam esses
 nomes (§4.37/§4.41), então as metades discordavam.
 
+## 4.46 `x-amz-checksum-*` é conferido, e algoritmo não suportado é `400` (ciclo 136)
+
+O SDK v2 do S3 manda `x-amz-checksum-*` por padrão. Aqui ele era ignorado:
+
+```
+PUT /s3/<b>/x.txt   x-amz-checksum-sha256: <SHA-256 de OUTRO corpo>  → 200, objeto gravado
+PUT /s3/<b>/x.txt   x-amz-checksum-sha256: abcd                      → 200, objeto gravado
+PUT /s3/<b>/x.txt   x-amz-checksum-crc32: DUoRhQ==                   → 200, objeto gravado
+```
+
+É o mesmo defeito que o `Content-MD5` tinha (§4.44): quem pede a conferência de integridade recebia
+"gravado" para um corpo que não mandou.
+
+### Agora
+
+| pedido | antes | agora |
+|---|---|---|
+| `x-amz-checksum-sha256` correto (caixa qualquer) | `200` | `200` |
+| `x-amz-checksum-sha256` que não bate | `200`, objeto gravado | `400 BadDigest`, nada gravado |
+| `x-amz-checksum-sha256` que não é 64 dígitos hex | `200` | `400 InvalidArgument` |
+| `x-amz-checksum-crc32` / `-crc32c` / `-crc64nvme` / `-sha1` | `200`, sem conferir | `400 NotImplemented` nomeando o algoritmo |
+| `x-amz-checksum-type` | ignorado | ignorado (é rótulo do cliente, não digest) |
+
+- A conferência acontece **antes** de abrir upload: a recusa não deixa linha aberta nem objeto
+  `PENDING`, e não substitui o conteúdo de uma chave existente. Com qualquer cabeçalho de
+  integridade presente, o corpo é lido para memória (quem pede conferência paga por ela).
+- **Algoritmo fora do SHA-256 é recusado, não aceito em silêncio.** Conferir CRC32/SHA-1 exige mais
+  código do que a sonda provou; responder `200` a um digest que ninguém olhou seria pior que dizer
+  "não confiro". O cabeçalho de resposta do checksum não é ecoado no `GET`/`HEAD` — quem precisa do
+  digest lê o `ETag`, que é o SHA-256 do conteúdo.
+
+**Verificação:** `S3GatewayTests` **+1** (`checksum_do_sdk_declara_algoritmo_e_e_conferido`): digest
+errado → `400 BadDigest` e o objeto não aparece no `GET`; valor curto → `400`;
+`crc32`/`sha1` → `400 NotImplemented`; digest certo em maiúsculas grava; substituição com checksum
+errado mantém o conteúdo anterior. Vermelho antes: `200` em todos os casos. Mutações **4/4**: sem a
+conferência do digest; algoritmo não conferido aceito; sem a normalização de maiúsculas; comparação
+desligada.
 
 ## 5. Erros
 

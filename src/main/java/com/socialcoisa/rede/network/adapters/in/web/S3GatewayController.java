@@ -912,19 +912,26 @@ class S3GatewayController {
 		// Um `PENDING` é gravação em curso, não versão publicada: o `sha256` dele é nulo, e comparar
 		// com ele faria `If-Match` do ETag confirmado anterior falhar só por haver upload na vez.
 		exigirPrecondicoesDoPut(request, antes != null && antes.state() == StorageObjectState.PENDING ? null : antes);
-		// `Content-MD5`: conferido ANTES de abrir upload (§4.44). Um digest que não bate recusa aqui,
-		// sem deixar linha aberta nem objeto PENDING atrás — por isso o corpo é lido para memória
-		// quando o cabeçalho veio (o cliente que pede conferência já aceita o custo dela).
+		// `Content-MD5` e `x-amz-checksum-*`: conferidos ANTES de abrir upload (§4.44, §4.46). Um digest
+		// que não bate recusa aqui, sem deixar linha aberta nem objeto PENDING atrás — por isso o corpo
+		// é lido para memória quando algum cabeçalho de integridade veio (quem pede conferência já
+		// aceita o custo dela).
 		byte[] md5Declarado = md5Declarado(request);
+		CheckSumDeclarado checksum = checksumDeclarado(request);
 		byte[] corpoConferido = null;
-		if (md5Declarado != null) {
+		if (md5Declarado != null || checksum != null) {
 			try {
 				corpoConferido = body(request).readAllBytes();
 			}
 			catch (java.io.IOException falha) {
 				throw s3Error(400, "InvalidRequest", "Nao foi possivel ler o corpo.");
 			}
-			exigirMd5Conferido(corpoConferido, md5Declarado);
+			if (md5Declarado != null) {
+				exigirMd5Conferido(corpoConferido, md5Declarado);
+			}
+			if (checksum != null) {
+				checksum.conferir(corpoConferido);
+			}
 		}
 		// O retrato do que a linha declarava, lido antes de `saveClientHeaders` trocá-lo (§4.22).
 		StorageCatalogService.ClientHeaders antesDeclarados = StorageCatalogService.ClientHeaders.NONE;
@@ -2193,6 +2200,69 @@ class S3GatewayController {
 			throw s3Error(400, "InvalidDigest", "O Content-MD5 precisa ter 16 bytes (MD5 em base64).");
 		}
 		return bytes;
+	}
+
+	/**
+	 * O algoritmo de checksum que este gateway confere — o único que a sonda provou.
+	 *
+	 * <p>Os demais (CRC32, CRC32C, CRC64NVME, SHA-1) ficam de fora por enquanto: aceitá-los sem
+	 * conferir seria sucesso silencioso para um digest que ninguém olhou (§4.46).</p>
+	 */
+	private static final String CHECKSUM_CONFERIDO = "sha256";
+
+	/**
+	 * O {@code x-amz-checksum-<algoritmo>} da requisição, ou {@code null} se não veio.
+	 *
+	 * <p>Algoritmo fora do SHA-256 e valor que não é hexadecimal de 64 dígitos são {@code 400} aqui,
+	 * antes de abrir upload. Maiúsculas são normalizadas, como no S3 (§4.46).</p>
+	 */
+	private static CheckSumDeclarado checksumDeclarado(HttpServletRequest request) {
+		String algoritmo = null;
+		for (java.util.Enumeration<String> nomes = request.getHeaderNames(); nomes != null && nomes.hasMoreElements();) {
+			String nome = nomes.nextElement();
+			if (nome == null || !nome.toLowerCase(Locale.ROOT).startsWith("x-amz-checksum-")) {
+				continue;
+			}
+			String qual = nome.substring("x-amz-checksum-".length()).toLowerCase(Locale.ROOT);
+			if ("type".equals(qual)) {
+				continue;
+			}
+			if (!CHECKSUM_CONFERIDO.equals(qual)) {
+				throw s3Error(400, "NotImplemented",
+					"O checksum '" + qual + "' nao e conferido por este gateway; use x-amz-checksum-sha256.");
+			}
+			algoritmo = qual;
+		}
+		if (algoritmo == null) {
+			return null;
+		}
+		String valor = request.getHeader("x-amz-checksum-" + algoritmo);
+		if (valor == null || !valor.trim().matches("[0-9a-fA-F]{64}")) {
+			throw s3Error(400, "InvalidArgument",
+				"x-amz-checksum-" + algoritmo + " precisa ser 64 digitos hexadecimais.");
+		}
+		return new CheckSumDeclarado(algoritmo, valor.trim().toLowerCase(Locale.ROOT));
+	}
+
+	/** O checksum declarado pelo cliente e a conferência contra os bytes recebidos. */
+	private record CheckSumDeclarado(String algoritmo, String esperado) {
+
+		void conferir(byte[] corpo) {
+			String calculado;
+			try {
+				calculado = java.util.HexFormat.of().formatHex(
+					java.security.MessageDigest.getInstance("SHA-256").digest(corpo));
+			}
+			catch (java.security.NoSuchAlgorithmException semSha) {
+				throw s3Error(500, "InternalError", "sha256 nao disponivel para conferir o checksum.");
+			}
+			if (!calculado.equals(esperado)) {
+				// A mesma recusa do `Content-MD5`: o cliente pediu a conferência e ela falhou.
+				throw s3Error(400, "BadDigest",
+					"O x-amz-checksum-" + algoritmo + " declarado nao confere com o corpo recebido; "
+						+ "o objeto nao foi gravado.");
+			}
+		}
 	}
 
 	/**
