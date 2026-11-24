@@ -3147,6 +3147,10 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 			assinar(enviar, SECRET, shaDe("abc"));
 			assertThat(mockMvc.perform(enviar).andReturn().getResponse().getStatus())
 				.as("'" + valido + "' tem de ser aceito").isEqualTo(200);
+		}
+	}
+
+	/**
 	 * `MaxParts` do `ListParts` é o teto que valeu de verdade — não um pedido que não foi honrado.
 	 *
 	 * <p><b>Antes:</b> o {@code <MaxParts>} era o pedido cru, não o valor aplicado. Com
@@ -3199,6 +3203,9 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		assertThat(xml).contains("<MaxParts>2</MaxParts>").contains("<PartNumber>2</PartNumber>")
 			.contains("<PartNumber>3</PartNumber>").doesNotContain("<PartNumber>1</PartNumber>")
 			.contains("<IsTruncated>false</IsTruncated>");
+	}
+
+	/**
 	 * `continuation-token` que o gateway não emitiu (ou de outro bucket) é `400`, não lista vazia.
 	 *
 	 * <p><b>Antes:</b> o token era o <b>último nome emitido</b>, em claro, e o gateway o usava como
@@ -3299,6 +3306,10 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		}
 		catch (java.security.GeneralSecurityException semHmac) {
 			throw new IllegalStateException(semHmac);
+	}
+	}
+
+	/**
 	 * A chave gravada é a que o cliente declarou, não a forma da URI.
 	 *
 	 * <p><b>Antes:</b> o `PUT` gravava a chave <b>como veio na URI</b> (percent-encoded, sem
