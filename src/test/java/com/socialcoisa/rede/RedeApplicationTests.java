@@ -8,12 +8,14 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.mock.env.MockEnvironment;
 
+import org.junit.jupiter.api.Tag;
 import jakarta.persistence.EntityManagerFactory;
 
 /**
  * Boots against a database built only from the Flyway migrations and lets Hibernate validate every
  * entity against it: a table or column that exists in an entity but in no migration fails here.
  */
+@Tag("critico")
 @SpringBootTest(properties = "spring.jpa.hibernate.ddl-auto=validate")
 class RedeApplicationTests {
 

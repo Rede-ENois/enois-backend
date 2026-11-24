@@ -13,6 +13,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import org.junit.jupiter.api.Tag;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -23,6 +24,7 @@ import tools.jackson.databind.ObjectMapper;
  * pelo <code>/v1</code> passaria por um caminho que o limitador não conhece — e a proteção contra
  * força bruta viraria uma porta dos fundos. O teste fixa a ordem: o filtro roda antes.
  */
+@Tag("critico")
 @SpringBootTest(properties = {
 	// O limite por IP do login, bem baixo, para o teste fechar em tres chamadas.
 	"rede.security.rate-limit.login.limit=2",

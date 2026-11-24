@@ -19,12 +19,14 @@ import tools.jackson.databind.ObjectMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import org.junit.jupiter.api.Tag;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
  * E-09: recusa de autorização em rota administrativa vai para a trilha comum de auditoria, com o
  * motivo certo e sem dado além de método, rota, status, motivo e IP.
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class AdminDenialAuditTests {

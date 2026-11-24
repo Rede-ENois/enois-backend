@@ -18,8 +18,10 @@ import com.socialcoisa.rede.marketplace.application.MarketplaceService;
 import com.socialcoisa.rede.marketplace.application.port.out.MarketplaceRepository;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
+import org.junit.jupiter.api.Tag;
 import tools.jackson.databind.ObjectMapper;
 
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class MarketplaceIdempotencyTests {

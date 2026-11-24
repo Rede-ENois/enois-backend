@@ -16,8 +16,11 @@ import org.springframework.beans.factory.ObjectProvider;
 import com.socialcoisa.rede.media.application.port.out.ImageContentClassifier;
 import com.socialcoisa.rede.media.application.port.out.ImageContentReviewer;
 import com.socialcoisa.rede.media.application.port.out.ImageContentReviewer.Result;
+import org.junit.jupiter.api.Tag;
 import com.socialcoisa.rede.shared.web.ApiException;
 
+
+@Tag("critico")
 class MediaImageModerationServiceTests {
 
 	private final ObjectProvider<ImageContentClassifier> provider = mock();

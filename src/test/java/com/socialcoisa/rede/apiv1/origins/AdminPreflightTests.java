@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.junit.jupiter.api.Tag;
 import org.springframework.test.web.servlet.MockMvc;
 
 /**
@@ -17,6 +18,7 @@ import org.springframework.test.web.servlet.MockMvc;
  * producao o OPTIONS de qualquer /admin devolvia 500, entao o painel nunca abria (virava
  * `NetworkError` no console).
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class AdminPreflightTests {

@@ -21,12 +21,14 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
+import org.junit.jupiter.api.Tag;
 import tools.jackson.databind.ObjectMapper;
 
 /**
  * O painel de moderação inteiro (filas, recursos, disputas, usuários, monitoramento) responde ao
  * MODERADOR; a candidatura continua exclusiva do admin; usuário comum fica fora de tudo.
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class ModeratorPermissionsTests {

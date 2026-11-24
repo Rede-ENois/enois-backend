@@ -28,8 +28,10 @@ import com.socialcoisa.rede.moderation.application.port.out.SanctionRepository;
 import com.socialcoisa.rede.moderation.domain.UserSanction;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
+import org.junit.jupiter.api.Tag;
 import tools.jackson.databind.ObjectMapper;
 
+@Tag("critico")
 @SpringBootTest(properties = {"rede.oauth.google.client-id=sintetico705", "rede.oauth.google.client-secret=sintetico705",
 	"rede.oauth.google.redirect-uri=http://localhost:8081/auth/oauth/google/callback",
 	"rede.oauth.linkedin.client-id=sintetico705", "rede.oauth.linkedin.client-secret=sintetico705",

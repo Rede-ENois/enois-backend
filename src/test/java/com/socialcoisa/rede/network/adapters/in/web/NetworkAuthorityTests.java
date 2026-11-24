@@ -27,6 +27,7 @@ import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 import com.socialcoisa.rede.shared.web.TestDatabase;
 
+import org.junit.jupiter.api.Tag;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -37,6 +38,7 @@ import tools.jackson.databind.ObjectMapper;
  * subindo juntos não tinham como perceber que havia dois — e é exatamente essa invisibilidade que a
  * fase 6 existe para fechar (docs/rede-distribuida/06-contingencia.md §4).</p>
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class NetworkAuthorityTests {

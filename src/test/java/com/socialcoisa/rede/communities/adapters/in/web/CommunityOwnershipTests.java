@@ -23,12 +23,14 @@ import org.springframework.test.web.servlet.MvcResult;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
+import org.junit.jupiter.api.Tag;
 import com.socialcoisa.rede.shared.web.TestDatabase;
 
 /**
  * Propriedade, saida e transferencia de administracao das comunidades (BUG-10..13). O dono nao pode
  * sair deixando a comunidade sem administracao, e a transferencia passa o controle de verdade.
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class CommunityOwnershipTests {

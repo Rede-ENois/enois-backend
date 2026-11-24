@@ -19,6 +19,7 @@ import org.springframework.test.web.servlet.MvcResult;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 import com.socialcoisa.rede.shared.web.TestDatabase;
 
+import org.junit.jupiter.api.Tag;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -36,6 +37,7 @@ import tools.jackson.databind.ObjectMapper;
  * - conta COM senha continua exigindo a atual — vazia ou errada é recusada;
  * - a tela sabe a diferença: `/auth/me` diz `hasPassword`, e ele vira `true` depois de criar.
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class FirstPasswordTests {

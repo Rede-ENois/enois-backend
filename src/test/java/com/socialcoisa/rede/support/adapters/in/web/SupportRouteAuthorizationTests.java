@@ -32,8 +32,10 @@ import com.socialcoisa.rede.shared.web.AdminGuard;
 import com.socialcoisa.rede.shared.web.ModeratorGuard;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 import com.socialcoisa.rede.shared.web.TestDatabase;
+import org.junit.jupiter.api.Tag;
 import tools.jackson.databind.ObjectMapper;
 
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class SupportRouteAuthorizationTests {

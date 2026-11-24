@@ -31,6 +31,7 @@ import com.socialcoisa.rede.shared.web.TestAuthHelper;
 import com.socialcoisa.rede.shared.web.TestDatabase;
 
 import tools.jackson.databind.JsonNode;
+import org.junit.jupiter.api.Tag;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -40,6 +41,7 @@ import tools.jackson.databind.ObjectMapper;
  * A validacao do id_token em si depende do provedor (chaves publicas reais), entao aqui o validador
  * do Google e substituido: o que queremos provar e o comportamento da aplicacao depois dele.
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 // O perfil de teste (dev) define client-ids vazios; aqui eles precisam existir para /start montar a

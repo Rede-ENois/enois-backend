@@ -13,6 +13,9 @@
 # Todos os testes
 ./mvnw test
 
+# Só os críticos (o que o PR roda): @Tag("critico")
+./mvnw test -Pcriticos
+
 # Testes de um módulo específico
 ./mvnw test -Dtest="com.socialcoisa.rede.feed.*"
 
@@ -23,9 +26,25 @@
 ./mvnw verify
 ```
 
-Na CI, todo PR roda a suíte inteira (job `test-suite` em `.github/workflows/build-and-push.yml`).
-O build da imagem usa `-DskipTests` e o schema check só sobe o contexto, então é esse job que pega
-teste quebrado antes de chegar na `qa`. Ele não roda no push de `qa`/`main` e não segura deploy.
+## Testes críticos
+
+`qa` e `main` são protegidas: todo código que chega nelas passou por um PR. O gate do PR
+(job `test-suite` em `.github/workflows/build-and-push.yml`) roda só as classes marcadas com
+`@Tag("critico")` — as que podem quebrar a aplicação. A suíte completa continua sendo `./mvnw test`,
+executável a qualquer momento; ela não é o gate padrão.
+
+| Área | O que segura | Exemplos |
+|---|---|---|
+| Sessão e autenticação | login, refresh, 2FA, troca de senha, sessão revogada | `SessionRefreshTests`, `TwoFactorFlowTests`, `PasswordChangeEndsSessionTests` |
+| Autorização | 403/404 de quem não pode, rotas de admin, origem/CORS | `ModeratorPermissionsTests`, `AdminPreflightTests`, `RateLimitCorsTests` |
+| Dinheiro | transferência, saldo, carteira, doações | `CoinTransferGuardTests`, `CoinEconomyServiceTests`, `DoacaoFlowTests` |
+| Moderação e sanções | banimento, suspensão, escrita bloqueada | `SanctionFlowTests`, `BulkBanIpBlockTests`, `WriteGateCoverageTests` |
+| Migração e boot | Flyway, schema, contexto sobe | `RedeApplicationTests`, `FlywayMigrationConfigTests` |
+| Idempotência e concorrência | repetição não duplica nem debita duas vezes | `IdempotencyFlowTests`, `PostCounterConcurrencyTests`, `PollVoteConcurrencyTests` |
+| Contrato de API | o que o front consome (notificações, sessão sem header) | `NotificationContractControllerTests`, `MissingSessionHeaderTests` |
+
+Para entrar no conjunto, a classe leva `@Tag("critico")`. Classe nova de área crítica sem a tag
+fica fora do gate — e é isso que `docs/TESTING.md` registra: a lista acima é o compromisso.
 
 Envio que roda em pool de threads (push) não é verificado de forma síncrona: o teste troca o
 executor por um que roda na hora (`@MockitoBean(name = "pushExecutor")` + `doAnswer`) ou usa

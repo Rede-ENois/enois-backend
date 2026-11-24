@@ -13,9 +13,11 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
+import org.junit.jupiter.api.Tag;
 import tools.jackson.databind.ObjectMapper;
 
 /** GitHub é vínculo, não login; o fluxo exige sessão e configuração explícita. */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class GitHubOAuthLinkTests {

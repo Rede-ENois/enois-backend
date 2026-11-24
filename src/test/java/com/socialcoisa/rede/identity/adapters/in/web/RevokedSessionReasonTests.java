@@ -19,6 +19,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 import com.socialcoisa.rede.shared.web.TestDatabase;
 
+import org.junit.jupiter.api.Tag;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -31,6 +32,7 @@ import tools.jackson.databind.ObjectMapper;
  * O detalhe só aparece para token que o banco CONHECE e que foi encerrado — token inventado
  * continua respondendo igual a sessão vencida, para a resposta não contar nada a quem sonda.
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class RevokedSessionReasonTests {

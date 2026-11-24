@@ -17,6 +17,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import com.socialcoisa.rede.shared.web.TestAuthHelper;
 import com.socialcoisa.rede.shared.web.TestDatabase;
 
+import org.junit.jupiter.api.Tag;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -37,6 +38,7 @@ import tools.jackson.databind.ObjectMapper;
  * Este teste trava o INVARIANTE de que a troca derruba a sessão (a causa), para que o front
  * não volte a depender de upload depois da troca.
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 class PasswordChangeEndsSessionTests {

@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.junit.jupiter.api.Tag;
 import org.springframework.test.web.servlet.MockMvc;
 
 /**
@@ -19,6 +20,7 @@ import org.springframework.test.web.servlet.MockMvc;
  * resposta com CORS (sem credencial), e um subdomínio que nenhuma das duas listas conhece é recusado
  * já no portão, inclusive nas rotas de identidade que antes passavam por isenção.
  */
+@Tag("critico")
 @SpringBootTest(properties = {
 		"rede.origins.enforce=true",
 		"rede.origins.wildcards-allowed=true",

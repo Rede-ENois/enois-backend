@@ -13,9 +13,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import org.junit.jupiter.api.Tag;
 import com.socialcoisa.rede.identity.application.port.out.AuthSessionRepository;
 
 /** Credencial de sessão não fica em texto no banco; a migração mantém o token antigo funcionando. */
+@Tag("critico")
 @SpringBootTest
 class SessionTokenHashingTests {
 

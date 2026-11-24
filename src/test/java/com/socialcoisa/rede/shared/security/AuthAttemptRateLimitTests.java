@@ -7,6 +7,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -22,6 +23,8 @@ import org.junit.jupiter.api.Test;
  * quem errou a chave ao colar.</li>
  * </ul>
  */
+
+@Tag("critico")
 class AuthAttemptRateLimitTests {
 
 	/** Relógio que o teste move à mão: a janela é tempo, e tempo em teste não é espera. */

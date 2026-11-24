@@ -11,6 +11,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
+import org.junit.jupiter.api.Tag;
 import org.springframework.test.web.servlet.MockMvc;
 
 /**
@@ -23,6 +24,7 @@ import org.springframework.test.web.servlet.MockMvc;
  * resto: estas rotas autenticam por conta própria (token de provisionamento de uso único no
  * enroll; {@code X-Node-Id} + {@code X-Node-Key} no resto), como os webhooks e o gov.br.</p>
  */
+@Tag("critico")
 @SpringBootTest
 @AutoConfigureMockMvc
 @TestPropertySource(properties = {

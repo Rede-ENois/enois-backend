@@ -26,8 +26,10 @@ import com.socialcoisa.rede.marketplace.application.MarketplaceService;
 import com.socialcoisa.rede.marketplace.application.port.out.MarketplaceRepository;
 import com.socialcoisa.rede.marketplace.domain.MarketplaceListing;
 import com.socialcoisa.rede.marketplace.domain.MarketplacePurchase;
+import org.junit.jupiter.api.Tag;
 import com.socialcoisa.rede.shared.web.ApiException;
 
+@Tag("critico")
 @SpringBootTest(properties = {
 	"rede.marketplace.sanitize-initial-delay-ms=3600000",
 	"rede.marketplace.gallery-import-initial-delay-ms=3600000"
