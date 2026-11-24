@@ -121,6 +121,18 @@ class S3GatewayController {
 		"legal-hold", "object-lock");
 
 	/**
+	 * Subrecursos do {@code DELETE} de objeto que <b>apagariam a chave</b> sem fazer o que o cliente
+	 * pediu.
+	 *
+	 * <p>{@code versionId} é a versão específica; os outros são as operações que o gateway não
+	 * endereça e que o {@code PUT} já recusa (§4.21). Sem a guarda, o {@code DELETE} despachava pela
+	 * rota e ignorava a consulta: quem pedia "apague as tags" ou "apague a versão 1" perdia o objeto
+	 * inteiro — o mesmo defeito que o {@code DELETE} do bucket tinha com {@code ?cors} (§4.38).</p>
+	 */
+	private static final List<String> SUBRECURSOS_NAO_APAGAVEIS = List.of("versionId", "tagging", "acl",
+		"retention", "legal-hold", "object-lock");
+
+	/**
 	 * Subrecursos de <b>leitura</b> do objeto que este gateway nao endereca.
 	 *
 	 * <p>{@code versionId} e a versao especifica (o gateway so serve a corrente, e devolver outra
@@ -349,6 +361,75 @@ class S3GatewayController {
 		StorageBucketPolicy atual = storage.bucketPolicy(bucket);
 		storage.putBucketPolicy(credential.ownerUserId(), bucket, atual.versioning(),
 			diasNaoCorrente, dias);
+		return ResponseEntity.ok().build();
+	}
+
+	/**
+	 * GetBucketVersioning: {@code GET /{bucket}?versioning}.
+	 *
+	 * <p><b>Antes:</b> caía no {@code ListObjects} e respondia um {@code 200 <ListBucketResult>} com
+	 * os objetos — documento do tipo errado para quem perguntou o versionamento.</p>
+	 *
+	 * <p><b>Agora:</b> {@code <VersioningConfiguration>} com {@code <Status>Enabled</Status>} ou
+	 * {@code <Status>Suspended</Status>}; bucket nunca configurado sai com o elemento vazio, que é o
+	 * "nunca ligado" do S3. {@code Suspended} não apaga o histórico: as versões antigas seguem
+	 * listáveis e restauráveis.</p>
+	 */
+	@GetMapping(value = "/{bucket}", params = "versioning")
+	ResponseEntity<String> getBucketVersioning(@PathVariable String bucket, HttpServletRequest request) {
+		S3Credential credential = authenticate(request, "LIST");
+		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
+		StorageBucketPolicy politica = storage.bucketPolicy(bucket);
+		S3Xml xml = new S3Xml();
+		xml.root("VersioningConfiguration");
+		// `updatedBy` nulo é "nunca houve política": o S3 responde o elemento vazio, não Suspended.
+		if (politica.updatedBy() != null) {
+			xml.element("Status", politica.versioning() ? "Enabled" : "Suspended");
+		}
+		return xml(HttpStatus.OK).body(xml.toString());
+	}
+
+	/**
+	 * PutBucketVersioning: {@code PUT /{bucket}?versioning}.
+	 *
+	 * <p><b>Antes:</b> caía no {@code PutObject} e respondia
+	 * {@code 400 InvalidRequest "Informe o bucket e a chave"} — não havia jeito de ligar o
+	 * versionamento pelo protocolo S3, embora o Storage o tenha desde o V352.</p>
+	 *
+	 * <p><b>Agora:</b> {@code Enabled} liga e {@code Suspended} desliga; as outras regras da política
+	 * (retenção de versão substituída, expiração) são <b>preservadas</b> — este chamado só mexe no
+	 * versionamento. Valor que não é nenhum dos dois é {@code 400 MalformedXML}.</p>
+	 */
+	@RequestMapping(value = "/{bucket}", method = RequestMethod.PUT, params = "versioning")
+	ResponseEntity<Void> putBucketVersioning(@PathVariable String bucket, HttpServletRequest request)
+			throws IOException {
+		S3Credential credential = authenticate(request, "PUT");
+		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
+		String texto = new String(body(request).readAllBytes(), StandardCharsets.UTF_8);
+		// Recorte linear do <VersioningConfiguration>, não regex sobre o corpo: `.*` casava o ÚLTIMO
+		// <Status> do documento (um `<Rule><Status>` depois da configuração), e a regex sobre o corpo
+		// do chamador é o ReDoS que o CodeQL marca. A abertura pode carregar `xmlns`.
+		int abreConfig = texto.indexOf("<VersioningConfiguration");
+		String configuracao = null;
+		if (abreConfig >= 0) {
+			int fimConfig = texto.indexOf("</VersioningConfiguration>", abreConfig);
+			if (fimConfig >= 0) {
+				configuracao = texto.substring(texto.indexOf(">", abreConfig) + 1, fimConfig);
+			}
+		}
+		String status = configuracao == null ? null : entre(configuracao, "<Status>", "</Status>");
+		if (!"Enabled".equals(status) && !"Suspended".equals(status)) {
+			throw s3Error(400, "MalformedXML",
+				"O <Status> do versionamento tem de ser Enabled ou Suspended.");
+		}
+		StorageBucketPolicy atual = storage.bucketPolicy(bucket);
+		boolean ligado = "Enabled".equals(status);
+		// A retenção de versão substituída só vale com o versionamento ligado (regra do serviço).
+		// Ele já recusa a combinação inconsistente; aqui a retenção é zerada ao suspender.
+		storage.putBucketPolicy(credential.ownerUserId(), bucket, ligado,
+			ligado ? atual.retainSupersededDays() : null, atual.expireAfterDays());
 		return ResponseEntity.ok().build();
 	}
 
@@ -738,6 +819,22 @@ class S3GatewayController {
 		}
 	}
 
+	/**
+	 * Subrecurso que o {@code DELETE} de objeto não endereça: {@code 501} com a chave <b>intacta</b>.
+	 *
+	 * <p>A resposta é a mesma do {@code PUT} para os subrecursos que gravariam (§4.21). O
+	 * {@code ?uploadId=} fica de fora: é o {@code AbortMultipartUpload}, outra operação.</p>
+	 */
+	private static void recusarSubrecursoNaoApagavel(HttpServletRequest request, String chaveDoObjeto) {
+		Set<String> pedidos = query(request).keySet();
+		for (String naoApagavel : SUBRECURSOS_NAO_APAGAVEIS) {
+			if (pedidos.contains(naoApagavel)) {
+				throw s3Error(501, "NotImplemented", "O subrecurso '" + naoApagavel + "' nao e suportado; "
+					+ chaveDoObjeto + " nao foi apagado.");
+			}
+		}
+	}
+
 	/** Lê e descarta o corpo já enviado, sem guardar. Sem corpo, não há nada a drenar. */
 	static void drenarCorpo(HttpServletRequest request) throws IOException {
 		try (InputStream corpo = request.getInputStream()) {
@@ -815,6 +912,27 @@ class S3GatewayController {
 		// Um `PENDING` é gravação em curso, não versão publicada: o `sha256` dele é nulo, e comparar
 		// com ele faria `If-Match` do ETag confirmado anterior falhar só por haver upload na vez.
 		exigirPrecondicoesDoPut(request, antes != null && antes.state() == StorageObjectState.PENDING ? null : antes);
+		// `Content-MD5` e `x-amz-checksum-*`: conferidos ANTES de abrir upload (§4.44, §4.46). Um digest
+		// que não bate recusa aqui, sem deixar linha aberta nem objeto PENDING atrás — por isso o corpo
+		// é lido para memória quando algum cabeçalho de integridade veio (quem pede conferência já
+		// aceita o custo dela).
+		byte[] md5Declarado = md5Declarado(request);
+		CheckSumDeclarado checksum = checksumDeclarado(request);
+		byte[] corpoConferido = null;
+		if (md5Declarado != null || checksum != null) {
+			try {
+				corpoConferido = body(request).readAllBytes();
+			}
+			catch (java.io.IOException falha) {
+				throw s3Error(400, "InvalidRequest", "Nao foi possivel ler o corpo.");
+			}
+			if (md5Declarado != null) {
+				exigirMd5Conferido(corpoConferido, md5Declarado);
+			}
+			if (checksum != null) {
+				checksum.conferir(corpoConferido);
+			}
+		}
 		// O retrato do que a linha declarava, lido antes de `saveClientHeaders` trocá-lo (§4.22).
 		StorageCatalogService.ClientHeaders antesDeclarados = StorageCatalogService.ClientHeaders.NONE;
 		// Metadado e cabeçalhos declarados junto do corpo (V367): lidos ANTES da gravação, porque cabeçalho
@@ -855,7 +973,9 @@ class S3GatewayController {
 		try {
 			// Corpo vazio é objeto válido no S3 (marcador de "pasta" do `aws s3 cp --recursive`):
 			// o caminho do cliente aceita 0 byte, o do nó continua recusando.
-			stored = storage.finishUploadPermitindoVazio(pending.id(), body(request), credential.ownerUserId());
+			stored = storage.finishUploadPermitindoVazio(pending.id(),
+				corpoConferido != null ? new java.io.ByteArrayInputStream(corpoConferido) : body(request),
+				credential.ownerUserId());
 		}
 		catch (ApiException recusado) {
 			throw noVocabularioDoS3(recusado);
@@ -901,6 +1021,12 @@ class S3GatewayController {
 	 */
 	private ResponseEntity<?> copiarObjeto(S3Credential credential, String bucket, String key,
 			String cabecalhoDaOrigem, HttpServletRequest request) {
+		// O `x-amz-copy-source-range` é do UploadPartCopy; no CopyObject o S3 não o aceita. Antes ele
+		// caía no vazio e a cópia gravava a origem INTEIRA com 200 — quem pedia 5 bytes recebia 10.
+		if (request.getHeader("x-amz-copy-source-range") != null) {
+			throw s3Error(400, "InvalidArgument",
+				"x-amz-copy-source-range nao vale no CopyObject; use UploadPartCopy (PUT com partNumber e uploadId).");
+		}
 		OrigemDaCopia origem = origemDaCopia(cabecalhoDaOrigem);
 		StorageObject fonte = origemServivel(credential, origem);
 		exigirPrecondicoesDaCopia(request, fonte);
@@ -1561,6 +1687,9 @@ class S3GatewayController {
 		requireBucket(credential, bucket);
 		requireBucketDoDono(credential, bucket);
 		String key = keyOf(request);
+		// O DELETE não olhava a consulta: `?versionId=1` apagava a chave inteira, e `?tagging`/`?acl`
+		// respondiam 204 com o objeto apagado em vez de mexer no subrecurso (§4.45).
+		recusarSubrecursoNaoApagavel(request, "/" + bucket + "/" + key);
 		Optional<StorageObject> object = catalog.find(bucket, key);
 		if (object.isPresent()) {
 			storage.delete(credential.ownerUserId(), bucket, key);
@@ -2048,6 +2177,119 @@ class S3GatewayController {
 		return S3_INSTANT.format(quando);
 	}
 
+	/**
+	 * O {@code Content-MD5} da requisição, já decodificado — ou {@code null} se não veio.
+	 *
+	 * <p>É o cabeçalho clássico de integridade do S3: o cliente diz o MD5 do corpo e o servidor
+	 * confere. Um valor que não é base64 de 16 bytes é {@code 400 InvalidDigest} <b>aqui</b>, antes de
+	 * abrir upload — nada é criado. Ver {@code exigirMd5Conferido} para a conferência do conteúdo.</p>
+	 */
+	private static byte[] md5Declarado(HttpServletRequest request) {
+		String declarado = request.getHeader("Content-MD5");
+		if (declarado == null || declarado.isBlank()) {
+			return null;
+		}
+		byte[] bytes;
+		try {
+			bytes = java.util.Base64.getDecoder().decode(declarado.trim());
+		}
+		catch (IllegalArgumentException naoEDigest) {
+			throw s3Error(400, "InvalidDigest", "O Content-MD5 nao e base64 valido.");
+		}
+		if (bytes.length != 16) {
+			throw s3Error(400, "InvalidDigest", "O Content-MD5 precisa ter 16 bytes (MD5 em base64).");
+		}
+		return bytes;
+	}
+
+	/**
+	 * O algoritmo de checksum que este gateway confere — o único que a sonda provou.
+	 *
+	 * <p>Os demais (CRC32, CRC32C, CRC64NVME, SHA-1) ficam de fora por enquanto: aceitá-los sem
+	 * conferir seria sucesso silencioso para um digest que ninguém olhou (§4.46).</p>
+	 */
+	private static final String CHECKSUM_CONFERIDO = "sha256";
+
+	/**
+	 * O {@code x-amz-checksum-<algoritmo>} da requisição, ou {@code null} se não veio.
+	 *
+	 * <p>Algoritmo fora do SHA-256 e valor que não é hexadecimal de 64 dígitos são {@code 400} aqui,
+	 * antes de abrir upload. Maiúsculas são normalizadas, como no S3 (§4.46).</p>
+	 */
+	private static CheckSumDeclarado checksumDeclarado(HttpServletRequest request) {
+		String algoritmo = null;
+		for (java.util.Enumeration<String> nomes = request.getHeaderNames(); nomes != null && nomes.hasMoreElements();) {
+			String nome = nomes.nextElement();
+			if (nome == null || !nome.toLowerCase(Locale.ROOT).startsWith("x-amz-checksum-")) {
+				continue;
+			}
+			String qual = nome.substring("x-amz-checksum-".length()).toLowerCase(Locale.ROOT);
+			if ("type".equals(qual)) {
+				continue;
+			}
+			if (!CHECKSUM_CONFERIDO.equals(qual)) {
+				throw s3Error(400, "NotImplemented",
+					"O checksum '" + qual + "' nao e conferido por este gateway; use x-amz-checksum-sha256.");
+			}
+			algoritmo = qual;
+		}
+		if (algoritmo == null) {
+			return null;
+		}
+		String valor = request.getHeader("x-amz-checksum-" + algoritmo);
+		if (valor == null || !valor.trim().matches("[0-9a-fA-F]{64}")) {
+			throw s3Error(400, "InvalidArgument",
+				"x-amz-checksum-" + algoritmo + " precisa ser 64 digitos hexadecimais.");
+		}
+		return new CheckSumDeclarado(algoritmo, valor.trim().toLowerCase(Locale.ROOT));
+	}
+
+	/** O checksum declarado pelo cliente e a conferência contra os bytes recebidos. */
+	private record CheckSumDeclarado(String algoritmo, String esperado) {
+
+		void conferir(byte[] corpo) {
+			String calculado;
+			try {
+				calculado = java.util.HexFormat.of().formatHex(
+					java.security.MessageDigest.getInstance("SHA-256").digest(corpo));
+			}
+			catch (java.security.NoSuchAlgorithmException semSha) {
+				throw s3Error(500, "InternalError", "sha256 nao disponivel para conferir o checksum.");
+			}
+			if (!calculado.equals(esperado)) {
+				// A mesma recusa do `Content-MD5`: o cliente pediu a conferência e ela falhou.
+				throw s3Error(400, "BadDigest",
+					"O x-amz-checksum-" + algoritmo + " declarado nao confere com o corpo recebido; "
+						+ "o objeto nao foi gravado.");
+			}
+		}
+	}
+
+	/**
+	 * Confere o {@code Content-MD5} contra os bytes recebidos.
+	 *
+	 * <p><b>Antes:</b> o cabeçalho era ignorado. Um {@code PUT} com o MD5 de outro corpo respondia
+	 * {@code 200} e gravava o objeto, e o cliente que usa o MD5 para pegar corrupção no caminho
+	 * (rede, proxy, retentativa) recebia "gravado" para um conteúdo que ele não mandou.</p>
+	 *
+	 * <p><b>Agora:</b> MD5 que não bate é {@code 400 BadDigest} <b>antes</b> da abertura — nada é
+	 * criado nem substituído. O cliente que pede a conferência paga por ela: o corpo vai para memória
+	 * nesta operação.</p>
+	 */
+	private static void exigirMd5Conferido(byte[] corpo, byte[] esperado) {
+		byte[] calculado;
+		try {
+			calculado = java.security.MessageDigest.getInstance("MD5").digest(corpo);
+		}
+		catch (java.security.NoSuchAlgorithmException semMd5) {
+			throw s3Error(500, "InternalError", "MD5 nao disponivel para conferir o Content-MD5.");
+		}
+		if (!java.util.Arrays.equals(esperado, calculado)) {
+			throw s3Error(400, "BadDigest",
+				"O Content-MD5 declarado nao confere com o corpo recebido; o objeto nao foi gravado.");
+		}
+	}
+
 	/** Parâmetro numérico de consulta; ausente ou inválido vale o padrão. */
 	private static int inteiroOu(String valor, int padrao) {
 		if (valor == null || valor.isBlank()) {
@@ -2061,17 +2303,34 @@ class S3GatewayController {
 		}
 	}
 
+	/**
+	 * {@code max-keys}: ausente é o padrão de 1000, {@code 0} é a página vazia, e o que não é um
+	 * inteiro de zero para cima é {@code 400 InvalidArgument}.
+	 *
+	 * <p><b>Antes:</b> qualquer entrada inválida — {@code abc}, {@code -1}, {@code 1.5} — virava
+	 * 1000 em silêncio, e {@code max-keys=0} também. O cliente recebia dados que não pediu e lia
+	 * {@code 200}: {@code aws s3 ls --max-items} com valor errado "funcionava".</p>
+	 *
+	 * <p><b>Agora:</b> só o vazio é padrão; o resto ou é um inteiro válido (limitado ao teto de
+	 * {@value #MAX_KEYS}) ou é recusa — inclusive o zero aceito, que é o que o paginador usa para
+	 * sondar.</p>
+	 */
 	private static int parseMaxKeys(String value) {
 		if (value == null || value.isBlank()) {
 			return MAX_KEYS;
 		}
+		int parsed;
 		try {
-			int parsed = Integer.parseInt(value.trim());
-			return parsed <= 0 ? MAX_KEYS : Math.min(parsed, MAX_KEYS);
+			parsed = Integer.parseInt(value.trim());
 		}
 		catch (NumberFormatException invalido) {
-			return MAX_KEYS;
+			throw s3Error(400, "InvalidArgument",
+				"max-keys precisa ser um inteiro de 0 em diante; veio \'" + value + "\'.");
 		}
+		if (parsed < 0) {
+			throw s3Error(400, "InvalidArgument", "max-keys nao pode ser negativo; veio " + parsed + ".");
+		}
+		return Math.min(parsed, MAX_KEYS);
 	}
 
 	private static ResponseEntity.BodyBuilder xml(HttpStatus status) {

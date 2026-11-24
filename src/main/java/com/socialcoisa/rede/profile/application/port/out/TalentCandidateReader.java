@@ -22,6 +22,15 @@ public interface TalentCandidateReader {
 	 */
 	List<String> searchAmong(Collection<String> candidateIds, String query, int limit);
 
+	/**
+	 * Ids do conjunto que casam com os filtros de competência, experiência e formação.
+	 *
+	 * <p>Filtro vazio é "sem filtro": quem não quiser filtrar por um campo não o envia. A restrição
+	 * ao conjunto é a mesma da busca — o filtro decide entre os ids liberados, nunca amplia o
+	 * conjunto.</p>
+	 */
+	List<String> filterAmong(Collection<String> candidateIds, TalentCandidateFilter filter);
+
 	/** O extrato de cada conta do conjunto, em uma consulta. */
 	List<TalentCandidate> byIds(Collection<String> candidateIds);
 
@@ -34,6 +43,15 @@ public interface TalentCandidateReader {
 
 		public String displayName() {
 			return name == null || name.isBlank() ? username : name;
+		}
+	}
+
+	/** Os filtros do painel de candidatos: competência, experiência mínima e formação. */
+	record TalentCandidateFilter(String skill, Integer minExperiences, String education) {
+
+		public boolean isEmpty() {
+			return (skill == null || skill.isBlank()) && (minExperiences == null || minExperiences <= 0)
+					&& (education == null || education.isBlank());
 		}
 	}
 }

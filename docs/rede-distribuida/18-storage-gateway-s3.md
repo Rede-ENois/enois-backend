@@ -1073,6 +1073,14 @@ valor — **2 de 2 derrubam**.
 `<ListBucketResult>` com os objetos — o cliente que pede os multiparts recebia uma lista
 **silenciosamente errada**, e as partes órfãs (processo que morreu, rede que caiu) seguiam ocupando
 disco até a varredura de lixo, sem rota para o operador vê-las.
+## 4.35 `PutBucketVersioning` / `GetBucketVersioning` (ciclo 124)
+
+O Storage **tem** versionamento por bucket desde o V352 (a política guarda `versioning`,
+`retain_superseded_days`, `expire_after_days`, e o `restore` depende dele) — mas o protocolo S3 não
+dava acesso: `PUT /{bucket}?versioning` caía no `PutObject` (`400 InvalidRequest`) e
+`GET /{bucket}?versioning` caía no `ListObjects` (`200 <ListBucketResult>`, documento do tipo
+errado). O `aws s3api put-bucket-versioning` não convencia ninguém.
+
 
 ## 4.34 `ListObjectVersions`: `?versions` mostra o histórico do bucket (ciclo 123)
 
@@ -1113,6 +1121,25 @@ bucket** não aparece; `prefix` que não casa não traz nada). Vermelho antes: `
 Mutações: tirar o filtro por dono (a primeira rodada **passou verde** porque o teste não tinha
 objeto alheio — a asserção foi tornada discriminante com a linha plantada); ignorar o `prefix`;
 listar só `version > 1` — **3 de 3 derrubam**.
+| `GET /{bucket}?versioning` | `<VersioningConfiguration>` com `<Status>Enabled</Status>` ou `<Status>Suspended</Status>` |
+| bucket nunca configurado | `<VersioningConfiguration/>` (elemento vazio, como no S3) |
+| `PUT ?versioning` com `Enabled` | `200`, liga |
+| `PUT ?versioning` com `Suspended` | `200`, desliga e zera a retenção de versão substituída |
+| qualquer outro `<Status>` | `400 MalformedXML`, configuração intacta |
+
+- Grava pela mesma `putBucketPolicy` do serviço; `expire_after_days` é **preservado** ao ligar/suspender.
+- **`Suspended` não apaga o histórico:** as versões antigas seguem listáveis (§4.34) e restauráveis —
+  "suspenso" é parar de criar versão nova, como no S3.
+
+**Verificação:** `S3GatewayTests` **+1** (`versionamento_do_bucket_liga_le_e_suspende`: vazio antes,
+liga e confere a coluna no banco, `Enabled` na leitura, `Ligado` → `400 MalformedXML` sem mudar nada,
+`Suspended` na leitura). Vermelho antes: `<ListBucketResult>`.
+Mutações: sempre emitir `<Status>`; gravar `false` sempre; gravar `true` sempre; aceitar qualquer
+`<Status>` — **4 de 4 derrubam**. *(A primeira rodada tinha duas mutações verdes: o teste não
+exercitava o `400` e o código tinha dois ramos para o mesmo comportamento. O `código` foi
+simplificado e a asserção do `MalformedXML` acrescentada; nada foi removido para "ficar verde".)*
+
+
 
 ## 4.36 `?lifecycle` fala a mesma política que o varredor (ciclo 125)
 
@@ -1289,6 +1316,132 @@ dos 8 subrecursos, o `GET` responde `501` e o `HEAD` responde o mesmo, sem vazar
 `?response-content-type=text/html` sai `200` sem `text/html`. Vermelho antes: `HEAD ?acl` → `200`.
 Mutações: sem a recusa dos subrecursos que gravariam (`a`) e sem a de leitura (`c`) derrubam; trocar a
 ordem das duas (`b`) **não** derruba — é equivalência real, cada uma é idempotente e independente.
+
+## 4.44 `Content-MD5` é conferido: MD5 errado é `400 BadDigest` (ciclo 134)
+
+O cabeçalho de integridade do S3 era **ignorado** por completo:
+
+```
+PUT /s3/<b>/x.txt   Content-MD5: <MD5 de OUTRO corpo>   corpo "abc"   → 200, objeto gravado
+PUT /s3/<b>/x.txt   Content-MD5: nao-e-base64           corpo "abc"   → 200, objeto gravado
+```
+
+O cliente que manda o MD5 para pegar corrupção no caminho — rede, proxy, retentativa — recebia
+"gravado com sucesso" para um corpo que ele não mandou, e o erro só aparecia depois, no consumidor.
+
+### Agora
+
+| pedido | antes | agora |
+|---|---|---|
+| `Content-MD5` que bate | `200` | `200` |
+| `Content-MD5` de outro corpo | `200`, objeto gravado | `400 BadDigest`, nada gravado |
+| `Content-MD5` que não é base64 de 16 bytes | `200` | `400 InvalidDigest` |
+
+- O valor é validado e o corpo conferido **antes** de abrir upload: a recusa não deixa linha aberta
+  nem objeto `PENDING` atrás, e um `PUT` sobre chave existente com MD5 errado **não** substitui o
+  conteúdo que já estava lá.
+- O cliente que pede a conferência paga por ela: com o cabeçalho, o corpo é lido para memória antes
+  da gravação. Sem o cabeçalho, o caminho é o de sempre (fluxo direto para o disco).
+- O `CopyObject` não é afetado: lá não há corpo do cliente para conferir.
+
+**Verificação:** `S3GatewayTests` **+1** (`content_md5_que_nao_bate_e_bad_digest_e_nao_grava`): MD5
+errado → `400 BadDigest` e o conteúdo **não** aparece no GET; base64 inválido e base64 curto →
+`400 InvalidDigest`; MD5 certo grava e o corpo confere; substituição com MD5 errado mantém o conteúdo
+anterior. Vermelho antes: `200`. Mutações **2/2**: sem a conferência do digest; sem a validação de 16
+bytes.
+
+## 4.42 `max-keys` inválido é `400`, e `max-keys=0` é página vazia (ciclo 132; `delimiter` no 135)
+
+`parseMaxKeys` tratava todo valor `<= 0` como "não veio":
+
+```
+GET /s3/<b>?max-keys=0    → 200 com 1000 objetos
+GET /s3/<b>?max-keys=-1   → 200 com 1000 objetos
+GET /s3/<b>?max-keys=abc  → 200 com 1000 objetos
+```
+
+O `S3` distingue os três: `0` é uma página vazia legítima (o cliente pede "só o total"), negativo e
+não numérico são erro do pedido. Com `delimiter` era pior: a conta de "há mais" usava o tamanho
+pedido e com zero nunca fechava — `?max-keys=0&delimiter=/` devolvia o bucket inteiro, com
+`IsTruncated=false` e todos os `CommonPrefixes`.
+
+### Agora
+
+| `max-keys` | antes | agora |
+|---|---|---|
+| ausente | `1000` | `1000` |
+| `0` | `1000` objetos | página vazia: `KeyCount 0`, sem `<Key>` nem `<CommonPrefixes>` |
+| `-1` / `1.5` / `abc` | `1000` objetos | `400 InvalidArgument` |
+| `> 1000` | `1000` | `1000` (corte, como no S3) |
+
+- Com `max-keys=0` sem `delimiter` a página não vem truncada: não há "próxima" a pedir, o cliente
+  queria só saber que lista vazia foi pedida.
+- Com `delimiter` junto do `0`, a resposta tem `IsTruncated=true` (há conteúdo depois) e **nenhum
+  marcador**: numa página vazia o último emitido é nulo, e o `S3Xml` só escreve o
+  `NextMarker`/`NextContinuationToken` quando há um. O cliente que pedir a próxima a partir do zero
+  recebe de novo a página vazia — declarado aqui para não parecer paginação completa.
+- O corpo do erro é o XML do S3 (`<Code>InvalidArgument</Code>`), não o JSON do Control Plane.
+
+**Verificação:** `S3GatewayTests` **+1** (`max_keys_zero_e_pagina_vazia_e_invalido_e_400`): `0` sem
+`delimiter` → `KeyCount 0`, `IsTruncated=false`, sem `<Key>`; `0` com `delimiter` → o mesmo e
+`IsTruncated=true`; `-1`, `1.5` e `abc` → `400 InvalidArgument` sem conteúdo; `5000` →
+`<MaxKeys>1000</MaxKeys>` e o objeto presente. Vermelho antes: `0` e `abc` listavam. Mutações
+**3/3** com o `parseMaxKeys` do ciclo 132 já na `qa`: `0` voltando ao padrão; sem a recusa de
+negativo; `1.5`/`abc` voltando ao padrão. A conta de `IsTruncated` com `delimiter` ficou **como
+estava**: a tentativa de mudá-la para "teto de linhas cheio" não é discriminada por nenhum cenário
+(o laço já marca truncado ao encontrar a entrada além do teto), então não virou código.
+
+## 4.45 `DELETE` de objeto com subrecurso não apaga a chave (ciclo 135)
+
+O `DELETE` do objeto não olhava a consulta:
+
+```
+DELETE /s3/<b>/a.txt?versionId=1   → 204   e a chave some
+DELETE /s3/<b>/a.txt?tagging       → 204   e a chave some
+DELETE /s3/<b>/a.txt?acl           → 204   e a chave some
+```
+
+Quem pedia "apague a versão 1" ou "apague as tags" perdia o objeto inteiro, com `204`. É o mesmo
+defeito que o `DELETE` do **bucket** tinha com `?cors` (§4.38) — e o `GET`/`HEAD` já recusavam esses
+nomes (§4.37/§4.41), então as metades discordavam.
+
+## 4.46 `x-amz-checksum-*` é conferido, e algoritmo não suportado é `400` (ciclo 136)
+
+O SDK v2 do S3 manda `x-amz-checksum-*` por padrão. Aqui ele era ignorado:
+
+```
+PUT /s3/<b>/x.txt   x-amz-checksum-sha256: <SHA-256 de OUTRO corpo>  → 200, objeto gravado
+PUT /s3/<b>/x.txt   x-amz-checksum-sha256: abcd                      → 200, objeto gravado
+PUT /s3/<b>/x.txt   x-amz-checksum-crc32: DUoRhQ==                   → 200, objeto gravado
+```
+
+É o mesmo defeito que o `Content-MD5` tinha (§4.44): quem pede a conferência de integridade recebia
+"gravado" para um corpo que não mandou.
+
+### Agora
+
+| pedido | antes | agora |
+|---|---|---|
+| `x-amz-checksum-sha256` correto (caixa qualquer) | `200` | `200` |
+| `x-amz-checksum-sha256` que não bate | `200`, objeto gravado | `400 BadDigest`, nada gravado |
+| `x-amz-checksum-sha256` que não é 64 dígitos hex | `200` | `400 InvalidArgument` |
+| `x-amz-checksum-crc32` / `-crc32c` / `-crc64nvme` / `-sha1` | `200`, sem conferir | `400 NotImplemented` nomeando o algoritmo |
+| `x-amz-checksum-type` | ignorado | ignorado (é rótulo do cliente, não digest) |
+
+- A conferência acontece **antes** de abrir upload: a recusa não deixa linha aberta nem objeto
+  `PENDING`, e não substitui o conteúdo de uma chave existente. Com qualquer cabeçalho de
+  integridade presente, o corpo é lido para memória (quem pede conferência paga por ela).
+- **Algoritmo fora do SHA-256 é recusado, não aceito em silêncio.** Conferir CRC32/SHA-1 exige mais
+  código do que a sonda provou; responder `200` a um digest que ninguém olhou seria pior que dizer
+  "não confiro". O cabeçalho de resposta do checksum não é ecoado no `GET`/`HEAD` — quem precisa do
+  digest lê o `ETag`, que é o SHA-256 do conteúdo.
+
+**Verificação:** `S3GatewayTests` **+1** (`checksum_do_sdk_declara_algoritmo_e_e_conferido`): digest
+errado → `400 BadDigest` e o objeto não aparece no `GET`; valor curto → `400`;
+`crc32`/`sha1` → `400 NotImplemented`; digest certo em maiúsculas grava; substituição com checksum
+errado mantém o conteúdo anterior. Vermelho antes: `200` em todos os casos. Mutações **4/4**: sem a
+conferência do digest; algoritmo não conferido aceito; sem a normalização de maiúsculas; comparação
+desligada.
 
 ## 5. Erros
 

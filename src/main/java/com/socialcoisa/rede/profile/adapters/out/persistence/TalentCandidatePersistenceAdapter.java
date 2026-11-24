@@ -71,6 +71,42 @@ class TalentCandidatePersistenceAdapter implements TalentCandidateReader {
 	}
 
 	@Override
+	public List<String> filterAmong(Collection<String> candidateIds, TalentCandidateFilter filter) {
+		if (candidateIds.isEmpty() || filter == null || filter.isEmpty()) {
+			return List.of();
+		}
+		String skill = filter.skill() == null ? "" : filter.skill().trim().toLowerCase(java.util.Locale.ROOT);
+		int minExperiences = filter.minExperiences() == null ? 0 : Math.max(0, filter.minExperiences());
+		String education = filter.education() == null ? "" : filter.education().trim().toLowerCase(java.util.Locale.ROOT);
+		String skillPattern = "%" + LikePattern.escape(skill) + "%";
+		String educationPattern = "%" + LikePattern.escape(education) + "%";
+
+		@SuppressWarnings("unchecked")
+		List<Object> rows = em.createNativeQuery("""
+				select u.id from users u
+				where u.id in (:ids)
+				  and (:skill = '' or exists (
+					select 1 from user_skills s where s.user_id = u.id and lower(s.skill) like :skillPattern escape '\\'))
+				  and (:minExperiences = 0 or (
+					select count(*) from user_experiences e where e.user_id = u.id) >= :minExperiences)
+				  and (:education = '' or exists (
+					select 1 from user_education ed where ed.user_id = u.id
+					  and (lower(ed.school) like :educationPattern escape '\\'
+					       or lower(ed.degree) like :educationPattern escape '\\')))
+				order by u.reputation desc
+				""")
+			.setParameter("ids", candidateIds)
+			.setParameter("skill", skill)
+			.setParameter("skillPattern", skillPattern)
+			.setParameter("minExperiences", minExperiences)
+			.setParameter("education", education)
+			.setParameter("educationPattern", educationPattern)
+			.getResultList();
+
+		return rows.stream().map(row -> (String) row).toList();
+	}
+
+	@Override
 	public List<TalentCandidate> byIds(Collection<String> candidateIds) {
 		if (candidateIds.isEmpty()) {
 			return List.of();

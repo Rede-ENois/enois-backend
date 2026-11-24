@@ -47,6 +47,15 @@ class MuraisPersistenceAdapter implements MuraisRepository {
 	}
 
 	@Override
+	public List<Mural> findActiveMuraisBefore(Instant before, String search, int limit) {
+		String termo = search == null ? "" : search.toLowerCase(java.util.Locale.ROOT);
+		String pattern = "%" + termo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%";
+		return murais.ativosBeforeBuscando(MuralStatus.ACTIVE, before, termo, pattern, PageRequest.of(0, limit)).stream()
+			.map(MuralJpaEntity::toDomain)
+			.toList();
+	}
+
+	@Override
 	public List<Mural> findActiveMuraisByOwner(com.socialcoisa.rede.feed.domain.UserId ownerId) {
 		return murais.ativosDoDono(ownerId.value()).stream().map(MuralJpaEntity::toDomain).toList();
 	}

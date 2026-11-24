@@ -2189,8 +2189,433 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		assertThat(dentroResposta.getStatus()).as(dentroResposta.getContentAsString()).isEqualTo(200);
 		assertThat(dentroResposta.getContentAsString()).contains("<Key>versoes/a.txt</Key>")
 			.doesNotContain("versoes/b.txt");
+	}
+
+	/**
+	 * `PutBucketVersioning` / `GetBucketVersioning` (`PUT` e `GET /{bucket}?versioning`).
+	 *
+	 * <p><b>Antes:</b> nenhuma das duas existia. O {@code PUT} caía no {@code PutObject} e respondia
+	 * {@code 400 InvalidRequest "Informe o bucket e a chave"}; o {@code GET} caía no
+	 * {@code ListObjects} e respondia um {@code <ListBucketResult>}. O Storage <b>tem</b> versionamento
+	 * por bucket — a política guarda isso desde o V352 e o {@code restore} depende dele — mas o cliente
+	 * S3 não tinha como ligá-lo: `aws s3api put-bucket-versioning` não convencia ninguém, e
+	 * `get-bucket-versioning` dizia uma coisa falsa.</p>
+	 *
+	 * <p><b>Agora:</b> {@code PUT ?versioning} liga ({@code Status>Enabled}) e desliga
+	 * ({@code Suspended}) o versionamento do bucket do dono, grava na política e responde {@code 200};
+	 * {@code GET ?versioning} devolve {@code <VersioningConfiguration>}. {@code Suspended} não apaga o
+	 * histórico: as versões antigas continuam listáveis (§4.34) e o {@code restore} segue possível —
+	 * "suspenso" é parar de criar versão nova, como no S3.</p>
+	 */
+	@Test
+	void versionamento_do_bucket_liga_le_e_suspende() throws Exception {
+		gravar("versionamento/a.txt", "a");
+
+		// Sem configuração: o S3 responde 200 com <VersioningConfiguration/> vazio.
+		MockHttpServletRequestBuilder antes = get("/s3/" + bucket + "?versioning");
+		assinar(antes, SECRET, shaVazio());
+		var antesResposta = mockMvc.perform(antes).andReturn().getResponse();
+		assertThat(antesResposta.getStatus()).as(antesResposta.getContentAsString()).isEqualTo(200);
+		assertThat(antesResposta.getContentAsString()).startsWith("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+			+ "<VersioningConfiguration");
+		assertThat(antesResposta.getContentAsString()).doesNotContain("<Status>");
+
+		// Liga.
+		String liga = "<VersioningConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">"
+			+ "<Status>Enabled</Status></VersioningConfiguration>";
+		MockHttpServletRequestBuilder ligar = put("/s3/" + bucket + "?versioning")
+			.content(liga.getBytes(StandardCharsets.UTF_8));
+		assinar(ligar, SECRET, shaDe(liga));
+		var ligado = mockMvc.perform(ligar).andReturn().getResponse();
+		assertThat(ligado.getStatus()).as(ligado.getContentAsString()).isEqualTo(200);
+		assertThat(jdbc.queryForObject("select versioning from network_storage_buckets where bucket = ?",
+			Boolean.class, bucket)).isTrue();
+		// O `<Status>` que vale é o do `VersioningConfiguration`, não o último `<Status>` do documento:
+		// a regex gulosa casava um `<Status>` de regra de ciclo de vida vindo depois dele.
+		String comOutroStatusDepois = "<VersioningConfiguration><Status>Enabled</Status>"
+			+ "</VersioningConfiguration><Rule><Status>Suspended</Status></Rule>";
+		MockHttpServletRequestBuilder comRegra = put("/s3/" + bucket + "?versioning")
+			.content(comOutroStatusDepois.getBytes(StandardCharsets.UTF_8));
+		assinar(comRegra, SECRET, shaDe(comOutroStatusDepois));
+		assertThat(mockMvc.perform(comRegra).andReturn().getResponse().getStatus()).isEqualTo(200);
+		assertThat(jdbc.queryForObject("select versioning from network_storage_buckets where bucket = ?",
+			Boolean.class, bucket)).as("o <Status> de fora do VersioningConfiguration foi lido").isTrue();
+
+		// Lê: Enabled.
+		MockHttpServletRequestBuilder le = get("/s3/" + bucket + "?versioning");
+		assinar(le, SECRET, shaVazio());
+		assertThat(mockMvc.perform(le).andReturn().getResponse().getContentAsString())
+			.contains("<Status>Enabled</Status>");
+
+		// Valor que não é Enabled nem Suspended é MalformedXML — e não muda a configuração.
+		String invalido = "<VersioningConfiguration><Status>Ligado</Status></VersioningConfiguration>";
+		MockHttpServletRequestBuilder bogus = put("/s3/" + bucket + "?versioning")
+			.content(invalido.getBytes(StandardCharsets.UTF_8));
+		assinar(bogus, SECRET, shaDe(invalido));
+		var recusa = mockMvc.perform(bogus).andReturn().getResponse();
+		assertThat(recusa.getStatus()).as(recusa.getContentAsString()).isEqualTo(400);
+		assertThat(recusa.getContentAsString()).contains("<Code>MalformedXML</Code>");
+		assertThat(jdbc.queryForObject("select versioning from network_storage_buckets where bucket = ?",
+			Boolean.class, bucket)).isTrue();
+
+		// Suspende: para de criar versão, mas o histórico fica.
+		String suspende = "<VersioningConfiguration><Status>Suspended</Status></VersioningConfiguration>";
+		MockHttpServletRequestBuilder suspender = put("/s3/" + bucket + "?versioning")
+			.content(suspende.getBytes(StandardCharsets.UTF_8));
+		assinar(suspender, SECRET, shaDe(suspende));
+		assertThat(mockMvc.perform(suspender).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder depois = get("/s3/" + bucket + "?versioning");
+		assinar(depois, SECRET, shaVazio());
+		assertThat(mockMvc.perform(depois).andReturn().getResponse().getContentAsString())
+			.contains("<Status>Suspended</Status>");
+		// Suspender não apaga o histórico: o versionamento sai, a retenção é zerada (regra do
+		// serviço), e o prazo de expiração que já existia continua.
+		assertThat(jdbc.queryForObject("select versioning from network_storage_buckets where bucket = ?",
+			Boolean.class, bucket)).isFalse();
+		assertThat(jdbc.queryForObject("select retain_superseded_days from network_storage_buckets where bucket = ?",
+			Integer.class, bucket)).isNull();
+
+	}
 
 
+	/**
+	 * `max-keys` inválido é recusado, e `max-keys=0` é uma página vazia — não "1000".
+	 *
+	 * <p><b>Antes:</b> {@code parseMaxKeys} trocava qualquer entrada por 1000: {@code max-keys=abc}
+	 * respondia {@code 200} com três objetos e {@code <MaxKeys>1000</MaxKeys>} (o S3 responde
+	 * {@code 400 InvalidArgument}), e {@code max-keys=0} — a página vazia que o paginador usa para
+	 * sondar o total — respondia os três objetos. O cliente que pedia zero recebia dados e, pior,
+	 * quem digitava errado no {@code aws s3 ls --max-items} achava que a listagem tinha funcionado.</p>
+	 *
+	 * <p><b>Agora:</b> vazio continua o padrão de 1000; {@code 0} é aceito (lista vazia,
+	 * {@code KeyCount 0}); negativo e não numérico são {@code 400 InvalidArgument} em XML. O teto de
+	 * 1000 é mantido para cima.</p>
+	 */
+	@Test
+	void max_keys_invalido_e_recusado_e_zero_e_pagina_vazia() throws Exception {
+		gravar("mk/a.txt", "a");
+		gravar("mk/b.txt", "b");
+
+		for (String ruim : new String[] { "abc", "-1", "1.5" }) {
+			MockHttpServletRequestBuilder r = get("/s3/" + bucket + "?prefix=mk/&max-keys=" + ruim);
+			assinar(r, SECRET, shaVazio());
+			var resposta = mockMvc.perform(r).andReturn().getResponse();
+			assertThat(resposta.getStatus()).as("max-keys=" + ruim).isEqualTo(400);
+			assertThat(resposta.getContentAsString()).contains("<Code>InvalidArgument</Code>")
+				.doesNotContain("<Key>mk/a.txt</Key>");
+		}
+
+		MockHttpServletRequestBuilder zero = get("/s3/" + bucket + "?prefix=mk/&max-keys=0");
+		assinar(zero, SECRET, shaVazio());
+		String corpoZero = mockMvc.perform(zero).andReturn().getResponse().getContentAsString();
+		assertThat(corpoZero).contains("<KeyCount>0</KeyCount>").doesNotContain("<Key>mk/a.txt</Key>");
+
+		// O teto continua: pedir mais que 1000 lista o que cabe, sem virar erro.
+		MockHttpServletRequestBuilder grande = get("/s3/" + bucket + "?prefix=mk/&max-keys=1001");
+		assinar(grande, SECRET, shaVazio());
+		var doGrande = mockMvc.perform(grande).andReturn().getResponse();
+		assertThat(doGrande.getStatus()).isEqualTo(200);
+		assertThat(doGrande.getContentAsString()).contains("<MaxKeys>1000</MaxKeys>");
+
+		// E o padrão (sem o parâmetro) segue listando.
+		MockHttpServletRequestBuilder sem = get("/s3/" + bucket + "?prefix=mk/");
+		assinar(sem, SECRET, shaVazio());
+		assertThat(mockMvc.perform(sem).andReturn().getResponse().getContentAsString())
+			.contains("<Key>mk/a.txt</Key>");
+	}
+
+	/**
+	 * `x-amz-copy-source-range` no `CopyObject` é recusado, não ignorado.
+	 *
+	 * <p><b>Antes:</b> o cabeçalho só era lido no {@code UploadPartCopy}; no {@code CopyObject} caía no
+	 * vazio e a cópia gravava a origem <b>inteira</b> com {@code 200 CopyObjectResult}. O S3 não
+	 * aceita esse cabeçalho nessa operação — quem manda {@code bytes=0-4} esperando 5 bytes recebia os
+	 * 10, com sucesso, e o destino ficava com o conteúdo errado e cara de certo.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 400 InvalidArgument} nomeando o cabeçalho e dizendo qual operação o
+	 * aceita; o destino não é criado. No {@code UploadPartCopy} ele continua valendo (§4.20).</p>
+	 */
+	@Test
+	void copy_object_recusa_o_cabecalho_de_faixa_do_upload_part_copy() throws Exception {
+		gravar("cpr/o.txt", "0123456789");
+
+		MockHttpServletRequestBuilder r = put("/s3/" + bucket + "/cpr/d.txt")
+			.header("x-amz-copy-source", "/" + bucket + "/cpr/o.txt")
+			.header("x-amz-copy-source-range", "bytes=0-4");
+		assinar(r, SECRET, shaVazio());
+		var resposta = mockMvc.perform(r).andReturn().getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(400);
+		assertThat(resposta.getContentAsString())
+			.contains("<Code>InvalidArgument</Code>")
+			.contains("x-amz-copy-source-range")
+			.doesNotContain("<CopyObjectResult");
+
+		// O destino não foi criado pela cópia recusada.
+		MockHttpServletRequestBuilder g = get("/s3/" + bucket + "/cpr/d.txt");
+		assinar(g, SECRET, shaVazio());
+		var lido = mockMvc.perform(g).andReturn();
+		var doLido = lido.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lido)).andReturn().getResponse() : lido.getResponse();
+		assertThat(doLido.getStatus()).isEqualTo(404);
+
+		// Sem o cabeçalho, a cópia continua copiando a origem inteira.
+		MockHttpServletRequestBuilder ok = put("/s3/" + bucket + "/cpr/d.txt")
+			.header("x-amz-copy-source", "/" + bucket + "/cpr/o.txt");
+		assinar(ok, SECRET, shaVazio());
+		assertThat(mockMvc.perform(ok).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder g2 = get("/s3/" + bucket + "/cpr/d.txt");
+		assinar(g2, SECRET, shaVazio());
+		var l2 = mockMvc.perform(g2).andReturn();
+		var do2 = l2.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(l2)).andReturn().getResponse() : l2.getResponse();
+		assertThat(do2.getContentAsString()).isEqualTo("0123456789");
+	}
+
+	/**
+	 * {@code Content-MD5} é conferido: MD5 que não bate é {@code 400 BadDigest} e nada é gravado.
+	 *
+	 * <p><b>Antes:</b> o cabeçalho era ignorado por completo. {@code PUT} com o MD5 de <b>outro</b>
+	 * corpo respondia {@code 200} e gravava o objeto, e um valor que nem é base64 também passava. O
+	 * cliente que manda o MD5 para detectar corrupção no caminho — transferência de rede, proxy,
+	 * retentativa — recebia "gravado com sucesso" para um corpo que ele não mandou, e o erro só
+	 * aparecia depois, no consumidor.</p>
+	 *
+	 * <p><b>Agora:</b> o MD5 declarado é conferido contra os bytes recebidos e contra a origem, no
+	 * {@code CopyObject}: bater é {@code 200}; não bater é {@code 400 BadDigest}; o que não é base64
+	 * com 16 bytes é {@code 400 InvalidDigest}. Em nenhuma das recusas o objeto é criado nem
+	 * substituído.</p>
+	 */
+	@Test
+	void content_md5_que_nao_bate_e_bad_digest_e_nao_grava() throws Exception {
+		String md5DoAbc = java.util.Base64.getEncoder().encodeToString(
+			java.security.MessageDigest.getInstance("MD5").digest("abc".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+		String md5DeOutro = java.util.Base64.getEncoder().encodeToString(
+			java.security.MessageDigest.getInstance("MD5").digest("outra".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+
+		// Não bate: recusa e o objeto não existe.
+		MockHttpServletRequestBuilder ruim = put("/s3/" + bucket + "/cmd/ruim.txt").content("abc".getBytes())
+			.header("Content-MD5", md5DeOutro);
+		assinar(ruim, SECRET, shaDe("abc"));
+		var resposta = mockMvc.perform(ruim).andReturn().getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(400);
+		assertThat(resposta.getContentAsString()).contains("<Code>BadDigest</Code>");
+		MockHttpServletRequestBuilder gRuim = get("/s3/" + bucket + "/cmd/ruim.txt");
+		assinar(gRuim, SECRET, shaVazio());
+		var lidoRuim = mockMvc.perform(gRuim).andReturn();
+		var doRuim = lidoRuim.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lidoRuim)).andReturn().getResponse() : lidoRuim.getResponse();
+		// Recusado = não gravado. `403` aqui é o bucket ainda sem dono (o primeiro objeto é o que o dita,
+		// e ele não nasceu); o que importa é que não veio `200` com conteúdo.
+		assertThat(doRuim.getStatus()).as("objeto gravado apesar do MD5 errado").isNotEqualTo(200);
+		assertThat(doRuim.getContentAsString()).doesNotContain("abc");
+
+		// Não é base64 de 16 bytes: InvalidDigest, também sem gravar.
+		for (String lixo : new String[] { "nao-e-base64!!", "YWJj" }) {
+			MockHttpServletRequestBuilder invalido = put("/s3/" + bucket + "/cmd/lixo.txt")
+				.content("abc".getBytes()).header("Content-MD5", lixo);
+			assinar(invalido, SECRET, shaDe("abc"));
+			var doInvalido = mockMvc.perform(invalido).andReturn().getResponse();
+			assertThat(doInvalido.getStatus()).as("Content-MD5=" + lixo).isEqualTo(400);
+			assertThat(doInvalido.getContentAsString()).contains("<Code>InvalidDigest</Code>");
+		}
+
+		// Bate: grava.
+		MockHttpServletRequestBuilder bom = put("/s3/" + bucket + "/cmd/bom.txt").content("abc".getBytes())
+			.header("Content-MD5", md5DoAbc);
+		assinar(bom, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(bom).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder gBom = get("/s3/" + bucket + "/cmd/bom.txt");
+		assinar(gBom, SECRET, shaVazio());
+		var lidoBom = mockMvc.perform(gBom).andReturn();
+		var doBom = lidoBom.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lidoBom)).andReturn().getResponse() : lidoBom.getResponse();
+		assertThat(doBom.getContentAsString()).isEqualTo("abc");
+
+		// Substituição com MD5 errado não troca o conteúdo que já está lá.
+		MockHttpServletRequestBuilder troca = put("/s3/" + bucket + "/cmd/bom.txt").content("xyz".getBytes())
+			.header("Content-MD5", md5DeOutro);
+		assinar(troca, SECRET, shaDe("xyz"));
+		assertThat(mockMvc.perform(troca).andReturn().getResponse().getStatus()).isEqualTo(400);
+		MockHttpServletRequestBuilder gBom2 = get("/s3/" + bucket + "/cmd/bom.txt");
+		assinar(gBom2, SECRET, shaVazio());
+		var lido2 = mockMvc.perform(gBom2).andReturn();
+		var do2 = lido2.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lido2)).andReturn().getResponse() : lido2.getResponse();
+		assertThat(do2.getContentAsString()).isEqualTo("abc");
+	}
+
+
+
+	/**
+	 * `DELETE` de objeto com subrecurso apaga a <b>chave</b>, não o subrecurso — e não é o que o
+	 * cliente pediu.
+	 *
+	 * <p><b>Antes:</b> o {@code DELETE} do objeto não olhava a consulta. {@code DELETE ?versionId=1},
+	 * {@code ?tagging} e {@code ?acl} respondiam {@code 204} e deixavam a chave <b>apagada</b>: o
+	 * cliente que pedia "apague a versão 1" ou "apague as tags" perdia o objeto inteiro. É o mesmo
+	 * defeito que o {@code DELETE} do <b>bucket</b> tinha com {@code ?cors} (§4.38) — e o {@code GET} e
+	 * o {@code HEAD} já recusavam esses nomes (§4.37, §4.41), então as metades discordavam.</p>
+	 *
+	 * <p><b>Agora:</b> os subrecursos que este gateway não endereça são {@code 501 NotImplemented} no
+	 * {@code DELETE} também, com o objeto intacto. {@code ?uploadId=} continua sendo o
+	 * {@code AbortMultipartUpload} (outra operação, não o {@code DeleteObject}) e segue respondendo o
+	 * que respondia.</p>
+	 */
+	@Test
+	void delete_de_objeto_com_subrecurso_nao_apaga_a_chave() throws Exception {
+		gravar("dsub/a.txt", "abc");
+
+		for (String sub : new String[] { "versionId=1", "tagging", "acl", "retention", "legal-hold",
+				"object-lock" }) {
+			MockHttpServletRequestBuilder d = MockMvcRequestBuilders.delete("/s3/" + bucket + "/dsub/a.txt?" + sub);
+			assinar(d, SECRET, shaVazio());
+			var resposta = mockMvc.perform(d).andReturn().getResponse();
+			assertThat(resposta.getStatus()).as("DELETE ?" + sub).isEqualTo(501);
+			assertThat(resposta.getContentAsString()).contains("<Code>NotImplemented</Code>");
+
+			MockHttpServletRequestBuilder g = get("/s3/" + bucket + "/dsub/a.txt");
+			assinar(g, SECRET, shaVazio());
+			var lido = mockMvc.perform(g).andReturn();
+			var objeto = lido.getRequest().isAsyncStarted()
+				? mockMvc.perform(asyncDispatch(lido)).andReturn().getResponse() : lido.getResponse();
+			assertThat(objeto.getStatus()).as("objeto apagado por DELETE ?" + sub).isEqualTo(200);
+			assertThat(objeto.getContentAsString()).isEqualTo("abc");
+		}
+
+		// O DELETE normal continua apagando: a recusa é do subrecurso, não da rota.
+		MockHttpServletRequestBuilder normal = MockMvcRequestBuilders.delete("/s3/" + bucket + "/dsub/a.txt");
+		assinar(normal, SECRET, shaVazio());
+		assertThat(mockMvc.perform(normal).andReturn().getResponse().getStatus()).isEqualTo(204);
+		MockHttpServletRequestBuilder depois = get("/s3/" + bucket + "/dsub/a.txt");
+		assinar(depois, SECRET, shaVazio());
+		var lidoDepois = mockMvc.perform(depois).andReturn();
+		var objetoDepois = lidoDepois.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lidoDepois)).andReturn().getResponse() : lidoDepois.getResponse();
+		assertThat(objetoDepois.getStatus()).isEqualTo(404);
+	}
+
+	/**
+	 * `max-keys` inválido é `400`, e `max-keys=0` é página vazia — mesmo com `delimiter`.
+	 *
+	 * <p><b>Antes:</b> {@code parsed <= 0} caía no padrão: {@code max-keys=0} e {@code max-keys=-1}
+	 * listavam 1000 objetos, e {@code max-keys=abc} também — o pedido errado virava sucesso. Com
+	 * {@code delimiter} era pior: a conta de "há mais" usava o tamanho pedido e com zero ela nunca
+	 * fechava, então {@code ?max-keys=0&delimiter=/} devolvia o bucket inteiro, {@code IsTruncated=false}
+	 * e todos os {@code CommonPrefixes}. O paginador que sonda com zero para conhecer o volume recebia
+	 * o conteúdo e concluía que o bucket tinha exatamente aquilo.</p>
+	 *
+	 * <p><b>Agora:</b> {@code 0} devolve {@code KeyCount 0} sem {@code <Key>} nem
+	 * {@code <CommonPrefixes>}, com {@code IsTruncated=true} quando há conteúdo; {@code -1},
+	 * {@code 1.5} e {@code abc} são {@code 400 InvalidArgument}; acima de 1000 é cortado em 1000.</p>
+	 */
+	@Test
+	void max_keys_zero_e_pagina_vazia_e_invalido_e_400() throws Exception {
+		gravar("mk/a/1.txt", "1");
+		gravar("mk/b/2.txt", "2");
+		gravar("mk/raiz.txt", "r");
+		// Dois grupos bastam para o zero com `delimiter` sair errado no caminho antigo (§4.42).
+		for (String g : new String[] { "c", "d" }) {
+			gravar("mk/" + g + "/" + g + ".txt", g);
+		}
+
+		for (String q : new String[] { "delimiter=/&", "" }) {
+			MockHttpServletRequestBuilder zero = get("/s3/" + bucket + "?list-type=2&prefix=mk/&" + q + "max-keys=0");
+			assinar(zero, SECRET, shaVazio());
+			String corpo = mockMvc.perform(zero).andReturn().getResponse().getContentAsString();
+			// `KeyCount 0` sozinho não discrimina: o laço também para em zero. O que separa a página
+			// vazia do caminho antigo é o `IsTruncated`: o caminho antigo terminava com `false`, e o
+			// cliente achava que o prefixo tinha acabado.
+			assertThat(corpo).as("max-keys=0 com " + q).contains("<KeyCount>0</KeyCount>")
+				.contains("<IsTruncated>true</IsTruncated>")
+				.doesNotContain("<Key>")
+				.doesNotContain("<CommonPrefixes>");
+		}
+
+		for (String invalido : new String[] { "-1", "1.5", "abc" }) {
+			MockHttpServletRequestBuilder r = get("/s3/" + bucket + "?list-type=2&prefix=mk/&max-keys=" + invalido);
+			assinar(r, SECRET, shaVazio());
+			var resposta = mockMvc.perform(r).andReturn().getResponse();
+			assertThat(resposta.getStatus()).as("max-keys=" + invalido).isEqualTo(400);
+			assertThat(resposta.getContentAsString()).contains("<Code>InvalidArgument</Code>")
+				.doesNotContain("<Key>");
+		}
+
+		// Acima do teto é cortado em 1000, não recusado.
+		MockHttpServletRequestBuilder grande = get("/s3/" + bucket + "?list-type=2&prefix=mk/&max-keys=5000");
+		assinar(grande, SECRET, shaVazio());
+		String teto = mockMvc.perform(grande).andReturn().getResponse().getContentAsString();
+		assertThat(teto).contains("<MaxKeys>1000</MaxKeys>").contains("<Key>mk/raiz.txt</Key>");
+	}
+
+	/**
+	 * {@code x-amz-checksum-*} é conferido: digest que não bate é {@code 400 BadDigest}, e o algoritmo
+	 * fora do SHA-256 é recusado, não ignorado.
+	 *
+	 * <p><b>Antes:</b> os cabeçalhos de integridade do SDK v2 eram ignorados. {@code PUT} com o
+	 * checksum de <b>outro</b> corpo respondia {@code 200} e gravava; {@code x-amz-checksum-sha256}
+	 * com 4 caracteres, com maiúsculas, com o digest de outro algoritmo e um
+	 * {@code x-amz-checksum-crc32} também passavam. O cliente que usa o checksum para pegar corrupção
+	 * no caminho recebia "gravado" para um corpo que ele não mandou — o mesmo defeito que o
+	 * {@code Content-MD5} tinha (§4.44).</p>
+	 *
+	 * <p><b>Agora:</b> os bytes são conferidos com o algoritmo declarado quando ele é SHA-256 (a
+	 * família que a sonda provou); digest que não bate é {@code 400 BadDigest} antes de abrir upload —
+	 * nada é criado nem substituído. Um {@code x-amz-checksum-<algoritmo>} que o gateway não confere
+	 * (CRC32, SHA-1…) é {@code 400 NotImplemented} em vez de sucesso silencioso: o cliente prefere
+	 * saber que a conferência não existiu. Maiúsculas são equivalentes ao hexadecimal em minúsculas,
+	 * como no S3.</p>
+	 */
+	@Test
+	void checksum_do_sdk_declara_algoritmo_e_e_conferido() throws Exception {
+		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		String sha = java.util.HexFormat.of().formatHex(
+			java.security.MessageDigest.getInstance("SHA-256").digest(corpo));
+		String outro = java.util.HexFormat.of().formatHex(
+			java.security.MessageDigest.getInstance("SHA-256").digest("outro".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+
+		// Não bate: recusa, sem objeto.
+		MockHttpServletRequestBuilder ruim = put("/s3/" + bucket + "/cks/ruim.txt").content(corpo)
+			.header("x-amz-checksum-sha256", outro);
+		assinar(ruim, SECRET, shaDe("abc"));
+		var resposta = mockMvc.perform(ruim).andReturn().getResponse();
+		assertThat(resposta.getStatus()).as(resposta.getContentAsString()).isEqualTo(400);
+		assertThat(resposta.getContentAsString()).contains("<Code>BadDigest</Code>");
+		MockHttpServletRequestBuilder gRuim = get("/s3/" + bucket + "/cks/ruim.txt");
+		assinar(gRuim, SECRET, shaVazio());
+		var lidoRuim = mockMvc.perform(gRuim).andReturn();
+		var doRuim = lidoRuim.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lidoRuim)).andReturn().getResponse() : lidoRuim.getResponse();
+		assertThat(doRuim.getStatus()).as("objeto gravado apesar do checksum errado").isNotEqualTo(200);
+
+		// Valor malformado e algoritmo não conferido: recusa explícita, não sucesso.
+		for (String[] invalido : new String[][] { { "sha256", "abcd" }, { "crc32", "DUoRhQ==" },
+				{ "sha1", sha } }) {
+			MockHttpServletRequestBuilder r = put("/s3/" + bucket + "/cks/inv-" + invalido[0] + ".txt").content(corpo)
+				.header("x-amz-checksum-" + invalido[0], invalido[1]);
+			assinar(r, SECRET, shaDe("abc"));
+			var recusa = mockMvc.perform(r).andReturn().getResponse();
+			assertThat(recusa.getStatus()).as("checksum " + invalido[0]).isBetween(400, 499);
+			assertThat(recusa.getContentAsString()).contains("<Code>");
+		}
+
+		// Bate: grava, inclusive em maiúsculas.
+		MockHttpServletRequestBuilder bom = put("/s3/" + bucket + "/cks/bom.txt").content(corpo)
+			.header("x-amz-checksum-sha256", sha.toUpperCase(java.util.Locale.ROOT));
+		assinar(bom, SECRET, shaDe("abc"));
+		assertThat(mockMvc.perform(bom).andReturn().getResponse().getStatus()).isEqualTo(200);
+		MockHttpServletRequestBuilder gBom = get("/s3/" + bucket + "/cks/bom.txt");
+		assinar(gBom, SECRET, shaVazio());
+		var lidoBom = mockMvc.perform(gBom).andReturn();
+		var doBom = lidoBom.getRequest().isAsyncStarted()
+			? mockMvc.perform(asyncDispatch(lidoBom)).andReturn().getResponse() : lidoBom.getResponse();
+		assertThat(doBom.getContentAsString()).isEqualTo("abc");
+
+		// Mesmo corpo com checksum errado não substitui o que já está lá.
+		MockHttpServletRequestBuilder troca = put("/s3/" + bucket + "/cks/bom.txt")
+			.content("xyz".getBytes(java.nio.charset.StandardCharsets.UTF_8))
+			.header("x-amz-checksum-sha256", sha);
+		assinar(troca, SECRET, shaDe("xyz"));
+		assertThat(mockMvc.perform(troca).andReturn().getResponse().getStatus()).isEqualTo(400);
 	}
 
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
