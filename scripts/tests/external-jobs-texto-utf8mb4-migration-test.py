@@ -199,7 +199,8 @@ class ExternalJobsTextoUtf8mb4MigrationTests(unittest.TestCase):
             self.sql("select column_default from information_schema.columns"
                      " where table_schema = 'vagas' and table_name = 'external_jobs'"
                      " and column_name = 'external_status';"),
-            "FOUND",
+            # O information_schema mostra o default de texto entre aspas.
+            "'FOUND'",
         )
 
     def test_nenhuma_coluna_de_texto_ficou_no_charset_legado(self):
