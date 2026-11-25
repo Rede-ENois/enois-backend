@@ -99,6 +99,22 @@ public class CacheProperties {
 	 */
 	private final Category trendingGames = new Category(Duration.ofMinutes(2), 4);
 
+	/**
+	 * Catalogo de figurinhas da comunidade e o indice do texto. O teto de publicacao e o de
+	 * desativacao invalidam na hora (no pod que atende); o TTL cobre os outros pods.
+	 */
+	private final Category figurinhasComunidade = new Category(DEFAULT_DYNAMIC_TTL, 500);
+
+	private final Category figurinhasComunidadeIndice = new Category(DEFAULT_DYNAMIC_TTL, 2_000);
+
+	public Category getFigurinhasComunidade() {
+		return figurinhasComunidade;
+	}
+
+	public Category getFigurinhasComunidadeIndice() {
+		return figurinhasComunidadeIndice;
+	}
+
 	public Category getPublicProfiles() {
 		return publicProfiles;
 	}

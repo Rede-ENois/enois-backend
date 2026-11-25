@@ -8,6 +8,7 @@ import com.socialcoisa.rede.desabafos.application.port.in.DesabafosModerationPor
 import com.socialcoisa.rede.desafios.application.port.in.DesafiosModerationPort;
 import com.socialcoisa.rede.feed.application.port.in.ModerationRemoveCommentUseCase;
 import com.socialcoisa.rede.feed.application.port.in.ModerationRemovePostUseCase;
+import com.socialcoisa.rede.figurinhas.application.FigurinhasComunidadeService;
 import com.socialcoisa.rede.murais.application.port.in.MuraisModerationPort;
 import com.socialcoisa.rede.moderation.domain.Report;
 
@@ -25,10 +26,12 @@ public class ReportedContentRemover {
 	private final DesabafosModerationPort desabafos;
 	private final ConfessionarioModerationPort confessionario;
 	private final DesafiosModerationPort desafios;
+	private final FigurinhasComunidadeService figurinhas;
 
 	public ReportedContentRemover(ModerationRemovePostUseCase posts, ModerationRemoveCommentUseCase comments,
 			ColagemModerationPort colagem, MuraisModerationPort murais, DesabafosModerationPort desabafos,
-			ConfessionarioModerationPort confessionario, DesafiosModerationPort desafios) {
+			ConfessionarioModerationPort confessionario, DesafiosModerationPort desafios,
+			FigurinhasComunidadeService figurinhas) {
 		this.posts = posts;
 		this.comments = comments;
 		this.colagem = colagem;
@@ -36,6 +39,7 @@ public class ReportedContentRemover {
 		this.desabafos = desabafos;
 		this.confessionario = confessionario;
 		this.desafios = desafios;
+		this.figurinhas = figurinhas;
 	}
 
 	public void remove(Report report, String actorId, String reasonPrefix) {
@@ -52,6 +56,7 @@ public class ReportedContentRemover {
 			case CONFESSIONARIO_COMMENT -> confessionario.removeCommentAsModerator(actorId, report.targetId(), reason);
 			case DESAFIO_POST -> desafios.removeDesafioAsModerator(actorId, report.targetId(), reason);
 			case DESAFIO_PARTICIPACAO -> desafios.removeParticipacaoAsModerator(actorId, report.targetId(), reason);
+			case FIGURINHA_COMUNIDADE -> figurinhas.desativar(actorId, report.targetId(), reason);
 			default -> {
 				// Other targets have no platform-wide removal: the team acts in the target's module.
 			}

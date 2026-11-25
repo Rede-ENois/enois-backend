@@ -13,6 +13,7 @@ import com.socialcoisa.rede.desabafos.application.port.out.DesabafosRepository;
 import com.socialcoisa.rede.feed.application.port.out.CommentRepository;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.PostId;
+import com.socialcoisa.rede.figurinhas.application.port.out.FigurinhasComunidadeRepository;
 import com.socialcoisa.rede.groups.application.port.out.GroupContentRepository;
 import com.socialcoisa.rede.groups.domain.GroupComment;
 import com.socialcoisa.rede.groups.domain.GroupPost;
@@ -46,10 +47,12 @@ class ReportedContentAdapter implements ReportedContentReader {
 	private final MuraisRepository murais;
 	private final DesabafosRepository desabafos;
 	private final ConfessionarioRepository confessionario;
+	private final FigurinhasComunidadeRepository figurinhas;
 
 	ReportedContentAdapter(PostRepository posts, CommentRepository comments, UserProfileRepository profiles,
 			GroupContentRepository groupContent, CallReportContextRepository callReports, ColagemRepository colagem,
-			MuraisRepository murais, DesabafosRepository desabafos, ConfessionarioRepository confessionario) {
+			MuraisRepository murais, DesabafosRepository desabafos, ConfessionarioRepository confessionario,
+			FigurinhasComunidadeRepository figurinhas) {
 		this.posts = posts;
 		this.comments = comments;
 		this.profiles = profiles;
@@ -59,6 +62,7 @@ class ReportedContentAdapter implements ReportedContentReader {
 		this.murais = murais;
 		this.desabafos = desabafos;
 		this.confessionario = confessionario;
+		this.figurinhas = figurinhas;
 	}
 
 	@Override
@@ -73,6 +77,9 @@ class ReportedContentAdapter implements ReportedContentReader {
 			case "COLLAGEM_COMMENT" -> colagem.findCommentById(targetId)
 				.map(comment -> colagemCommentText(comment));
 			case "MURAL" -> murais.findMuralById(targetId).map(mural -> muralText(mural));
+			// Figurinha da comunidade: o que a triagem julga é o nome e o código; a imagem vai à
+			// triagem de mídia pelo próprio asset do cadastro (ReportedMediaAdapter).
+			case "FIGURINHA_COMUNIDADE" -> figurinhas.findById(targetId).map(figurinha -> figurinhaText(figurinha));
 			// Desabafos e Confessionário: espaços anônimos de texto — o que a triagem julga é o
 			// texto (sem autor, que o contrato público não carrega mesmo para a moderação ler).
 			case "DESABAFO_POST" -> desabafos.findPostById(targetId)
@@ -156,6 +163,10 @@ class ReportedContentAdapter implements ReportedContentReader {
 	private String shorten(String content) {
 		String trimmed = content.trim();
 		return trimmed.length() <= MAX_CHARS ? trimmed : trimmed.substring(0, MAX_CHARS);
+	}
+
+	private String figurinhaText(com.socialcoisa.rede.figurinhas.domain.FigurinhaComunidade figurinha) {
+		return "Figurinha da comunidade chamada \"" + figurinha.nome() + "\" (código :" + figurinha.codigo() + ":).";
 	}
 
 	// Mural: o quadro denunciável é título e descrição — o que a pessoa escreveu nele.

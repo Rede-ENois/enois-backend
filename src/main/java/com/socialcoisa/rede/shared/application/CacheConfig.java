@@ -69,6 +69,11 @@ public class CacheConfig {
 	/** Play tallies of the last 24 hours behind "jogados hoje" (`GET /games/hoje`). */
 	public static final String TRENDING_GAMES = "trendingGames";
 
+	/** Catalogo das figurinhas da comunidade (paginas e busca) e o indice `codigo -> imagem`. */
+	public static final String FIGURINHAS_COMUNIDADE = "figurinhasComunidade";
+
+	public static final String FIGURINHAS_COMUNIDADE_INDICE = "figurinhasComunidadeIndice";
+
 	@Bean
 	CacheManager cacheManager(CacheProperties properties) {
 		SimpleCacheManager manager = new SimpleCacheManager();
@@ -82,7 +87,9 @@ public class CacheConfig {
 			cache(GITHUB_REPOSITORIES, properties.getGithubRepositories()),
 			cache(GITHUB_README, properties.getGithubReadme()),
 			cache(LINK_PREVIEWS, properties.getLinkPreviews()),
-			cache(TRENDING_GAMES, properties.getTrendingGames())));
+			cache(TRENDING_GAMES, properties.getTrendingGames()),
+			cache(FIGURINHAS_COMUNIDADE, properties.getFigurinhasComunidade()),
+			cache(FIGURINHAS_COMUNIDADE_INDICE, properties.getFigurinhasComunidadeIndice())));
 		return manager;
 	}
 
