@@ -1817,6 +1817,57 @@ hb4=$(/bin/grep 'network/nodes/heartbeat' "$TMP/curl-calls" | head -n 1)
 assert_contains 'intervalo sem operacao mede IOPS zero' "$hb4" '"diskIops":0.0'
 assert_not_contains 'sem operacao no intervalo, latencia fica ausente' "$hb4" '"diskLatencyMs":'
 
+# ------------------------------------------------ cenário: temperatura do nó (§8.2)
+# O runtime lê `THERMAL_HWMON_DIR/hwmon*/temp*_input` e `THERMAL_ZONE_DIR/thermal_zone*/temp` — os
+# mesmos caminhos do `/sys` do kernel, apontáveis no harness — e manda a MAIOR leitura válida:
+# máquina com CPU, GPU e NVMe tem três temperaturas, e a que decide risco de limiar é a maior.
+# O que se prova, sobre o corpo real do heartbeat:
+#   1. sem sensor (máquina virtual, container sem o `/sys` do host) o campo NÃO vai — 0 °C seria
+#      uma medida que ninguém fez;
+#   2. com várias fontes, vai a maior, em graus, e a leitura fora da faixa física é descartada
+#      (sensor quebrado devolve lixo, e lixo viraria alarme);
+#   3. zona térmica ACPI conta quando o hwmon não tem nada.
+TEMP_HOME="$TMP/node-home-temp"
+mkdir -p "$TEMP_HOME" "$TMP/hwmon-vazio" "$TMP/thermal-vazio"
+cp "$NH/node.json" "$NH/api-key" "$TEMP_HOME/"
+: > "$TMP/curl-calls"
+
+run_temp_cycle() {
+  # run_temp_cycle <home> <dir hwmon> <dir thermal>: roda UM ciclo só com os sensores indicados.
+  CONTROL_PLANE_URL=https://cp.test NODE_HOME="$1" PATH="$TMP" NODE_POLL_SECONDS=1 \
+    THERMAL_HWMON_DIR="$2" THERMAL_ZONE_DIR="$3" \
+    /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true
+}
+
+run_temp_cycle "$TEMP_HOME" "$TMP/hwmon-vazio" "$TMP/thermal-vazio"
+hb_sem=$(/bin/grep 'network/nodes/heartbeat' "$TMP/curl-calls" | head -n 1)
+assert_not_contains 'sem sensor de temperatura o campo nao vai' "$hb_sem" '"temperatureC":'
+
+# Três fontes como numa máquina real: NVMe em 37,85 °C, GPU em 38,00 e CPU em 39,62 — e um quarto
+# sensor em 125 °C, acima da faixa de OPERAÇÃO (é sensor de ponto de critério, não temperatura
+# corrente). A leitura da CPU é a que vale: 39,6 °C, COM a casa decimal — o kernel publica milésimos
+# e a divisão inteira do shell truncava 39625 para 39 antes de o Control Plane ver.
+mkdir -p "$TMP/hwmon"/hwmon{0,1,2,3} "$TMP/thermal-vazio2"
+printf '38850\n' > "$TMP/hwmon/hwmon0/temp1_input"
+printf '38000\n' > "$TMP/hwmon/hwmon1/temp1_input"
+printf '39625\n' > "$TMP/hwmon/hwmon2/temp1_input"
+printf '125000\n' > "$TMP/hwmon/hwmon3/temp1_input"
+: > "$TMP/curl-calls"
+run_temp_cycle "$TEMP_HOME" "$TMP/hwmon" "$TMP/thermal-vazio2"
+hb_temp=$(/bin/grep 'network/nodes/heartbeat' "$TMP/curl-calls" | head -n 1)
+assert_contains 'varias fontes: vai a maior temperatura, com a casa decimal' "$hb_temp" '"temperatureC":39.6'
+assert_not_contains 'leitura acima da faixa de operacao e descartada' "$hb_temp" '"temperatureC":125'
+assert_not_contains 'e nao da 38,0 da GPU' "$hb_temp" '"temperatureC":38.0'
+assert_not_contains 'nem 37,9 do NVMe' "$hb_temp" '"temperatureC":37.8'
+
+# Zona térmica ACPI sozinha: é fonte válida quando o hwmon não tem nada.
+mkdir -p "$TMP/thermal"/thermal_zone0 "$TMP/hwmon-vazio2"
+printf '52000\n' > "$TMP/thermal/thermal_zone0/temp"
+: > "$TMP/curl-calls"
+run_temp_cycle "$TEMP_HOME" "$TMP/hwmon-vazio2" "$TMP/thermal"
+hb_zone=$(/bin/grep 'network/nodes/heartbeat' "$TMP/curl-calls" | head -n 1)
+assert_contains 'zona termica ACPI conta como fonte' "$hb_zone" '"temperatureC":52'
+
 # ------------------------------------- atualizacao do runtime: e do HOST, nao do container
 # O slot de reserva nao se atualizava sozinho: saia release, o master recebia deploy, e a reserva
 # ficava na versao antiga -- justamente ela que assume quando o master cai. A correcao vive no

@@ -2,6 +2,7 @@ package com.socialcoisa.rede.network.application;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
@@ -292,7 +293,7 @@ public class NetworkNodeService {
 		Double latencia = naoNegativo(beat.diskLatencyMs());
 		nodes.touch(authenticated.id(), beat.runtimeVersion(), beat.cpuPercent(), uso, disponivel,
 			beat.runningTasks(), beat.diskFreeMb(), beat.diskTotalMb(), iops, latencia,
-			beat.contentUsedMb(), beat.bytesInMb(), beat.bytesOutMb(), now);
+			beat.temperatureC(), beat.contentUsedMb(), beat.bytesInMb(), beat.bytesOutMb(), now);
 		NetworkNode updated = require(authenticated.id());
 		quarantineOnTermConflict(updated, beat.observedTerm(), now);
 		return require(authenticated.id());
@@ -652,8 +653,8 @@ public class NetworkNodeService {
 
 	public record HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 			Integer memoryAvailableMb, Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Double diskIops,
-			Double diskLatencyMs, Long contentUsedMb, Long bytesInMb, Long bytesOutMb, Integer observedTerm,
-			String observedIp) {
+			Double diskLatencyMs, BigDecimal temperatureC, Long contentUsedMb, Long bytesInMb, Long bytesOutMb,
+			Integer observedTerm, String observedIp) {
 
 		/**
 		 * Heartbeat de runtime anterior ao tráfego medido (V345): os dois contadores ficam nulos.
@@ -665,7 +666,7 @@ public class NetworkNodeService {
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Integer observedTerm) {
 			this(runtimeVersion, cpuPercent, memoryMb, null, runningTasks, diskFreeMb, diskTotalMb, null, null,
-				contentUsedMb, null, null, observedTerm, null);
+				null, contentUsedMb, null, null, observedTerm, null);
 		}
 
 		/**
@@ -678,7 +679,7 @@ public class NetworkNodeService {
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Integer observedTerm) {
 			this(runtimeVersion, cpuPercent, memoryMb, null, runningTasks, diskFreeMb, diskTotalMb, null, null,
-				null, null, null, observedTerm, null);
+				null, null, null, null, observedTerm, null);
 		}
 
 		/**
@@ -692,7 +693,7 @@ public class NetworkNodeService {
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Integer observedTerm) {
 			this(runtimeVersion, cpuPercent, memoryMb, null, runningTasks, diskFreeMb, null, null, null,
-				null, null, null, observedTerm, null);
+				null, null, null, null, observedTerm, null);
 		}
 	}
 }

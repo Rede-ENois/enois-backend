@@ -60,6 +60,13 @@ DISKSTATE_FILE="$NODE_HOME/disk-prev"
 # O arquivo de contadores do kernel lido pela medição de I/O do ciclo. Variável e não caminho fixo
 # para o harness poder servir contadores conhecidos; em produção o padrão é o do kernel.
 DISKSTATS_FILE="${DISKSTATS_FILE:-/proc/diskstats}"
+# Sensores de temperatura lidos pela mesma razão: caminho fixo em produção, sobreponível no harness
+# (e no container, quando o `/sys` do host é montado em outro ponto).
+THERMAL_HWMON_DIR="${THERMAL_HWMON_DIR:-/sys/class/hwmon}"
+THERMAL_ZONE_DIR="${THERMAL_ZONE_DIR:-/sys/class/thermal}"
+# Acima disto a leitura é descartada: nenhum componente em operação normal passa de 110 °C, e o que
+# passa é sensor de ponto de critério ou sensor quebrado.
+THERMAL_MAX_C="${THERMAL_MAX_C:-110}"
 
 event() {
   # event <nivel> <mensagem>: guarda para o próximo heartbeat.
@@ -1351,6 +1358,7 @@ cycle() {
   # 1. heartbeat: estado, modo e se pode pedir tarefa.
   local hb mode accept_tasks observed_cpu observed_mem observed_avail mem_swap mem_pressure observed_disk observed_term term_part disk_part mem_part
   local disk_now disk_prev disk_prev_at disk_now_ns d_reads d_writes d_ms p_reads p_writes p_ms ops disk_io_iops disk_io_latency disk_io_part=
+  local temp_part temp_max_c temp_max_raw temp_file temp_raw temp_c
   observed_cpu=$(awk 'NR==1 {printf "%.1f", $1}' /proc/loadavg 2>/dev/null || echo 0)
   # Memória em DUAS medidas, como o Control Plane lê desde a V378: `memoryMb` é o USO e
   # `memoryAvailableMb` o DISPONÍVEL. Antes o runtime media só `MemAvailable` e o mandava como
@@ -1416,6 +1424,39 @@ cycle() {
   # intervalo é zero ou algum contador retrocedeu (disco trocado, contador de 32 bits reiniciado):
   # nesses casos o campo NÃO vai. Retrocesso por campo é o que impede uma taxa falsa e enorme de
   # virar o "IOPS" do nó no painel.
+  # Temperatura (brief §8.2, "quando disponível"). Vai a MAIOR leitura dentre as fontes: é a que
+  # decide risco de limiar, e uma média esconderia o componente que está cozinhando. Fontes: tudo
+  # que pendura em `/sys/class/hwmon/hwmon*/temp<N>_input` (CPU, GPU, NVMe, placa) e as zonas
+  # térmicas ACPI. O kernel publica milésimos de grau; o heartbeat manda graus com uma casa.
+  #
+  # Ausência é normal, não defeito: máquina virtual, container sem `--device`, kernel sem sensores e
+  # sessão sem permissão de leitura simplesmente não têm o arquivo — e então o campo NÃO vai. Mandar
+  # 0 °C seria afirmar uma medida que ninguém fez. Também não passa leitura fora da faixa de
+  # OPERAÇÃO (-40 a 110 °C): sensor quebrado e sensor de ponto de critério (~115-125 °C) devolveriam
+  # 120+ e virariam alarme. Variável `THERMAL_MAX_C` para máquina cujo limiar real é outro.
+  temp_part=''
+  temp_max_c=''
+  temp_max_raw=''
+  for temp_file in "$THERMAL_HWMON_DIR"/hwmon*/temp*_input "$THERMAL_ZONE_DIR"/thermal_zone*/temp; do
+    [[ -r "$temp_file" ]] || continue
+    read -r temp_raw < "$temp_file" 2>/dev/null || continue
+    [[ "$temp_raw" =~ ^-?[0-9]+$ ]] || continue
+    # A divisão do shell é INTEIRA: `39625 / 1000` é 39, e a fração do sensor morre antes de
+    # existir — a casa decimal que o Control Plane guarda (`BigDecimal` de uma casa) nunca seria
+    # exercitada pelo runtime, e dois sensores a 39,9 e 39,1 empatariam na escolha da maior. Em
+    # `awk`, como CPU, memória e I/O: o valor real compara (milésimos, inteiros) e o maior sai
+    # com uma casa.
+    temp_c=$(awk -v t="$temp_raw" 'BEGIN { printf "%.1f", t / 1000 }')
+    if awk -v t="$temp_raw" -v min=-40 -v max="$THERMAL_MAX_C" 'BEGIN { exit !(t / 1000 >= min && t / 1000 <= max) }'; then
+      if [[ -z "$temp_max_raw" ]] || (( temp_raw > temp_max_raw )); then
+        temp_max_raw=$temp_raw
+        temp_max_c=$temp_c
+      fi
+    fi
+  done
+  if [[ -n "$temp_max_raw" ]]; then
+    temp_part="\"temperatureC\":$temp_max_c"
+  fi
   disk_io_part=''
   if [[ -r "$DISKSTATS_FILE" ]]; then
     disk_now=$(awk '
@@ -1512,7 +1553,7 @@ cycle() {
   events=$(events_json)
   [[ -n "$events" ]] && logs_part=",\"logs\":[$events]"
   hb=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
-    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"runningTasks\":0$mem_part$disk_io_part$disk_part$net_part}$term_part$logs_part}" \
+    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"runningTasks\":0$mem_part$temp_part$disk_io_part$disk_part$net_part}$term_part$logs_part}" \
     "$CONTROL_PLANE/network/nodes/heartbeat") || { printf '[executor] heartbeat falhou\n' >&2; return 1; }
   : > "$EVENTS_FILE" 2>/dev/null || true
   mode=$(json_field "$hb" mode)

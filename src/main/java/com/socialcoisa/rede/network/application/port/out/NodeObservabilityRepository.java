@@ -15,13 +15,21 @@ public interface NodeObservabilityRepository {
 	/** Um ponto do gráfico: um por minuto, por nó. */
 	record Sample(String nodeId, Instant sampledAt, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
 			Integer runningTasks, Integer queueDepth, String mode, String activity, Double diskIops,
-			Double diskLatencyMs) {
+			Double diskLatencyMs, java.math.BigDecimal temperatureC) {
 
 		/** Amostra de runtime anterior à V380: sem o I/O de disco medido. */
 		public Sample(String nodeId, Instant sampledAt, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
 				Integer runningTasks, Integer queueDepth, String mode, String activity) {
 			this(nodeId, sampledAt, cpuPercent, memoryMb, diskFreeMb, runningTasks, queueDepth, mode, activity, null,
-				null);
+				null, null);
+		}
+
+		/** Amostra de runtime anterior à V382: sem a temperatura da máquina. */
+		public Sample(String nodeId, Instant sampledAt, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
+				Integer runningTasks, Integer queueDepth, String mode, String activity, Double diskIops,
+				Double diskLatencyMs) {
+			this(nodeId, sampledAt, cpuPercent, memoryMb, diskFreeMb, runningTasks, queueDepth, mode, activity,
+				diskIops, diskLatencyMs, null);
 		}
 	}
 

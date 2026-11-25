@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.network.domain;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Set;
@@ -56,7 +57,8 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 		Double observedCpuPercent, Integer observedMemoryMb, Integer observedMemoryAvailableMb,
 		Integer observedRunningTasks, Integer observedLatencyMs, Long observedDiskFreeMb, Long observedDiskTotalMb,
 		Double observedDiskIops, Double observedDiskLatencyMs, Long observedContentUsedMb, Long observedBytesInMb,
-		Long observedBytesOutMb, int consecutiveFailures, Instant quarantinedUntil, String quarantineReason) {
+		Long observedBytesOutMb, int consecutiveFailures, Instant quarantinedUntil, String quarantineReason,
+		BigDecimal observedTemperatureC) {
 
 	/**
 	 * Mesmo nó sem o tráfego medido (runtime anterior à V345): os dois contadores ficam nulos, que
@@ -72,7 +74,7 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 		this(id, displayName, ownerUserId, status, profiles, region, country, runtimeVersion, lastSeenAt,
 			declaredCpuCores, declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
 			observedMemoryMb, null, observedRunningTasks, observedLatencyMs, observedDiskFreeMb, observedDiskTotalMb,
-			null, null, observedContentUsedMb, null, null, consecutiveFailures, quarantinedUntil, quarantineReason);
+			null, null, observedContentUsedMb, null, null, consecutiveFailures, quarantinedUntil, quarantineReason, null);
 	}
 
 	/**
@@ -111,7 +113,7 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 		this(id, displayName, ownerUserId, status, profiles, region, country, runtimeVersion, lastSeenAt,
 				declaredCpuCores, declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
 				observedMemoryMb, null, observedRunningTasks, observedLatencyMs, null, null, null, null, null, null,
-				null, consecutiveFailures, quarantinedUntil, quarantineReason);
+				null, consecutiveFailures, quarantinedUntil, quarantineReason, null);
 	}
 
 	/**
@@ -129,7 +131,7 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 		this(id, displayName, ownerUserId, status, profiles, region, country, runtimeVersion, lastSeenAt,
 				declaredCpuCores, declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
 				observedMemoryMb, null, observedRunningTasks, observedLatencyMs, observedDiskFreeMb, null, null,
-				null, null, null, null, consecutiveFailures, quarantinedUntil, quarantineReason);
+				null, null, null, null, consecutiveFailures, quarantinedUntil, quarantineReason, null);
 	}
 
 	/**

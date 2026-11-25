@@ -51,7 +51,7 @@ O brief (§8.2) pede, por nó: uso de rede e throughput de entrada e saída. Hoj
 | CPU total, memória, disco livre | **entregue** (heartbeat → painel por nó) |
 | tarefas em execução, versão do runtime, último contato | **entregue** |
 | uso de rede / throughput (entrada e saída) | **não medido pelo runtime**, coluna pronta no banco |
-| swap, pressão de memória, IOPS, latência de disco, temperatura, GC, threads, p95/p99, DLQ | **swap e pressão medidos desde o ciclo 157** (§7 abaixo); **IOPS e latência de disco medidos desde o ciclo 158** (§8 e §9); o resto não existe — ver `docs/rede-distribribribuida/11-global-coop-fase-0.md` §3 |
+| swap, pressão de memória, IOPS, latência de disco, temperatura, GC, threads, p95/p99, DLQ | **swap e pressão medidos desde o ciclo 157** (§7 abaixo); **IOPS e latência de disco medidos desde o ciclo 158** (§8 e §9); **temperatura desde o ciclo 159** (§10); o resto não existe — ver `docs/rede-distribribribuida/11-global-coop-fase-0.md` §3 |
 
 ## 5. O que o mantenedor precisa conferir no deploy (não é código)
 
@@ -80,9 +80,10 @@ O elo do §3 deste documento foi fechado nos três lados:
 Provas: `NetworkParticipantTrafficTests` (2 casos novos no painel de admin — medido e nulo);
 `network-nodes-section` do DS (2 casos: medido e ausência/metade).
 
-**O que continua faltando do §8.2 do brief** (medido, não estimado): temperatura, GC/threads do
-runtime (o runtime não é JVM — é shell), p95/p99 de requisição, DLQ por fila. (Swap e pressão de
-memória entraram no ciclo 157 — §7; IOPS e latência de disco, no ciclo 158 — §8 e §9.)
+**O que continua faltando do §8.2 do brief** (medido, não estimado): GC/threads do runtime (o
+runtime não é JVM — é shell), p95/p99 de requisição, DLQ por fila. (Swap e pressão de memória
+entraram no ciclo 157 — §7; IOPS e latência de disco, no ciclo 158 — §8 e §9; temperatura, no ciclo
+159 — §10.)
 
 ## 7. A memória em duas medidas, swap e pressão (ciclo 157)
 
@@ -215,3 +216,38 @@ operações e ms fixos) passou a prender o valor exato.
   ausente. Mutação: usar as colunas 6/10 derruba a latência; emitir latência sem operação derruba o 4º
   ciclo; remover a checagem de retrocesso derruba o 3º; incluir a partição derruba o referencial.
 - `NetworkHeartbeatDiskIoTests` **3** e a migração **26 PASS** — §8.
+
+## 10. Temperatura da máquina (ciclo 159)
+
+O §8.2 pede a temperatura "quando disponível". O runtime lê
+`/sys/class/hwmon/hwmon*/temp<N>_input` (CPU, GPU, NVMe, placa) e as zonas térmicas ACPI do kernel,
+e manda a **maior leitura válida** em graus, com uma casa:
+
+- **maior, não média** — uma máquina tem CPU, GPU e NVMe com temperaturas diferentes, e a que decide
+  risco de limiar é a maior; a média esconderia o componente que está cozinhando;
+- **faixa de operação** — leitura abaixo de −40 °C ou acima de `THERMAL_MAX_C` (padrão 110 °C) é
+  descartada: sensor quebrado e sensor de ponto de critério (~115–125 °C, a temperatura em que a
+  proteção dispara) devolveriam 120+ e virariam alarme. O teto é variável para máquina cujo limiar
+  real é outro;
+- **ausência é normal** — máquina virtual, container sem `--device`/`/sys` do host e sessão sem
+  permissão de leitura não têm o arquivo, e o campo não vai. `null` é "não disponível"; `0` seria
+  uma temperatura que ninguém leu;
+- **uma casa decimal** — 39,6 e 39,4 são temperaturas diferentes; a coluna guarda o número
+  digitalizado (39,6), não um arredondamento que junte as duas.
+
+Caminhos dos sensores são variáveis (`THERMAL_HWMON_DIR`, `THERMAL_ZONE_DIR`) para o harness servir
+leituras conhecidas e para o container cujo `/sys` do host está montado em outro ponto.
+
+### Verificação
+
+- `NetworkHeartbeatTemperatureTests` **3**: a medida chega ao banco e ao quadro; a casa decimal é da
+  medida (39,6 e 39,4 ficam distintas); sem sensor, série e `summary` ficam nulos.
+- `scripts/tests/node-executor-test.sh` **239 asserções**: sem sensor o campo não vai; com quatro
+  fontes (37,85 / 38,00 / 39,62 / 125 °C) vai `39.6` e não `38.0` (maior, não a primeira, e sem a
+  leitura acima da faixa); zona ACPI sozinha conta. Mutações: teto em 150 °C e "primeira fonte"
+  derrubam a asserção da maior; a divisão inteira do shell (o defeito corrigido) manda `39` e
+  derruba a da casa decimal.
+- `node-temperature-migration-test` **23 PASS / 0 FAIL** em MariaDB 11.4 real: `V382` aplicada
+  **duas vezes**, nó e amostra antigos preservados com `NULL`, update/upsert gravando `39.6` (não
+  `40`), zero distinto de nulo, tipo `double` aceitando `NULL`. Mutação (V382 sem as colunas) derruba
+  **13**.

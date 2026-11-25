@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.network.adapters.in.web;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 
@@ -111,13 +112,30 @@ class NetworkNodeController {
 	 * antigo, ou disco não identificável — e não zero: zero IOPS é uma medida ("medi e não houve
 	 * operação"), e a latência fica nula quando o intervalo não teve operação concluída.</p>
 	 *
+	 * <p>{@code temperatureC} é a MAIOR temperatura entre os sensores da máquina, em graus (brief
+	 * §8.2, "quando disponível"). Nulo é "a máquina não tem sensor legível" — máquina virtual,
+	 * container sem o {@code /sys} do host — e não uma temperatura medida.</p>
+	 *
 	 * <p>{@code bytesInMb}/{@code bytesOutMb} são o tráfego ACUMULADO nas interfaces
 	 * dele (brief §18, "consultar tráfego"); o Control Plane só recebe a contagem e não soma nada
 	 * por conta própria — quem transfere é a máquina do participante, e é ela que mede.
 	 */
+	/**
+	 * A temperatura em graus com uma casa — a precisão que um sensor tem. Vem como {@code Double} no
+	 * JSON e vira {@code BigDecimal} de uma casa para o banco guardar o número digitalizado (39,6 e
+	 * 39,4 são temperaturas diferentes, e arredondamento binário as confundiria). Leitura fora da
+	 * faixa operacional não é temperatura: o sensor devolveu lixo, e lixo não vira alarme.
+	 */
+	private static BigDecimal graus(Double celsius) {
+		if (celsius == null || celsius.isNaN() || celsius < -40 || celsius > 110) {
+			return null;
+		}
+		return BigDecimal.valueOf(celsius).setScale(1, java.math.RoundingMode.HALF_UP);
+	}
+
 	record Observed(Double cpuPercent, Integer memoryMb, Integer memoryAvailableMb, Integer runningTasks,
-			Long diskFreeMb, Long diskTotalMb, Double diskIops, Double diskLatencyMs, Long usedMb, Long bytesInMb,
-			Long bytesOutMb) {
+			Long diskFreeMb, Long diskTotalMb, Double diskIops, Double diskLatencyMs, Double temperatureC, Long usedMb,
+			Long bytesInMb, Long bytesOutMb) {
 	}
 
 	/**
@@ -229,6 +247,7 @@ class NetworkNodeController {
 			observed == null ? null : observed.runningTasks(),
 			observed == null ? null : observed.diskFreeMb(), observed == null ? null : observed.diskTotalMb(),
 			observed == null ? null : observed.diskIops(), observed == null ? null : observed.diskLatencyMs(),
+			observed == null ? null : graus(observed.temperatureC()),
 			observed == null ? null : observed.usedMb(), observed == null ? null : observed.bytesInMb(),
 			observed == null ? null : observed.bytesOutMb(), request == null ? null : request.observedTerm(),
 			peerIp(forwardedFor, peerAddressFromRequest())));
@@ -250,9 +269,10 @@ class NetworkNodeController {
 			// em uso na série histórica — o mesmo defeito que a derivação corrige em `network_nodes`.
 			// Disco vem do nó JÁ gravado (`updated`), não do corpo: a borda do serviço anula medida
 			// impossível (IOPS ou latência negativos), e passar o cru poria o negativo na série mesmo
-			// com a coluna do nó nula.
+			// com a coluna do nó nula. A temperatura usa a mesma régua da coluna (`graus`).
 			observability.record(updated, observed.cpuPercent(), updated.observedMemoryMb(), observed.diskFreeMb(),
-				observed.runningTasks(), updated.observedDiskIops(), updated.observedDiskLatencyMs());
+				observed.runningTasks(), updated.observedDiskIops(), updated.observedDiskLatencyMs(),
+				graus(observed.temperatureC()));
 		}
 		if (request != null && request.logs() != null) {
 			for (LogRequest line : request.logs()) {

@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.network.application.port.out;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -63,7 +64,8 @@ public interface NetworkNodeRepository {
 	/** Heartbeat: capacidade observada, versão do runtime e último contato. */
 	void touch(String id, String runtimeVersion, Double cpuPercent, Integer memoryMb,
 			Integer memoryAvailableMb, Integer runningTasks, Long diskFreeMb, Long diskTotalMb,
-			Double diskIops, Double diskLatencyMs, Long contentUsedMb, Long bytesInMb, Long bytesOutMb, Instant now);
+			Double diskIops, Double diskLatencyMs, BigDecimal temperatureC, Long contentUsedMb, Long bytesInMb,
+			Long bytesOutMb, Instant now);
 
 	long countByStatus(NodeStatus status);
 
