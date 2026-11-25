@@ -147,7 +147,10 @@ public class NetworkModeService {
 		// a transição existiria só enquanto alguém perguntasse.
 		NetworkMode.HealthSignal signal = healthSignal();
 		NetworkMode effective = next.degradedBy(signal);
-		if (next == current && effective != current) {
+		// A condição é "o efetivo difere do que ACABOU de ser gravado", não "next == current": quando
+		// a carga leva a HIGH_LOAD no mesmo passo em que há evidência, o primeiro bloco grava
+		// HIGH_LOAD e esta guarda antiga não gravava o DEGRADED — ele existia só no retorno.
+		if (effective != next && effective != current) {
 			String reason = "evidencia=" + signal.name();
 			state.setMode(effective, reason, now);
 			audit.record("system", "NETWORK_MODE_" + effective.name(), "global",

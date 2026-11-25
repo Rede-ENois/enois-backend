@@ -132,6 +132,39 @@ class NetworkModesTests {
 	}
 
 	/**
+	 * Carga e evidência no MESMO passo: a rede entra em {@code HIGH_LOAD} pela fila e a divergência
+	 * medida tem de ser gravada, não só devolvida. Era o cruzamento que escapava — a guarda antiga
+	 * gravava o {@code DEGRADED} só quando {@code next == current}, então a transição por carga
+	 * deixava o modo em {@code HIGH_LOAD} e a próxima leitura não via a degradação.
+	 */
+	@Test
+	void cargaEEvidenciaNoMesmoPassoGravamODegradado() throws Exception {
+		jdbc.update("insert into network_content_snapshots (node_id, content_type, content_id, source_version, "
+			+ "content_hash, synced_at, checked_at, divergence_reason, divergence_at) "
+			+ "values (?, 'USER_PROFILE', 'div-carga', 2, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, "
+			+ "'CONTENT_STALE', CURRENT_TIMESTAMP)", snapshotNodeId(), "b".repeat(64));
+		// Nó com uma vaga e fila acima do limiar de entrada: parte de NORMAL e cruza para HIGH_LOAD
+		// neste mesmo evaluate, com a divergência já contada.
+		var admin = adminSession();
+		Node node = activeNode(admin.token(), "no-carga", List.of("NODE_LOCAL"), 1);
+		mockMvc
+			.perform(post("/network/nodes/heartbeat").header("X-Node-Id", node.id())
+				.header("X-Node-Key", node.key()).contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("runtimeVersion", "0.1.0", "observed",
+					Map.of("cpuPercent", 5.0, "memoryMb", 1024, "runningTasks", 0)))))
+			.andExpect(status().isOk());
+		enqueue("carga", 5);
+
+		// O retorno e o que ficou gravado têm de concordar: DEGRADED nos dois.
+		assertThat(modes.evaluate()).isEqualTo(NetworkMode.DEGRADED);
+		assertThat(modes.current()).isEqualTo(NetworkMode.DEGRADED);
+		assertThat(jdbc.queryForObject("select reason from network_state", String.class))
+			.isEqualTo("evidencia=DATA_DIVERGENCE");
+		jdbc.update("delete from network_content_snapshots where content_id = 'div-carga'");
+		jdbc.update("delete from network_tasks where id like 'carga-%'");
+	}
+
+	/**
 	 * Sem divergência e sem captura exigida, a automação não inventa degradação: o modo medido
 	 * (aqui {@code NORMAL}) continua, e a rede não fica degradada pela suíte inteira.
 	 */
