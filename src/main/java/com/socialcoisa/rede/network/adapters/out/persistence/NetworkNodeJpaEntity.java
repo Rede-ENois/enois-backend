@@ -78,7 +78,7 @@ class NetworkNodeJpaEntity {
 	 * Maior temperatura entre os sensores da máquina, em graus (brief §8.2); {@code null} = a máquina
 	 * não tem sensor legível, que é "não disponível" e não uma temperatura medida.
 	 */
-	@Column(name = "observed_temperature_c", columnDefinition = "double")
+	@Column(name = "observed_temperature_c")
 	private BigDecimal observedTemperatureC;
 
 	@Column(name = "observed_content_used_mb")
