@@ -272,6 +272,57 @@ public class StorageMultipartService {
 	public record Pagina(List<Part> partes, boolean truncada) {
 	}
 
+	/** Uma página do {@code ListMultipartUploads}: os uploads da vez e se há mais (§4.57). */
+	public record PaginaDeUploads(List<Upload> uploads, boolean truncada) {
+	}
+
+	/**
+	 * Uma página do {@code ListMultipartUploads}, na ordem {@code (key, upload_id)} do S3.
+	 *
+	 * <p><b>Antes:</b> a rota chamava {@link #abertos} e devolvia <b>todos</b> os uploads com
+	 * {@code <IsTruncated>false}, ignorando {@code max-uploads} e os marcadores. Quem pedisse 1 e
+	 * recebesse 3 não teria como saber, e quem paginasse pelo marcador (que não existia) concluiria
+	 * que viu tudo — o {@code aws s3api list-multipart-uploads} não consegue varrer um bucket com
+	 * uploads abortados, que é justamente a ferramenta de limpeza.</p>
+	 *
+	 * <p><b>Agora:</b> o teto (1000, como as partes) é aplicado no banco com {@code limit + 1} para
+	 * saber se há próxima página sem uma segunda contagem; o marcador é a posição
+	 * {@code (key, upload_id)} da última linha emitida.</p>
+	 */
+	public PaginaDeUploads paginaDeAbertos(String bucket, String ownerUserId, String prefix, String keyMarker,
+			String uploadIdMarker, int maxUploads) {
+		int teto = Math.max(1, Math.min(maxUploads <= 0 ? 1000 : maxUploads, 1000));
+		StringBuilder where = new StringBuilder("where bucket = ? and owner_user_id = ?");
+		java.util.List<Object> args = new java.util.ArrayList<>();
+		args.add(bucket);
+		args.add(ownerUserId);
+		if (prefix != null && !prefix.isEmpty()) {
+			// `like` do SQL: `%` e `_` do nome precisam de escape, ou um prefixo com eles casaria
+			// chave de outro nome.
+			where.append(" and `key` like ?");
+			args.add(prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%");
+		}
+		if (keyMarker != null && !keyMarker.isEmpty()) {
+			// A ordem do S3 é (key, upload_id): depois do marcador de chave vem o resto das chaves
+			// maiores, e na MESMA chave só os uploads com id maior.
+			where.append(" and (`key` > ? or (`key` = ? and upload_id > ?))");
+			args.add(keyMarker);
+			args.add(keyMarker);
+			args.add(uploadIdMarker == null ? "" : uploadIdMarker);
+		}
+		args.add(teto + 1);
+		List<Upload> achados = jdbc.query("""
+			select upload_id, bucket, `key`, content_type, owner_user_id, credential_id, created_at, expires_at
+			from network_storage_multipart_uploads
+			""" + where + """
+			order by `key` asc, upload_id asc limit ?
+			""", (rs, i) -> new Upload(rs.getString("upload_id"), rs.getString("bucket"), rs.getString("key"),
+			rs.getString("content_type"), rs.getString("owner_user_id"), rs.getString("credential_id"),
+			rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("expires_at").toInstant()), args.toArray());
+		boolean truncada = achados.size() > teto;
+		return new PaginaDeUploads(truncada ? achados.subList(0, teto) : achados, truncada);
+	}
+
 	public Pagina paginaDePartes(String uploadId, int depoisDe, int maxParts) {
 		long inicio = System.nanoTime();
 		try {
