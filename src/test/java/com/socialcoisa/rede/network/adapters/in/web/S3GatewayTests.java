@@ -3687,7 +3687,7 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 	 *
 	 * <p><b>Agora:</b> XML em todas as recusas do {@code Complete} — {@code EntityTooSmall},
 	 * {@code InvalidPart}, {@code NoSuchUpload}, {@code MalformedXML} —, com {@code Code} do S3 e
-	 * {@code 4xx} (§4.67). O sucesso continua igual.</p>
+	 * {@code 4xx} (§4.66). O sucesso continua igual.</p>
 	 */
 	@Test
 	void complete_multipart_recusa_em_xml_e_nao_em_json() throws Exception {
@@ -3920,6 +3920,16 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 			assertThat(chavesEVersoes(xml)).as("max-keys=" + valor).hasSize(4);
 			assertThat(xml).as("max-keys=" + valor).contains("<MaxKeys>1000</MaxKeys>");
 		}
+
+		// max-keys acima do teto: o eco é o valor APLICADO (1000), não o pedido.
+		String acima = versoes(b, "&max-keys=5000");
+		assertThat(acima).as(acima).contains("<MaxKeys>1000</MaxKeys>");
+		assertThat(chavesEVersoes(acima)).as(acima).hasSize(4);
+
+		// key-marker sem version-id-marker: a listagem recomeça DEPOIS da chave inteira — as
+		// versões do próprio marcador não voltam, como no S3.
+		String depois = versoes(b, "&key-marker=a.txt");
+		assertThat(chavesEVersoes(depois)).as(depois).containsExactly("b.txt/1");
 	}
 
 	private String versoes(String b, String consulta) throws Exception {

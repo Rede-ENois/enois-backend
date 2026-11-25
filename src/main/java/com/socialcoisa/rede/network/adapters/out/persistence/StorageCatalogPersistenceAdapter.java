@@ -133,7 +133,7 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		""".formatted(OBJECT_COLUMNS);
 
 	/**
-	 * Uma página do histórico do bucket — o ListObjectVersions (§4.61).
+	 * Uma página do histórico do bucket — o ListObjectVersions (§4.67).
 	 *
 	 * <p>A ordem é a do S3: {@code object_key} ascendente e {@code version} <b>descendente</b>; o
 	 * {@code limit ?} vem do chamador com o teto + 1 para ele saber se há próxima página.</p>
@@ -505,7 +505,7 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	@Override
 	public PaginaDeVersoes paginaDeVersoes(String bucket, String prefix, String keyMarker, Long versionMarker,
 			int maxKeys) {
-		int teto = Math.max(1, Math.min(maxKeys <= 0 ? 1000 : maxKeys, 1000));
+		int teto = StorageCatalogRepository.tetoDeVersoes(maxKeys);
 		StringBuilder where = new StringBuilder();
 		java.util.List<Object> args = new java.util.ArrayList<>();
 		args.add(bucket);
@@ -515,12 +515,20 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 			args.add(prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%");
 		}
 		if (keyMarker != null && !keyMarker.isEmpty()) {
-			// Ordem (chave asc, versão desc): depois do marcador vem o resto das chaves maiores e,
-			// na MESMA chave, as versões menores que a do marcador.
-			where.append(" and (object_key > ? or (object_key = ? and version < ?))");
-			args.add(keyMarker);
-			args.add(keyMarker);
-			args.add(versionMarker == null ? Long.MAX_VALUE : versionMarker);
+			if (versionMarker == null) {
+				// Só a chave: o marcador pula a chave INTEIRA, todas as versões dela. Recomeçar
+				// nela reentregaria versões que o cliente já recebeu — e o S3 não faz isso.
+				where.append(" and object_key > ?");
+				args.add(keyMarker);
+			}
+			else {
+				// Ordem (chave asc, versão desc): depois do marcador vem o resto das chaves maiores e,
+				// na MESMA chave, as versões menores que a do marcador.
+				where.append(" and (object_key > ? or (object_key = ? and version < ?))");
+				args.add(keyMarker);
+				args.add(keyMarker);
+				args.add(versionMarker);
+			}
 		}
 		args.add(teto + 1);
 		List<StorageObject> achadas = jdbc.query(paginaDeVersoes(where.toString()), OBJECT_MAPPER, args.toArray());

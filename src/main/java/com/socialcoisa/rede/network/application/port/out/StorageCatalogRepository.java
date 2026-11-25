@@ -260,8 +260,20 @@ public interface StorageCatalogRepository {
 	/** Todas as versões da chave em ordem crescente — o histórico, incluindo a corrente. */
 	List<StorageObject> versions(String bucket, String key);
 
-	/** Uma página do histórico do bucket, e se há mais (§4.61). */
+	/** Uma página do histórico do bucket, e se há mais (§4.67). */
 	record PaginaDeVersoes(List<StorageObject> versoes, boolean truncada) {
+	}
+
+	/**
+	 * O teto de {@code max-keys} na listagem de versões — 1000, como o {@code ListObjectsV2} e o
+	 * {@code ListParts} (§4.67).
+	 *
+	 * <p>Fica aqui para que quem <b>corta</b> a página e quem <b>eco</b> o {@code <MaxKeys>} usem o
+	 * mesmo número: pedir 5000 e receber {@code <MaxKeys>5000</MaxKeys>} com 1000 linhas na página
+	 * é a página mentindo sobre o próprio tamanho.</p>
+	 */
+	static int tetoDeVersoes(int maxKeys) {
+		return Math.max(1, Math.min(maxKeys <= 0 ? 1000 : maxKeys, 1000));
 	}
 
 	/**
@@ -274,6 +286,9 @@ public interface StorageCatalogRepository {
 	 * mais nova de cada chave primeiro) —, o teto entra no banco com {@code limit teto + 1} para
 	 * saber se há próxima página sem uma segunda contagem, e o marcador anda na mesma ordem. A versão
 	 * é numérica: o {@code version-id-marker} é o {@code version} do objeto, não o id opaco.</p>
+	 *
+	 * <p>Com {@code key-marker} e <b>sem</b> {@code version-id-marker}, a listagem começa depois da
+	 * chave inteira — o S3 pula todas as versões daquele nome, não recomeça nela (§4.67).</p>
 	 */
 	default PaginaDeVersoes paginaDeVersoes(String bucket, String prefix, String keyMarker, Long versionMarker,
 			int maxKeys) {

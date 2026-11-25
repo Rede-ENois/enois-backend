@@ -305,9 +305,9 @@ class S3GatewayController {
 		requireBucket(credential, bucket);
 		requireBucketDoDono(credential, bucket);
 		Map<String, String> consulta = query(request);
-		// Teto e marcadores como o S3 (§4.66): o `<MaxKeys>` ecoa o valor APLICADO, o `IsTruncated`
+		// Teto e marcadores como o S3 (§4.67): o `<MaxKeys>` ecoa o valor APLICADO, o `IsTruncated`
 		// reflete se há mais, e o marcador de versão é o número da versão da última linha emitida.
-		int teto = numeroDoParametro(consulta.get("max-keys"), 1000);
+		int teto = StorageCatalogRepository.tetoDeVersoes(numeroDoParametro(consulta.get("max-keys"), 1000));
 		Long versionMarker = null;
 		String versionIdMarker = consulta.get("version-id-marker");
 		if (versionIdMarker != null) {
