@@ -192,7 +192,9 @@ class ExternalJobsTextoUtf8mb4MigrationTests(unittest.TestCase):
         cls.comando("docker", "rm", "-f", "--volumes", cls.container)
 
     def test_colunas_de_texto_declaram_utf8mb4(self):
-        linhas = self.sql(COLUNAS).splitlines()
+        # Uma linha so: com coalesce, coluna sem default nao tem como voltar NULL, entao linha
+        # nenhuma se confunde com consulta vazia e o campo default nulo sai como 'NULL'.
+        linhas = ["|".join(linha.split("\t")) for linha in self.sql(COLUNAS).splitlines()]
         self.assertEqual(len(linhas), len(ESPERADO), msg="consulta e esperado com tamanhos diferentes")
         self.assertEqual(linhas, ESPERADO)
 
