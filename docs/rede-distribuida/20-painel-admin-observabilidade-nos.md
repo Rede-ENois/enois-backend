@@ -51,7 +51,7 @@ O brief (§8.2) pede, por nó: uso de rede e throughput de entrada e saída. Hoj
 | CPU total, memória, disco livre | **entregue** (heartbeat → painel por nó) |
 | tarefas em execução, versão do runtime, último contato | **entregue** |
 | uso de rede / throughput (entrada e saída) | **não medido pelo runtime**, coluna pronta no banco |
-| swap, pressão de memória, IOPS, latência de disco, temperatura, GC, threads, p95/p99, DLQ | **não existe** — ver `docs/rede-distribuida/11-global-coop-fase-0.md` §3 |
+| swap, pressão de memória, IOPS, latência de disco, temperatura, GC, threads, p95/p99, DLQ | **swap e pressão medidos desde o ciclo 157** (§7 abaixo); o resto não existe — ver `docs/rede-distribribuida/11-global-coop-fase-0.md` §3 |
 
 ## 5. O que o mantenedor precisa conferir no deploy (não é código)
 
@@ -80,6 +80,59 @@ O elo do §3 deste documento foi fechado nos três lados:
 Provas: `NetworkParticipantTrafficTests` (2 casos novos no painel de admin — medido e nulo);
 `network-nodes-section` do DS (2 casos: medido e ausência/metade).
 
-**O que continua faltando do §8.2 do brief** (medido, não estimado): swap, pressão de memória, IOPS,
-latência de disco, temperatura, GC/threads do runtime (o runtime não é JVM — é shell), p95/p99 de
-requisição, DLQ por fila. Nenhum desses existe no heartbeat nem no painel.
+**O que continua faltando do §8.2 do brief** (medido, não estimado): IOPS, latência de disco,
+temperatura, GC/threads do runtime (o runtime não é JVM — é shell), p95/p99 de requisição, DLQ por
+fila. Nenhum desses existe no heartbeat nem no painel. (Swap e pressão de memória entraram no ciclo
+157 — §7.)
+
+## 7. A memória em duas medidas, swap e pressão (ciclo 157)
+
+O §2 desta doc dizia que o runtime manda `memoryMb` e o painel mostra "memória". O que não estava
+dito é que **os dois lados liam coisas diferentes**:
+
+| lado | o que significava `memoryMb` |
+|---|---|
+| runtime | `MemAvailable` — memória **disponível** |
+| Control Plane | `observed_memory_mb`, comparado com `declared_memory_mb` (o teto **cedido**) em `memoryExhausted()` |
+
+Um nó com 8 GB cedidos e 7,9 GB **livres** era "teto atingido" e saía do balanceamento com a máquina
+ociosa; um nó com 8 GB cedidos e 100 MB livres aparecia com "uso de 100 MB". Duas medidas opostas na
+mesma coluna, e a decisão de designação tomada sobre a errada.
+
+### Agora (V378)
+
+| campo | o que é | origem |
+|---|---|---|
+| `memoryMb` | uso medido | `MemTotal - MemAvailable` (`/proc/meminfo`) |
+| `memoryAvailableMb` | disponível medido | `MemAvailable` |
+| `swapUsedMb` | swap em uso | `SwapTotal - SwapFree` — só vai quando o kernel expõe |
+| `memoryPressurePercent` | `avg300` do `some` em `/proc/pressure/memory` | PSI — só vai quando o kernel expõe |
+
+Decisões:
+
+- **O nome `memoryMb` ficou com o uso**, e não o disponível: os outros `observed_*` são todos "o que
+  está em uso" (CPU, disco ocupado, tarefas rodando), e `node_samples.memory_mb`, vizinha, já
+  descrevia o uso. Renomear criaria duas verdades na mesma tabela.
+- **Runtime antigo continua lido certo.** Só manda `memoryMb`, e era o disponível: o Control Plane
+  deriva o uso (`declarado - disponível`) em `NetworkNode.usageFrom`. Disponível **acima** do
+  declarado (máquina com mais RAM do que o nó cede) não deriva — daria uso negativo, e nulo é a
+  resposta honesta. Zero não deriva: `meminfo` ilegível não é "tudo em uso".
+- **Nada é inventado quando o kernel não expõe.** Sem PSI (kernel < 4.20, ou desligado) o campo não
+  vai; sem swap no `meminfo`, idem. Nulo é "não medido", o mesmo contrato do resto do heartbeat.
+- **A coluna nova nasce nula no nó já registrado** — ninguém mediu o disponível dele ainda, e o
+  próximo heartbeat preenche.
+
+### Verificação
+
+- `NetworkHeartbeatMemoryTests` **5** pela rota e pelo banco: uso e disponível distintos e gravados;
+  teto só em 8192 de 8192, não em 8000; runtime antigo derivando 292 de 8192 de 7900 disponíveis;
+  disponível acima do declarado não vira uso; zero não vira uso; sem memória não afirma nada.
+- `node-executor-test` (**+4**, 223 asserções): o payload real do ciclo leva
+  `memoryMb`, `memoryAvailableMb` e `swapUsedMb`, e o uso **não** é o mesmo número do disponível.
+- `scripts/tests/node-memory-migration-test.sh` em **MariaDB 11.4 real**: **16 PASS / 0 FAIL** —
+  V378 aplicada **duas vezes**; nó do contrato antigo preservado (`7900|NULL|2|8192|ACTIVE`); a
+  coluna nova não recebe zero; o update do heartbeat grava as três colunas; a régua do teto confere
+  no banco; tipo `int` e `NULL` aceito.
+- Mutações: runtime mandando o disponível no lugar do uso (derruba 1 do harness); não derivar o
+  runtime antigo (2); derivar disponível acima do declarado (1); zero virando uso (1); migração sem
+  a coluna (9 falhas). Todas restauradas verdes.

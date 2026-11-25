@@ -49,6 +49,10 @@ class NetworkNodeJpaEntity {
 	@Column(name = "observed_memory_mb")
 	private Integer observedMemoryMb;
 
+	/** {@code null} em nó cujo runtime só manda o uso (ou que ainda não bateu coração). */
+	@Column(name = "observed_memory_available_mb")
+	private Integer observedMemoryAvailableMb;
+
 	@Column(name = "observed_running_tasks")
 	private Integer observedRunningTasks;
 
@@ -150,8 +154,9 @@ class NetworkNodeJpaEntity {
 	NetworkNode toDomain() {
 		return new NetworkNode(id, displayName, ownerUserId, NodeStatus.valueOf(status),
 			NodeProfilesCsv.parse(profiles), region, country, runtimeVersion, lastSeenAt, declaredCpuCores,
-			declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent, observedMemoryMb,
-			observedRunningTasks, observedLatencyMs, observedDiskFreeMb, observedDiskTotalMb, observedContentUsedMb,
+			declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
+			NetworkNode.usageFrom(observedMemoryMb, observedMemoryAvailableMb, declaredMemoryMb),
+			observedMemoryAvailableMb, observedRunningTasks, observedLatencyMs, observedDiskFreeMb, observedDiskTotalMb, observedContentUsedMb,
 			observedBytesInMb, observedBytesOutMb, consecutiveFailures,
 			quarantinedUntil, quarantineReason);
 	}

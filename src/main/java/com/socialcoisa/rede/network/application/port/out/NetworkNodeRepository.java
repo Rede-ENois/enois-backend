@@ -61,7 +61,8 @@ public interface NetworkNodeRepository {
 	void observeIp(String id, String ip, Instant now);
 
 	/** Heartbeat: capacidade observada, versão do runtime e último contato. */
-	void touch(String id, String runtimeVersion, Double cpuPercent, Integer memoryMb, Integer runningTasks,
+	void touch(String id, String runtimeVersion, Double cpuPercent, Integer memoryMb,
+			Integer memoryAvailableMb, Integer runningTasks,
 			Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Long bytesInMb, Long bytesOutMb, Instant now);
 
 	long countByStatus(NodeStatus status);

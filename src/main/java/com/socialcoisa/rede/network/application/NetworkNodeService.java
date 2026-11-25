@@ -267,7 +267,23 @@ public class NetworkNodeService {
 		if (beat.observedIp() != null && !beat.observedIp().isBlank()) {
 			nodes.observeIp(authenticated.id(), beat.observedIp(), now);
 		}
-		nodes.touch(authenticated.id(), beat.runtimeVersion(), beat.cpuPercent(), beat.memoryMb(),
+		// A memória tem duas medidas e uma coluna de uso. `memoryMb` é uso desde a V378; runtime anterior
+		// manda só o disponível e o uso é derivado do teto cedido, aqui — antes de gravar, para que o
+		// banco nunca guarde "disponível" na coluna de "uso" (era o que fazia: 7900 MB livres viravam
+		// "7900 em uso" e o nó saía do balanceamento com a máquina ociosa). A mesma derivação vive em
+		// `NetworkNode.usageFrom`, para valer também para quem lê o nó já gravado.
+		Integer uso = beat.memoryMb();
+		Integer disponivel = beat.memoryAvailableMb();
+		if (disponivel == null && uso != null && uso == 0) {
+			// Runtime antigo com `/proc/meminfo` ilegível: zero não é disponível possível, e derivar
+			// diria "tudo em uso" sobre uma leitura que falhou.
+			uso = null;
+		}
+		if (disponivel == null && uso != null) {
+			disponivel = uso;
+			uso = NetworkNode.usageFrom(null, disponivel, authenticated.declaredMemoryMb());
+		}
+		nodes.touch(authenticated.id(), beat.runtimeVersion(), beat.cpuPercent(), uso, disponivel,
 			beat.runningTasks(), beat.diskFreeMb(), beat.diskTotalMb(), beat.contentUsedMb(), beat.bytesInMb(),
 			beat.bytesOutMb(), now);
 		NetworkNode updated = require(authenticated.id());
@@ -623,8 +639,8 @@ public class NetworkNodeService {
 	}
 
 	public record HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
-			Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Long bytesInMb,
-			Long bytesOutMb, Integer observedTerm, String observedIp) {
+			Integer memoryAvailableMb, Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Long contentUsedMb,
+			Long bytesInMb, Long bytesOutMb, Integer observedTerm, String observedIp) {
 
 		/**
 		 * Heartbeat de runtime anterior ao tráfego medido (V345): os dois contadores ficam nulos.
@@ -635,8 +651,8 @@ public class NetworkNodeService {
 		 */
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Integer observedTerm) {
-			this(runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, diskTotalMb, contentUsedMb, null,
-				null, observedTerm, null);
+			this(runtimeVersion, cpuPercent, memoryMb, null, runningTasks, diskFreeMb, diskTotalMb, contentUsedMb,
+				null, null, observedTerm, null);
 		}
 
 		/**
@@ -648,8 +664,8 @@ public class NetworkNodeService {
 		 */
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Integer observedTerm) {
-			this(runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, diskTotalMb, null, null, null,
-				observedTerm, null);
+			this(runtimeVersion, cpuPercent, memoryMb, null, runningTasks, diskFreeMb, diskTotalMb, null, null,
+				null, observedTerm, null);
 		}
 
 		/**
@@ -660,7 +676,7 @@ public class NetworkNodeService {
 		 */
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Integer observedTerm) {
-			this(runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, null, null, null, null,
+			this(runtimeVersion, cpuPercent, memoryMb, null, runningTasks, diskFreeMb, null, null, null, null,
 				observedTerm, null);
 		}
 	}

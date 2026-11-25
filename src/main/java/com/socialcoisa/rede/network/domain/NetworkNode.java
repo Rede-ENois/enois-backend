@@ -28,7 +28,10 @@ import java.util.Set;
  * @param declaredDiskMb disco que o participante cedeu; vai na config assinada e é o runtime do nó quem faz valer (teto do conteúdo no volume)
  * @param declaredBandwidthMbps banda que o participante cedeu; vai na config assinada e é o runtime do nó quem faz valer (teto de taxa das transferências)
  * @param observedCpuPercent uso de CPU no último heartbeat; null = não reportado
- * @param observedMemoryMb memória em uso no último heartbeat; null = não reportado
+ * @param observedMemoryMb memória <b>em uso</b> no último heartbeat; null = não reportado (nem
+ * derivado). É o uso, não o disponível: é esta que {@link #memoryExhausted()} compara com o teto
+ * @param observedMemoryAvailableMb memória <b>disponível</b> medida no último heartbeat; null =
+ * não reportado — e o uso derivado quando o runtime só manda o disponível (runtime antigo)
  * @param observedRunningTasks tarefas em execução no último heartbeat; null = não reportado
  * @param observedDiskFreeMb disco livre medido pelo nó no último heartbeat; null = não reportado
  * (runtime antigo), diferente de zero, que é "sem espaço". O declarado
@@ -46,10 +49,10 @@ import java.util.Set;
 public record NetworkNode(String id, String displayName, String ownerUserId, NodeStatus status,
 		Set<NodeProfile> profiles, String region, String country, String runtimeVersion, Instant lastSeenAt,
 		int declaredCpuCores, int declaredMemoryMb, int declaredDiskMb, int declaredBandwidthMbps,
-		Double observedCpuPercent, Integer observedMemoryMb, Integer observedRunningTasks, Integer observedLatencyMs,
-		Long observedDiskFreeMb, Long observedDiskTotalMb, Long observedContentUsedMb, Long observedBytesInMb,
-		Long observedBytesOutMb, int consecutiveFailures, Instant quarantinedUntil,
-		String quarantineReason) {
+		Double observedCpuPercent, Integer observedMemoryMb, Integer observedMemoryAvailableMb,
+		Integer observedRunningTasks, Integer observedLatencyMs, Long observedDiskFreeMb, Long observedDiskTotalMb,
+		Long observedContentUsedMb, Long observedBytesInMb, Long observedBytesOutMb, int consecutiveFailures,
+		Instant quarantinedUntil, String quarantineReason) {
 
 	/**
 	 * Mesmo nó sem o tráfego medido (runtime anterior à V345): os dois contadores ficam nulos, que
@@ -64,7 +67,7 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 			Instant quarantinedUntil, String quarantineReason) {
 		this(id, displayName, ownerUserId, status, profiles, region, country, runtimeVersion, lastSeenAt,
 			declaredCpuCores, declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
-			observedMemoryMb, observedRunningTasks, observedLatencyMs, observedDiskFreeMb, observedDiskTotalMb,
+			observedMemoryMb, null, observedRunningTasks, observedLatencyMs, observedDiskFreeMb, observedDiskTotalMb,
 			observedContentUsedMb, null, null, consecutiveFailures, quarantinedUntil, quarantineReason);
 	}
 
@@ -103,7 +106,7 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 			int consecutiveFailures, Instant quarantinedUntil, String quarantineReason) {
 		this(id, displayName, ownerUserId, status, profiles, region, country, runtimeVersion, lastSeenAt,
 				declaredCpuCores, declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
-				observedMemoryMb, observedRunningTasks, observedLatencyMs, null, null, null, null, null,
+				observedMemoryMb, null, observedRunningTasks, observedLatencyMs, null, null, null, null, null,
 				consecutiveFailures, quarantinedUntil, quarantineReason);
 	}
 
@@ -121,8 +124,8 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 			Long observedDiskFreeMb, int consecutiveFailures, Instant quarantinedUntil, String quarantineReason) {
 		this(id, displayName, ownerUserId, status, profiles, region, country, runtimeVersion, lastSeenAt,
 				declaredCpuCores, declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
-				observedMemoryMb, observedRunningTasks, observedLatencyMs, observedDiskFreeMb, null, null, null,
-				null, consecutiveFailures, quarantinedUntil, quarantineReason);
+				observedMemoryMb, null, observedRunningTasks, observedLatencyMs, observedDiskFreeMb, null, null,
+				null, null, consecutiveFailures, quarantinedUntil, quarantineReason);
 	}
 
 	/**
@@ -231,6 +234,32 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 	 */
 	public boolean memoryExhausted() {
 		return declaredMemoryMb > 0 && observedMemoryMb != null && observedMemoryMb >= declaredMemoryMb;
+	}
+
+	/**
+	 * O uso de memória como o Control Plane o deve ler do que o runtime mandou.
+	 *
+	 * <p>Duas medidas, um campo na rede:</p>
+	 * <ul>
+	 * <li>{@code usedMb} informado → é o uso, e {@code availableMb} é o disponível;</li>
+	 * <li>só {@code availableMb} (runtime anterior a V378, que mandava o <b>disponível</b> em
+	 * {@code memoryMb}) → o uso é derivado, {@code declarado - disponível}, <b>quando</b> o
+	 * disponível não passa do declarado;</li>
+	 * <li>só {@code usedMb} → o disponível é desconhecido, e fica nulo.</li>
+	 * </ul>
+	 *
+	 * <p>Disponível acima do declarado é medida de outra máquina, não uso negativo: derivar daria
+	 * zero (ou menos), e "nada em uso" é o oposto do que se sabe. Nesse caso o uso fica nulo — não
+	 * medido — e o nó continua elegível, como sem reporte nenhum.</p>
+	 */
+	public static Integer usageFrom(Integer usedMb, Integer availableMb, int declaredMemoryMb) {
+		if (usedMb != null) {
+			return usedMb;
+		}
+		if (availableMb == null || declaredMemoryMb <= 0 || availableMb > declaredMemoryMb) {
+			return null;
+		}
+		return declaredMemoryMb - availableMb;
 	}
 
 	/**
