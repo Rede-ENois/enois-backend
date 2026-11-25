@@ -51,7 +51,7 @@ O brief (§8.2) pede, por nó: uso de rede e throughput de entrada e saída. Hoj
 | CPU total, memória, disco livre | **entregue** (heartbeat → painel por nó) |
 | tarefas em execução, versão do runtime, último contato | **entregue** |
 | uso de rede / throughput (entrada e saída) | **não medido pelo runtime**, coluna pronta no banco |
-| swap, pressão de memória, IOPS, latência de disco, temperatura, GC, threads, p95/p99, DLQ | **swap e pressão medidos desde o ciclo 157** (§7 abaixo); **IOPS e latência de disco medidos desde o ciclo 158** (§8 e §9); **temperatura desde o ciclo 159** (§10); o resto não existe — ver `docs/rede-distribribribuida/11-global-coop-fase-0.md` §3 |
+| swap, pressão de memória, IOPS, latência de disco, temperatura, GC, threads, p95/p99 de tarefa, DLQ | **swap e pressão desde o ciclo 157** (§7); **IOPS e latência de disco desde o 158** (§8 e §9); **temperatura desde o 159** (§10); **p95/p99 do tempo de execução das tarefas desde o 160** (§11). GC/threads (o runtime é shell, não JVM), p95/p99 de requisição HTTP e DLQ por fila seguem inexistentes — ver `docs/rede-distribuida/11-global-coop-fase-0.md` §3 |
 
 ## 5. O que o mantenedor precisa conferir no deploy (não é código)
 
@@ -81,9 +81,10 @@ Provas: `NetworkParticipantTrafficTests` (2 casos novos no painel de admin — m
 `network-nodes-section` do DS (2 casos: medido e ausência/metade).
 
 **O que continua faltando do §8.2 do brief** (medido, não estimado): GC/threads do runtime (o
-runtime não é JVM — é shell), p95/p99 de requisição, DLQ por fila. (Swap e pressão de memória
-entraram no ciclo 157 — §7; IOPS e latência de disco, no ciclo 158 — §8 e §9; temperatura, no ciclo
-159 — §10.)
+runtime não é JVM — é shell), p95/p99 de **requisição HTTP** (o `MonitoringService` mede a do
+Control Plane, não a de cada nó), DLQ por fila. (Swap e pressão de memória entraram no ciclo 157 —
+§7; IOPS e latência de disco, no ciclo 158 — §8 e §9; temperatura, no ciclo 159 — §10; p95/p99 do
+tempo de execução das tarefas por nó, no ciclo 160 — §11.)
 
 ## 7. A memória em duas medidas, swap e pressão (ciclo 157)
 
@@ -251,3 +252,35 @@ leituras conhecidas e para o container cujo `/sys` do host está montado em outr
   **duas vezes**, nó e amostra antigos preservados com `NULL`, update/upsert gravando `39.6` (não
   `40`), zero distinto de nulo, tipo `double` aceitando `NULL`. Mutação (V382 sem as colunas) derruba
   **13**.
+
+## 11. Latência p50/p95/p99 das tarefas, por nó (ciclo 160)
+
+O §8.2 do brief pede a latência em p50, p95 e p99. O que existia era `network_nodes.observed_latency_ms`
+— e ela **não é mediana**: é média móvel exponencial (`(antiga * 3 + nova) / 4`, em `recordOutcome`).
+Média responde "quanto, em média" e não "quanto é o pior 5%", que é a pergunta da cauda.
+
+**Como mede.** Cada tarefa concluída com sucesso entra numa **faixa** de duração (potências de dois,
+de 1 ms a ≈ 68 min) na hora corrente, em `network_task_latency_buckets` (V383). A escrita é um
+`UPSERT` que soma (`samples = samples + 1`) com a hora truncada antes de gravar: duas tarefas da
+mesma hora caem na mesma linha, e a tabela cresce com o número de faixas usadas, não com o de
+tarefas. O painel (`GET /admin/network/nodes/{id}/observability`, campo `latency`) lê 24 horas e
+calcula os percentis por interpolação linear dentro da faixa (`TaskLatency`), o mesmo método do
+`histogram_quantile` do Prometheus.
+
+**O que o número diz e o que não diz.** A precisão é a da faixa: entre 1 e 2 ms o erro é de 1 ms;
+entre 4 e 8 s, de segundos. `samplesInWindow` acompanha os percentis porque p99 sobre 10 tarefas é
+uma anedota. Sem tarefa na janela, os três percentis são `null` — 0 seria "toda tarefa concluiu em
+0 ms", que é uma medida. Faixa sem amostra abaixo não vira piso: com uma única amostra de ≤256 ms, os
+três percentis dizem 256 (o teto), não 128 (o meio de uma faixa que ninguém mediu).
+
+**Falha não entra:** uma tarefa que falhou não tem tempo de execução, tem tempo até a falha; se
+entrasse, um nó que só falha apareceria com latência excelente.
+
+Provas: `TaskLatencyTests` (6 casos: faixa, cauda, faixa única sem piso, faixa vazia, uma amostra,
+ausência) e `NetworkTaskLatencyTests` (6 casos: 9 rápidas + 1 lenta pela rota até o painel, nó sem
+tarefa com percentil nulo, falha fora do histograma, janela de 24 h, soma na mesma linha, dois nós
+sem vazamento). Mutações conferidas: não registrar no desfecho derruba 2; registrar falha derruba 1;
+ignorar a janela derruba 1; gravar sem truncar a hora derruba 1; somar sem o nó derruba 1.
+`node-task-latency-migration-test` **14 PASS / 0 FAIL** em MariaDB 11.4 real: `V383` aplicada duas
+vezes, nó/tarefa anteriores preservados, chave composta, `utf8mb4`, upsert somando na mesma linha,
+janela de 24 h separando hoje de anteontem. Mutação (V383 vazia) derruba **6**.
