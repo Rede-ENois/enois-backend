@@ -2125,15 +2125,21 @@ arquivo de ontem" — passa por esse endereço, e restaurar por `copyTo` exige a
   versão deixa de ser servível.
 - O `DELETE ?versionId=` continua `501`: remover uma versão é uma decisão à parte, que mexe no
   histórico, e não entra por esta rota.
+- A versão é do **dono da credencial**, como todo objeto no gateway: a linha de outra conta no mesmo
+  bucket — o estado que o `ListObjectVersions` filtra — não é servida nem pela versão nem pela
+  corrente. A resposta é `403 AccessDenied`, a mesma do `DELETE` e do `CopyObject`, e não revela que a
+  chave existe.
 
 **Verificação:** `S3GatewayTests` **+1** (`get_com_version_id_serve_a_versao_pedida_e_nao_a_corrente`):
 sem `versionId` a corrente; `versionId=1` e `=2` com cada corpo; o `ETag` da v1 é o digest de v1 e
 difere do da v2; `HEAD ?versionId=1` com `Content-Length` da v1; `versionId=9` → `NoSuchVersion`;
 `versionId=abc` → `InvalidArgument`; depois do `DELETE`, o catálogo tem `v1 STORED` e
 `v2 DELETED`, `?versionId=2` → `NoSuchVersion`, a corrente → `NoSuchKey` e a v1 **continua** sendo
-servida. Vermelho antes: `501` no `versionId=1`. Mutações **4/4**: ignorar o `versionId` e servir a
-corrente (o comportamento de antes); versão inexistente virando a corrente; apagar versão sem cópia
-servível (a lápide); `versionId` não numérico virando a corrente.
+servida; e a linha de outra conta plantada no bucket → `AccessDenied` pela versão e pela corrente.
+Vermelho antes: `501` no `versionId=1`. Mutações **4/4**: ignorar o `versionId` e servir a corrente (o
+comportamento de antes); versão inexistente virando a corrente; apagar versão sem cópia servível (a
+lápide); `versionId` não numérico virando a corrente. A conferência do dono tem o próprio caso: sem
+ela, as duas asserções da linha alheia ficam vermelhas.
 
 ## 5. Erros
 

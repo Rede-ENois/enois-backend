@@ -1878,22 +1878,37 @@ class S3GatewayController {
 	 * versão que não existe (ou cujo conteúdo foi removido), e {@code 400 InvalidArgument} para valor
 	 * que não é número — a mesma régua do marcador do {@code ListObjectVersions}. Sem
 	 * {@code versionId}, a corrente.</p>
+	 *
+	 * <p><b>Dono:</b> a versão é do dono da credencial, como todo objeto no gateway. O
+	 * {@code requireBucketDoDono} passa com qualquer objeto meu no bucket, e o histórico da chave
+	 * guarda linhas de outras contas (é o estado que o {@code ListObjectVersions} filtra); sem esta
+	 * conferência, a versão <b>substituída</b> alheia — justamente a que o {@code GET} corrente não
+	 * expõe — seria servida por {@code ?versionId=}. A resposta é {@code 403 AccessDenied}, a mesma do
+	 * {@code DELETE} e do {@code CopyObject}, e não revela que a chave existe.</p>
 	 */
-	private StorageObject objetoPedido(String bucket, String chave, HttpServletRequest request, String operacao) {
+	private StorageObject objetoPedido(S3Credential credential, String bucket, String chave,
+			HttpServletRequest request, String operacao) {
 		String versionId = query(request).get("versionId");
+		StorageObject object;
 		if (versionId == null || versionId.isBlank()) {
-			return comVocabularioDoS3(() -> storage.requireDownloadable(bucket, chave, operacao));
+			object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, chave, operacao));
 		}
-		long versao;
-		try {
-			versao = Long.parseLong(versionId.trim());
+		else {
+			long versao;
+			try {
+				versao = Long.parseLong(versionId.trim());
+			}
+			catch (NumberFormatException naoEhNumero) {
+				throw s3Error(400, "InvalidArgument",
+					"O versionId tem de ser o numero da versao que o ListObjectVersions emitiu.");
+			}
+			final long pedida = versao;
+			object = comVocabularioDoS3(() -> storage.requireVersion(bucket, chave, pedida, operacao));
 		}
-		catch (NumberFormatException naoEhNumero) {
-			throw s3Error(400, "InvalidArgument",
-				"O versionId tem de ser o numero da versao que o ListObjectVersions emitiu.");
+		if (!credential.ownerUserId().equals(object.createdBy())) {
+			throw s3Error(403, "AccessDenied", "O objeto nao e do dono da credencial.");
 		}
-		final long pedida = versao;
-		return comVocabularioDoS3(() -> storage.requireVersion(bucket, chave, pedida, operacao));
+		return object;
 	}
 
 	/**
@@ -1915,7 +1930,7 @@ class S3GatewayController {
 		recusarSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		recusarLeituraDeSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		// `If-Match` é a pré-condição do download condicional (§4.63), como no S3.
-		StorageObject object = objetoPedido(bucket, keyOf(request), request, "GET");
+		StorageObject object = objetoPedido(credential, bucket, keyOf(request), request, "GET");
 		return comVocabularioDoS3(() -> content.respond(object, request.getHeader(HttpHeaders.RANGE),
 			request.getHeader(HttpHeaders.IF_NONE_MATCH), request.getHeader(HttpHeaders.IF_MODIFIED_SINCE),
 			request.getHeader("If-Range"), request.getHeader(HttpHeaders.IF_MATCH)));
@@ -1993,7 +2008,7 @@ class S3GatewayController {
 		// do arquivo, que é a pergunta errada com cara de certa (§4.41).
 		recusarSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		recusarLeituraDeSubrecurso(request, "/" + bucket + "/" + keyOf(request));
-		StorageObject object = objetoPedido(bucket, keyOf(request), request, "HEAD");
+		StorageObject object = objetoPedido(credential, bucket, keyOf(request), request, "HEAD");
 		return comVocabularioDoS3(() -> content.head(object, request.getHeader(HttpHeaders.IF_NONE_MATCH),
 			request.getHeader(HttpHeaders.IF_MODIFIED_SINCE), request.getHeader(HttpHeaders.IF_MATCH)));
 	}

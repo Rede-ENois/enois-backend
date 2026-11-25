@@ -3674,6 +3674,20 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		// E a corrente someu (lápide), como antes — mas a v1 continua servível.
 		assertThat(erroDe(b, "a.txt", null)).isEqualTo("NoSuchKey");
 		assertThat(baixar(b, "a.txt", "1")).isEqualTo(primeira);
+
+		// Linha de OUTRA conta no mesmo bucket — o estado que a listagem já sabe ignorar. O dono do
+		// bucket passa no `requireBucketDoDono` pelos próprios objetos, e o histórico guarda a versão
+		// substituída alheia, que o `GET` corrente não expõe. Servi-la por `?versionId=` seria entregar
+		// o que o resto do gateway recusa com `403`, e sem revelar que a chave existe.
+		jdbc.update("""
+			insert into network_storage_objects (id, bucket, object_key, version, bytes, sha256, state,
+				created_by, created_at, updated_at)
+			values (?, ?, 'alheia.txt', 1, 5, ?, 'STORED', 's3_outra_conta', current_timestamp(3),
+				current_timestamp(3))
+			""", "sobj_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16), b,
+			com.socialcoisa.rede.shared.security.Hashes.sha256Hex("outro"));
+		assertThat(erroDe(b, "alheia.txt", "1")).as("a versao de outra conta").isEqualTo("AccessDenied");
+		assertThat(erroDe(b, "alheia.txt", null)).as("a corrente de outra conta").isEqualTo("AccessDenied");
 	}
 
 	private String baixar(String b, String chave, String versionId) throws Exception {
