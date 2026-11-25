@@ -57,6 +57,20 @@ class GlobalExceptionHandlerConflictTests {
 		assertThat(body.code()).isEqualTo("CONFLICT_MISSING_VALUE");
 	}
 
+	/**
+	 * Coluna de texto num charset legado: o banco devolve "Incorrect string value" e, sem um
+	 * codigo proprio, a resposta era o 409 generico que nao dizia nada (texto de artigo barrado
+	 * assim em 2026-11-25).
+	 */
+	@Test
+	void caractereNaoAceitoTemCodigoProprio() {
+		var body = handle("Data truncation: Incorrect string value: '\\xE2\\xB8\\xBB' "
+			+ "for column `rede_prd`.`articles`.`body` at row 1");
+		assertThat(body.code()).isEqualTo("CONFLICT_UNSUPPORTED_CHARACTERS");
+		assertThat(body.message()).contains("caracteres");
+		assertThat(body.message()).doesNotContain("articles");
+	}
+
 	@Test
 	void causaDesconhecidaMantemOCodigoGenerico() {
 		var body = handle("algo que o banco disse e nao sabemos classificar");

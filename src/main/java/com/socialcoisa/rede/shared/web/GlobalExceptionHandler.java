@@ -209,6 +209,12 @@ public class GlobalExceptionHandler {
 		if (text.contains("check constraint")) {
 			return "CONFLICT_CHECK_CONSTRAINT";
 		}
+		// Coluna de texto num charset legado: o MariaDB devolve "Incorrect string value:
+		// '\xE2\xB8\xBB' for column ..." e, sem este caso, a resposta virava o 409 generico —
+		// ninguem sabia o que houve nem por que (2026-11-25, texto de artigo barrado assim).
+		if (text.contains("incorrect string value")) {
+			return "CONFLICT_UNSUPPORTED_CHARACTERS";
+		}
 		return "CONFLICT";
 	}
 
@@ -220,6 +226,8 @@ public class GlobalExceptionHandler {
 			case "CONFLICT_VALUE_TOO_LARGE" -> "Valor maior do que o permitido.";
 			case "CONFLICT_MISSING_VALUE" -> "Faltou um dado obrigatorio.";
 			case "CONFLICT_CHECK_CONSTRAINT" -> "Valor fora das regras aceitas.";
+			case "CONFLICT_UNSUPPORTED_CHARACTERS" ->
+				"O texto tem caracteres que nao podem ser salvos. Remova emojis ou simbolos e tente de novo.";
 			default -> "Operacao conflita com o estado atual dos dados.";
 		};
 	}
