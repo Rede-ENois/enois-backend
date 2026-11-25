@@ -98,7 +98,7 @@ class WrappedWorker {
 	}
 
 	private boolean deveConstruirFila() {
-		return forcarJanela || LocalDate.ofInstant(clock.instant(), WrappedAno.FUSO).isEqual(DIA_DA_CONSTRUCAO);
+		return LocalDate.ofInstant(clock.instant(), WrappedAno.FUSO).isEqual(DIA_DA_CONSTRUCAO);
 	}
 
 	/** Dentro de 26/12 00:00 até 01/01 00:00 (fuso da aplicação). */
