@@ -55,7 +55,7 @@ class StorageReplicaAdoptionTests {
 			// `lastSeenAt` recente e disco livre medido: sem os dois o nó não é "vivo" nem "cabe", e a
 			// colocação o descarta antes de qualquer régua de folga.
 			"sa-east-1", "BR", "1.0.0", AGORA.minusSeconds(30), 2, 4096, declaradoMb, 204800, null, null, null,
-			null, diskFreeMb, null, null, null, null, 0, null, null);
+			null, null, diskFreeMb, null, null, null, null, 0, null, null);
 	}
 
 	private static NetworkNode no(String id, int declaradoMb) {

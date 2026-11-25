@@ -156,6 +156,21 @@ assert_contains 'resultado carrega a tentativa vigente' "$(cat "$TMP/curl-calls"
 assert_contains 'output ecoa o idempotencyKey (prova de ciclo)' "$(cat "$TMP/curl-calls")" \
   '"output":"{\"echo\":\"idem-42\"}"'
 
+# Memória em DUAS medidas (V378): `memoryMb` é USO, `memoryAvailableMb` o disponível. O runtime
+# mandava só `MemAvailable` como `memoryMb` — e o Control Plane comparava com o teto cedido, então
+# 7,9 GB livres de 8 GB declarados viravam "teto atingido". A prova no payload real do ciclo: os
+# dois campos presentes e DISTINTOS, dos quais o uso é menor que o disponível numa máquina ociosa
+# (o CI é). Swap e pressão só vão quando o kernel os expõe — aqui se exige o swap do `meminfo`.
+HB_CALL=$(/bin/grep 'network/nodes/heartbeat' "$TMP/curl-calls" | head -n 1)
+assert_contains 'heartbeat manda o uso de memória (memoryMb)' "$HB_CALL" '"memoryMb":'
+assert_contains 'heartbeat manda o disponível separado (memoryAvailableMb)' "$HB_CALL" '"memoryAvailableMb":'
+assert_contains 'heartbeat manda o swap em uso (swapUsedMb)' "$HB_CALL" '"swapUsedMb":'
+# Uso e disponível são medidas opostas: o par com os dois iguais seria as duas colunas preenchidas
+# com o mesmo número — o defeito de antes, agora em dois campos. O awk compara os pares do JSON.
+PAR_IGUAL=$(printf '%s' "$HB_CALL" | /bin/grep -o '"memoryMb":[0-9]*,"memoryAvailableMb":[0-9]*' \
+  | awk -F'[:,]' '$2 == $4 { print }')
+assert_eq 'uso e disponível não são o mesmo número' '' "$PAR_IGUAL"
+
 # O painel do nó exibe as linhas do runtime, e elas só chegam ao Control Plane pelo heartbeat (o nó
 # não abre porta — brief §17). O primeiro ciclo não tem nada a mandar: a linha de aceite nasce da
 # RESPOSTA do heartbeat. O segundo é o que prova o caminho — o buffer do ciclo anterior entra no

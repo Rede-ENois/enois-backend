@@ -1342,9 +1342,43 @@ exec_api_request() {
 
 cycle() {
   # 1. heartbeat: estado, modo e se pode pedir tarefa.
-  local hb mode accept_tasks observed_cpu observed_mem observed_disk observed_term term_part disk_part
+  local hb mode accept_tasks observed_cpu observed_mem observed_avail mem_swap mem_pressure observed_disk observed_term term_part disk_part mem_part
   observed_cpu=$(awk 'NR==1 {printf "%.1f", $1}' /proc/loadavg 2>/dev/null || echo 0)
-  observed_mem=$(awk '/MemAvailable/ {printf "%d", ($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+  # Memória em DUAS medidas, como o Control Plane lê desde a V378: `memoryMb` é o USO e
+  # `memoryAvailableMb` o DISPONÍVEL. Antes o runtime media só `MemAvailable` e o mandava como
+  # `memoryMb`, que o Control Plane compara com o teto cedido — um nó com 7,9 GB livres de 8 GB
+  # declarados saía do balanceamento como "teto atingido", com a máquina ociosa. O uso é
+  # `MemTotal - MemAvailable` (a definição que o próprio relatório do sistema usa); swap é
+  # `SwapUsed` (o DEFAULT do kernel já é `SwapTotal - SwapFree`). Sem `/proc/meminfo` a medida não
+  # vai: ausente é "não medido", e 0 seria "máquina ociosa" para o que ninguém leu.
+  mem_part=''
+  if [[ -r /proc/meminfo ]]; then
+    mem_medido=$(awk '
+      /^MemTotal:/ {total = $2}
+      /^MemAvailable:/ {avail = $2}
+      /^SwapTotal:/ {stotal = $2}
+      /^SwapFree:/ {sfree = $2}
+      END {
+        if (avail == "" || total == "") exit 1
+        printf "%d %d", int((total - avail) / 1024), int(avail / 1024)
+        if (stotal != "") printf " %d", int((stotal - sfree) / 1024)
+      }' /proc/meminfo 2>/dev/null) || mem_medido=''
+    if [[ -n "$mem_medido" ]]; then
+      read -r observed_mem observed_avail mem_swap <<<"$mem_medido"
+      mem_part="\"memoryMb\":$observed_mem,\"memoryAvailableMb\":$observed_avail"
+      [[ "${mem_swap:-}" =~ ^[0-9]+$ ]] && mem_part="$mem_part,\"swapUsedMb\":$mem_swap"
+    fi
+  fi
+  # Pressão de memória (brief §8.2, "pressão de memória"): o PSI do kernel mede o tempo em que
+  # tarefas ficaram paradas esperando memória — o número que diz "o nó está sofrendo" antes de o
+  # uso chegar ao teto. Média de 300 s, em porcentagem; sem o arquivo (kernel anterior a 4.20, ou
+  # PSI desligado no boot) o campo NÃO vai.
+  if [[ -r /proc/pressure/memory ]]; then
+    mem_pressure=$(awk '
+      /^some/ {for (i = 1; i <= NF; i++) if ($i ~ /^avg300=/) {v = $i; sub(/^avg300=/, "", v); printf "%.1f", v}}
+    ' /proc/pressure/memory 2>/dev/null)
+    [[ -n "$mem_pressure" ]] && mem_part="$mem_part,\"memoryPressurePercent\":$mem_pressure"
+  fi
   # Disco livre MEDIDO no diretório de estado do nó — é este que o Control Plane mostra ao lado do
   # `declared_disk_mb` do enroll e que a capacidade do Storage leva em conta. O declarado é o que o
   # participante prometeu; este é o que existe. Sem a medida, um nó que perdeu disco continua sendo
@@ -1398,7 +1432,7 @@ cycle() {
   events=$(events_json)
   [[ -n "$events" ]] && logs_part=",\"logs\":[$events]"
   hb=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
-    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"memoryMb\":$observed_mem,\"runningTasks\":0$disk_part$net_part}$term_part$logs_part}" \
+    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"runningTasks\":0$mem_part$disk_part$net_part}$term_part$logs_part}" \
     "$CONTROL_PLANE/network/nodes/heartbeat") || { printf '[executor] heartbeat falhou\n' >&2; return 1; }
   : > "$EVENTS_FILE" 2>/dev/null || true
   mode=$(json_field "$hb" mode)

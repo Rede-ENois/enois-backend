@@ -101,12 +101,17 @@ class NetworkNodeController {
 	}
 
 	/**
-	 * O que o nó mediu. {@code bytesInMb}/{@code bytesOutMb} são o tráfego ACUMULADO nas interfaces
+	 * O que o nó mediu. {@code memoryMb} é memória <b>em uso</b> e {@code memoryAvailableMb} a
+	 * <b>disponível</b> — o runtime anterior à V378 mandava o disponível em {@code memoryMb}, e o
+	 * Control Plane deriva o uso dele (ver {@code NetworkNode.usageFrom}). Os dois nulos são "não
+	 * medido", nunca zero: zero de uso afirmaria máquina ociosa.
+	 *
+	 * <p>{@code bytesInMb}/{@code bytesOutMb} são o tráfego ACUMULADO nas interfaces
 	 * dele (brief §18, "consultar tráfego"); o Control Plane só recebe a contagem e não soma nada
 	 * por conta própria — quem transfere é a máquina do participante, e é ela que mede.
 	 */
-	record Observed(Double cpuPercent, Integer memoryMb, Integer runningTasks, Long diskFreeMb,
-			Long diskTotalMb, Long usedMb, Long bytesInMb, Long bytesOutMb) {
+	record Observed(Double cpuPercent, Integer memoryMb, Integer memoryAvailableMb, Integer runningTasks,
+			Long diskFreeMb, Long diskTotalMb, Long usedMb, Long bytesInMb, Long bytesOutMb) {
 	}
 
 	/**
@@ -214,7 +219,8 @@ class NetworkNodeController {
 		Observed observed = request == null ? null : request.observed();
 		NetworkNode updated = nodes.heartbeat(node, new NetworkNodeService.HeartbeatCommand(
 			request == null ? null : request.runtimeVersion(), observed == null ? null : observed.cpuPercent(),
-			observed == null ? null : observed.memoryMb(), observed == null ? null : observed.runningTasks(),
+			observed == null ? null : observed.memoryMb(), observed == null ? null : observed.memoryAvailableMb(),
+			observed == null ? null : observed.runningTasks(),
 			observed == null ? null : observed.diskFreeMb(), observed == null ? null : observed.diskTotalMb(),
 			observed == null ? null : observed.usedMb(), observed == null ? null : observed.bytesInMb(),
 			observed == null ? null : observed.bytesOutMb(), request == null ? null : request.observedTerm(),

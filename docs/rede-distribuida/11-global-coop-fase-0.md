@@ -51,7 +51,7 @@ do mantenedor, não efeito colateral de código.
 |---|---|---|
 | §4.1 | captura única por binlog, posição persistente | **inexistente** (ver §2) |
 | §4.3 | aplicação idempotente de eventos de tabela nas réplicas com checkpoint transacional | **inexistente**. O que há é o cursor do change feed de conteúdo, que avança só depois de o corpo estar em disco no nó |
-| §8 | observabilidade distribuída "de todos os nós" | **parcial**: heartbeat e saúde por nó existem (`degraded`, latência EWMA, sequência de falhas, quarentena), e o painel agrega; não há coleta de métricas de host nem do runtime além do que o heartbeat carrega |
+| §8 | observabilidade distribuída "de todos os nós" | **parcial**: heartbeat e saúde por nó existem (`degraded`, latência EWMA, sequência de falhas, quarentena), e o painel agrega; o que o heartbeat carrega do host cresceu (CPU, memória em uso e disponível, swap, pressão PSI, disco, tráfego — doc 20 §7); falta IOPS, latência de disco, temperatura, p95/p99 e DLQ |
 | §9 | múltiplos domínios com autoridade própria | **inexistente**. Existe região, que é ordenação de afinidade e estado fora de operação. Um segundo domínio com autoridade necessita de termo e quórum, que a F6 (ADR-013) já esboça para uma autoridade única |
 | §11 | blockchain e consenso | **inexistente** e o brief não exige implementar agora; a autoridade com termo (ADR-013) é o que existe de mais próximo |
 
