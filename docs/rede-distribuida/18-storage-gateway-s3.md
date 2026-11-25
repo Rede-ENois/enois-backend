@@ -2416,3 +2416,36 @@ trocado por `403`; e ritmo só no caminho do cabeçalho.
   (`rede.storage.max-bytes-per-owner`, doc 12 §2.3): o upload que estoura responde `507 QuotaExceeded`
   no XML do S3, com o número na mensagem. Duas credenciais do mesmo dono dividem a mesma cota.
   O **rate limiting por credencial existe** desde o ciclo 74 (§5.2).
+
+## 4.72 `DELETE /{bucket}?<subrecurso>` não é `DeleteBucket` — a lista fechou de verdade (ciclo 155)
+
+O §4.38 dizia que `DELETE /{bucket}?cors` (e os vizinhos) respondia `501` e não apagava o bucket. A
+guarda `SUBRECURSOS_DE_BUCKET_NAO_IMPLEMENTADOS` recusava 17 nomes, e o `?acl` tinha ficado de fora.
+A primeira correção acrescentou `acl` e criou um teste que **percorria a própria lista** — código e
+teste concordando por construção, então nenhum dos dois podia ver o que faltava.
+
+Medido no head anterior, com o bucket de lápide do dono:
+
+```
+DELETE /s3/<b>?location   → 204   DELETE /s3/<b>?versioning → 204   DELETE /s3/<b>?lifecycle → 204
+DELETE /s3/<b>?uploads    → 204   DELETE /s3/<b>?versions   → 204   bucket ainda existe? false
+```
+
+`?versioning` é o pior dos cinco: o `PUT` do mesmo subrecurso **age** (grava a política), então "desligue
+o versionamento" **destruía o bucket**. `?lifecycle` é a política do varredor (§4.36); `?uploads` e
+`?versions` são listagens, e quem tentasse "cancelar" ou "limpar" esvaziava o bucket.
+
+### Agora
+
+- Os cinco nomes entram na guarda: `location`, `versioning`, `lifecycle`, `uploads`, `versions`.
+  `DELETE` em qualquer um deles responde `501 NotImplemented` e o bucket fica.
+- O teste **deriva a lista da rota**, não da constante: lê os `params` dos mapeamentos `/{bucket}` do
+  controlador, descarta os que têm `DELETE` próprio e os que não são `POST` de subrecurso (`?delete` é
+  o verbo do `DeleteObjects`, não subrecurso de bucket), e exige `501` para cada um. Um subrecurso
+  novo que ganhe `GET` e fique fora da guarda passa a derrubar o teste — é o único teste que fecha a
+  família, e não só o nome da vez.
+
+**Verificação:** `S3GatewayTests` **89/89**; o teste do `DELETE` percorre os nomes derivados (19) e
+cada um responde `501 <Code>NotImplemented</Code>` com o bucket intacto, que depois é apagado de
+verdade (`204`) e some de `ListBuckets`. Vermelho antes: com a guarda parada em `acl`, o teste falha
+em `DELETE ?lifecycle`. Harness `s3client.py`/`node-executor` do §25 segue verde (14 PASS, 6 mutações).
