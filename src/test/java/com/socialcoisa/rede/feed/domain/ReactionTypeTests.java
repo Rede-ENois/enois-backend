@@ -7,7 +7,7 @@ import java.util.Arrays;
 import org.junit.jupiter.api.Test;
 
 /**
- * A lista de reações é a do pacote É Nóis: 76 expressões, sem repetição e sem tirar nenhuma das
+ * A lista de reações é a do pacote É Nóis: 77 expressões, sem repetição e sem tirar nenhuma das
  * que já existiam. O front mostra exatamente este conjunto (REACTION_TYPES), e a ordem é a do
  * seletor — as originais primeiro, as novas no fim.
  */
@@ -19,8 +19,18 @@ class ReactionTypeTests {
 			"CLOWN", "NAILS", "USEFUL", "RELATABLE", "HYPE", "THANKS", "VIBE", "SALUTE" };
 
 	@Test
-	void temAsSetentaESeisExpressoesDoPacoteEnois() {
-		assertThat(ReactionType.values()).hasSize(76);
+	void temAsSetentaESeteExpressoesDoPacoteEnois() {
+		assertThat(ReactionType.values()).hasSize(77);
+	}
+
+	@Test
+	void aUltimaEraOGhostEAgoraOCoracaoRoxoFicaNoFim() {
+		// Reação nova entra no FIM do enum: o tipo é gravado pelo nome, e a posição só diz quando
+		// ela nasceu.
+		String[] nomes = Arrays.stream(ReactionType.values()).map(Enum::name).toArray(String[]::new);
+
+		assertThat(nomes[nomes.length - 2]).isEqualTo("GHOST");
+		assertThat(nomes[nomes.length - 1]).isEqualTo("HEART_PURPLE");
 	}
 
 	@Test
@@ -31,6 +41,6 @@ class ReactionTypeTests {
 		// mudá-la não mexe no banco, que grava o nome — mas o usuário veria a lista mudar à toa).
 		assertThat(Arrays.copyOf(nomes, ORIGINAIS.length)).containsExactly(ORIGINAIS);
 		// Fim do enum = documento do que entrou depois: a partir daqui é só acréscimo.
-		assertThat(nomes[nomes.length - 1]).isEqualTo("GHOST");
+		assertThat(nomes[nomes.length - 1]).isEqualTo("HEART_PURPLE");
 	}
 }
