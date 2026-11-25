@@ -42,7 +42,7 @@ public class ProvaDaPunicao {
 	/** Cabe no body da notificacao (2.000) junto da abertura e da justificativa. */
 	static final int MAX_TRECHO = 140;
 
-	/** Para que serve a punição, em português — o texto que a conta punida lê. */
+	/** Por que a punição foi aplicada, em português — o texto que a conta punida lê. */
 	public static String justificativaPublica(ReportReason reason) {
 		return switch (reason) {
 			case AI_GENERATED -> "o conteúdo foi identificado como gerado por IA e apresentado como se fosse seu";

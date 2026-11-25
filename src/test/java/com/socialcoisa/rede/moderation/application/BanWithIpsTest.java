@@ -62,7 +62,6 @@ class BanWithIpsTest {
 			mock(com.socialcoisa.rede.feed.application.port.in.PurgeAuthorContentUseCase.class),
 			mock(com.socialcoisa.rede.shared.sanctions.SanctionGateReader.class),
 			ipBlockService,
-			mock(ProvaDaPunicao.class),
 			CLOCK, 200, 3
 		));
 	}

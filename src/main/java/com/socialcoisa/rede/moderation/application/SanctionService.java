@@ -130,18 +130,17 @@ public class SanctionService {
 	 */
 	public static String notificacao(Report report, String trecho, String abertura) {
 		StringBuilder texto = new StringBuilder(abertura);
-		texto.append(". Talvez voce nao possa publicar nem comentar").append(COMO_RECORRER);
+		texto.append(". Enquanto a restricao vale, voce nao pode publicar nem comentar").append(COMO_RECORRER);
 		texto.append(" Justificativa: ").append(justificativaDaDenuncia(report));
 		appendTrecho(texto, trecho);
 		return texto.toString();
 	}
 
-	/** Justificativa + prova para a punição direta do painel, que não passa por denúncia. */
-	public static String notificacaoDireta(String abertura, String motivo, String trecho) {
+	/** Justificativa para a punição direta do painel, que não passa por denúncia. */
+	public static String notificacaoDireta(String abertura, String motivo) {
 		StringBuilder texto = new StringBuilder(abertura);
 		texto.append(". A punicao pode ser retirada por um administrador se ela tiver sido um erro");
 		texto.append(" Justificativa: ").append(motivo);
-		appendTrecho(texto, trecho);
 		return texto.toString();
 	}
 
