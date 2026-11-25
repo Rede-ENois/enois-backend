@@ -18,12 +18,13 @@ MIGRATION = ROOT / "src/main/resources/db/migration/V379__vagas_externas_texto_u
 TABELA = "external_jobs"
 
 # Colunas de texto depois da migracao, na forma como a consulta do teste devolve cada linha:
-# coluna, charset, collation, nulidade, tipo e default (o coalesce marca quem nao tem default).
+# coluna, charset, collation, nulidade, tipo e default (o conjunto de resultados do MariaDB e o
+# texto '' para default nulo; o '<sem default>' no fim e literal e distingue da consulta vazia).
 # Nenhuma mao unica pode acabar em NULL: o mariadb --batch escreve esse NULL igual ao de consulta
 # vazia, e o teste perde a coluna que ficou de fora.
 COLUNAS = f"""
     select column_name, character_set_name, collation_name, is_nullable, column_type,
-           coalesce(column_default, '<sem default>')
+           '%s' as sem_default
     from information_schema.columns
     where table_schema = 'vagas' and table_name = 'external_jobs' and column_name in (
         'platform', 'external_id', 'title', 'company', 'location', 'url', 'canonical_url',
@@ -44,7 +45,7 @@ ESPERADO = """
     description|utf8mb4|utf8mb4_unicode_ci|YES|varchar(5000)|<sem default>
     employment_type|utf8mb4|utf8mb4_unicode_ci|YES|varchar(40)|<sem default>
     external_id|utf8mb4|utf8mb4_unicode_ci|NO|varchar(255)|<sem default>
-    external_status|utf8mb4|utf8mb4_unicode_ci|NO|varchar(32)|FOUND
+    external_status|utf8mb4|utf8mb4_unicode_ci|NO|varchar(32)|FOUND|<sem default>
     level|utf8mb4|utf8mb4_unicode_ci|YES|varchar(20)|<sem default>
     location|utf8mb4|utf8mb4_unicode_ci|YES|varchar(255)|<sem default>
     platform|utf8mb4|utf8mb4_unicode_ci|NO|varchar(64)|<sem default>
@@ -193,7 +194,7 @@ class ExternalJobsTextoUtf8mb4MigrationTests(unittest.TestCase):
     def test_colunas_de_texto_declaram_utf8mb4(self):
         self.maxDiff = None
         self.assertEqual(
-            "\n".join("	".join(linha.split("|")) for linha in ESPERADO.strip().splitlines()),
+            "\n".join("\t".join(linha.split("|")) for linha in ESPERADO.strip().splitlines()),
             self.sql(COLUNAS),
         )
 
