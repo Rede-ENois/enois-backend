@@ -13,6 +13,27 @@ O modelo de dados já era S3-shaped desde o V319: `bucket` + `object_key` único
 sem normalização, índice para listagem por prefixo. O gateway **reusa** esse catálogo; não há segundo
 Storage.
 
+## 1.1 Escopo congelado do Storage v1 (ciclo 155)
+
+O Storage v1 está **fechado** contra os doze critérios do §25 do brief, verificados pela sequência
+real em `scripts/tests/storage-acceptance.sh` (§4.69). A conformidade S3 não tem fim — o que fica
+de fora do v1 não é lacuna escondida, é recusa declarada:
+
+| o que o S3 tem e aqui não | resposta | por quê |
+|---|---|---|
+| `GET ?torrent` | `501 NotImplemented` | não há camada BitTorrent; quem quer torrent usa o cliente |
+| `GET ?partNumber` | `501 NotImplemented` | parte só existe dentro de um upload em andamento |
+| `DELETE ?versionId` | `501 NotImplemented` | apagar versão mexe no histórico e na colocação das cópias; o caminho é `copyTo` a partir da versão (§4.68) |
+| object-lock / retention | `501 NotImplemented` | retenção exige relógio confiável por objeto e política de custódia fora do escopo do v1 |
+| ACL, tagging, bucket policy | `GET ?acl` do bucket é lido; **escrever** ACL/tagging/policy → `501 NotImplemented` (ou `400` no XML inválido) | a autoridade é a credencial do dono e o bucket dele; um segundo modelo de permissão seria um segundo sistema |
+| STS (`X-Amz-Security-Token`) | credencial fixa | credenciais temporárias exigem um emissor de tokens; a credencial por dono cobre o v1 |
+
+Estas recusas são **decisão**, não pendência: mudar qualquer linha acima é um ciclo novo com o
+brief do lado. O que fica para o roadmap não é o protocolo — são as **fases 3–6 do brief**
+(erasure coding, CDN de borda, painel do participante), que o v1 não promete.
+
+O raciocínio completo, e o que o v1 de fato entrega, estão no §6 ("O que NÃO está entregue").
+
 ## 2. Credencial: separada da chave de nó, de propósito
 
 `network_storage_s3_credentials` (V357) tem Access Key, segredo e **escopo**:
@@ -2141,6 +2162,129 @@ comportamento de antes); versão inexistente virando a corrente; apagar versão 
 lápide); `versionId` não numérico virando a corrente. A conferência do dono tem o próprio caso: sem
 ela, as duas asserções da linha alheia ficam vermelhas.
 
+## 4.69 A aceitação do §25 roda como harness (ciclo 155)
+
+O brief do Storage (§25) pede doze critérios de aceitação escritos como comportamento de um
+sistema vivo — "um participante instala e vincula o servidor", "a indisponibilidade de um nó não
+compromete arquivos com redundância saudável". Cada peça tinha teste; o que nunca existia era a
+**sequência**, com o Control Plane de verdade, banco MariaDB 11.4 real e um cliente S3 assinando.
+
+Agora existe: `scripts/tests/storage-acceptance.sh` sobe um MariaDB efêmero (container com nome
+aleatório, destruído no fim) e o app em porta livre, e percorre o §25 pela API:
+
+| item | o que o harness prova |
+|---|---|
+| §25.1 | o admin gera a chave de provisionamento (`POST /admin/network/nodes/provision-token`) |
+| §25.2 | dois participantes se vinculam com a chave: `enroll` → aprovação → `keys` → `heartbeat` |
+| §25.3 | grava e lê pela API S3 com **SigV4 real** (`scripts/tests/s3client.py`), byte a byte |
+| §25.7 | o objeto é distribuído: réplica 0 do Control Plane + cópia de nó (alvo lido do próprio scrub) |
+| §25.8 | o catálogo e o **arquivo no disco do nó** têm o sha-256 do que o cliente gravou |
+| §25.10 | com um nó pausado, o objeto continua sendo lido e a varredura aponta a lacuna |
+| §25.11 | o nó retoma, a cura despacha e o nó repõe a cópia até a durabilidade voltar ao alvo |
+| §25.12 | o nó revogado não opera mais (`NODE_KEY_INVALID`), não recebe chave nova (`NODE_REVOKED`) e o objeto continua servível |
+
+O executor do participante é `scripts/tests/node-executor.py`: o mesmo caminho do
+`deploy/node-runtime/node-runtime.sh` (config assinada conferida contra o pino → `tasks/next` →
+baixa → mede → `POST .../replica` → `tasks/{id}/result`), limitado ao que o cenário usa. O par
+Ed25519 da config é gerado pelo harness e o privado sobe pelo `--rede.network.config.signing-key`
+— a config que o nó aceita é assinada de verdade, não um "signed:true" de mentira.
+
+**O que o harness mostrou de operação** (e ficou declarado no próprio script):
+
+- o `PUT` grava no Control Plane e **designa** a cópia; quem **enfileira** a tarefa é o despacho
+  (`POST /admin/network/nodes/storage/objects/{id}/dispatch`). Sem ele, a colocação fica
+  `PENDING_REMOTE` e o nó não tem o que executar — é o desenho (o operador decide o tráfego de
+  corpo), e o harness segue a ordem que o operador seguiria;
+- a pausa do participante (`POST /network/participant/nodes/{id}/pause`) é observada pelo Control
+  Plane no pedido seguinte, não no mesmo instante — o harness espera a janela em vez de afirmar o
+  contrário;
+- `SUSPENDED` não serve para o ciclo de vida do §25.10/§25.11: ele **revoga as chaves** e o nó não
+  voltaria. A pausa é do dono e tem volta (`/resume`).
+
+**Verificação:** `storage-acceptance.sh` **PASS 14 | FAIL 0**, rodado em série com os outros 13
+harnesses (**14/14**). Mutações no próprio harness, cada uma derrubando a asserção que ela mede:
+assinar o caminho do servidor (`/s3/…`) em vez do do protocolo (§25.3); executar a tarefa sem
+confirmar a réplica (§25.7/§25.11); não pausar o nó (§25.10); não retomar (§25.11); não executar a
+cura (§25.11); digest do arquivo do nó trocado (§25.8). Uma sobreviveu e foi **corrigida como
+asserção** (ver §4.70): o executor que não confere o que baixou — o Control Plane mede de novo e
+recusa, então a garantia vale de qualquer jeito; a conferência do nó é a primeira linha, não a
+única.
+
+## 4.70 O teste que proibia `"abc"` media a sorte do bucket (ciclo 155)
+
+`S3GatewayTests.assinatura_de_outro_servico_ou_regiao_e_recusada` fechava cada caso com
+`doesNotContain("abc")`, pensando no conteúdo do objeto. O `<Resource>` da resposta de erro ecoa o
+caminho (`GET /s3/<bucket>/x.txt`), e o bucket é sorteado com o prefixo `sc` — um sorteio que caia
+em `scabc…` deixava o teste vermelho **sem que nada vazasse**. Foi o que aconteceu na suíte do
+ciclo 155 (uma falha em 4620), e a sonda confirmou: bucket fixo `scabc1234` → falha; o mesmo teste
+com qualquer outro bucket → verde.
+
+**Agora:** o bucket do teste nasce com prefixo `bkt`, e a garantia que importa — o segredo não
+aparece na resposta — fica onde ela pode falhar: em `assinatura_com_segredo_errado_e_recusada`, que
+passa por `verify()` de verdade (`doesNotContain(SECRET)`). Os casos de escopo continuam proibindo
+`"abc"`, porque ali a recusa acontece **antes** da verificação e o segredo nunca entra em cena.
+
+**Verificação:** a mutação que ecoa o segredo na mensagem de recusa (`"A assinatura nao confere: " +
+secret`) derruba o teste da assinatura errada e **não** derruba os de escopo — o que mostra que a
+asserção nova mede o que diz medir. Com o código restaurado, os dois verdes. Suíte
+**4620/0/0/1**.
+
+## 4.71 `DELETE /{bucket}?acl` apagava o bucket (ciclo 155)
+
+O §4.38 declarou as 17 entradas de `SUBRECURSOS_DE_BUCKET_NAO_IMPLEMENTADOS` recusadas com `501` e
+registrou um teste que percorria a lista inteira. O teste nunca entrou no repositório (não há
+`delete_de_subrecurso_nao_apaga_o_bucket_e_o_dono_esvaziado_pode_apagar`), e a lista tinha um nome a
+menos do que o que o gateway conhece: **`acl`**.
+
+| antes | agora |
+|---|---|
+| `DELETE /{bucket}?acl` (bucket com objeto vivo) → `409 BucketNotEmpty` | `501 NotImplemented` |
+| `DELETE /{bucket}?acl` (bucket esvaziado) → `204` e o **bucket some** | `501 NotImplemented`, nada alterado |
+
+O `?acl` é lido de propósito (`GET /{bucket}?acl` responde `<AccessControlPolicy>`, §4.32); apagá-lo
+não existe e não podia virar `DeleteBucket`.
+
+**Verificação:** `S3GatewayTests` **+1** (`delete_de_bucket_com_cada_subrecurso_recusa_e_nao_apaga_o_bucket`),
+que percorre a lista inteira e depois apaga o bucket de verdade (`204`, some de `ListBuckets`) — a
+recusa é do subrecurso, não da rota. Vermelho antes: `?acl` respondia `204`/`409`; mutação que tira
+`acl` da lista derruba o teste, restaurada fica verde.
+
+**A lista ainda tinha outros cinco nomes de fora** (`location`, `versioning`, `lifecycle`, `uploads`,
+`versions`, medido: o `DELETE` de cada um respondia `204` e apagava o bucket) — e o teste percorria a
+mesma constante da guarda, então não podia vê-los. A correção e o teste que deriva os nomes da rota
+estão no **§4.72**.
+
+## 4.72 `DELETE /{bucket}?<subrecurso>` não é `DeleteBucket` — a lista fechou de verdade (ciclo 155)
+
+O §4.71 acrescentou `acl` à guarda e um teste que **percorria a própria lista** — código e teste
+concordando por construção, então nenhum dos dois podia ver o que faltava.
+
+Medido no head anterior, com o bucket de lápide do dono:
+
+```
+DELETE /s3/<b>?location   → 204   DELETE /s3/<b>?versioning → 204   DELETE /s3/<b>?lifecycle → 204
+DELETE /s3/<b>?uploads    → 204   DELETE /s3/<b>?versions   → 204   bucket ainda existe? false
+```
+
+`?versioning` é o pior dos cinco: o `PUT` do mesmo subrecurso **age** (grava a política), então
+"desligue o versionamento" **destruía o bucket**. `?lifecycle` é a política do varredor (§4.36);
+`?uploads` e `?versions` são listagens, e quem tentasse "cancelar" ou "limpar" esvaziava o bucket.
+
+**Agora:**
+
+- Os cinco nomes entram na guarda: `location`, `versioning`, `lifecycle`, `uploads`, `versions`.
+  `DELETE` em qualquer um deles responde `501 NotImplemented` e o bucket fica.
+- O teste **deriva a lista da rota**, não da constante: lê os `params` dos mapeamentos `/{bucket}` do
+  controlador, descarta os que têm `DELETE` próprio e os que não são verbo próprio de subrecurso
+  (`?delete` é o `DeleteObjects`, que aqui só existe em `POST`), e exige `501` para cada um. Um
+  subrecurso novo que ganhe `GET` e fique fora da guarda passa a derrubar o teste — é o único teste
+  que fecha a família, e não só o nome da vez.
+
+**Verificação:** `S3GatewayTests` **89/89**; o teste do `DELETE` percorre os nomes derivados e cada
+um responde `501 <Code>NotImplemented</Code>` com o bucket intacto, que depois é apagado de verdade
+(`204`) e some de `ListBuckets`. Vermelho antes: com a guarda parada em `acl`, o teste falha em
+`DELETE ?lifecycle`.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
@@ -2272,3 +2416,36 @@ trocado por `403`; e ritmo só no caminho do cabeçalho.
   (`rede.storage.max-bytes-per-owner`, doc 12 §2.3): o upload que estoura responde `507 QuotaExceeded`
   no XML do S3, com o número na mensagem. Duas credenciais do mesmo dono dividem a mesma cota.
   O **rate limiting por credencial existe** desde o ciclo 74 (§5.2).
+
+## 4.72 `DELETE /{bucket}?<subrecurso>` não é `DeleteBucket` — a lista fechou de verdade (ciclo 155)
+
+O §4.38 dizia que `DELETE /{bucket}?cors` (e os vizinhos) respondia `501` e não apagava o bucket. A
+guarda `SUBRECURSOS_DE_BUCKET_NAO_IMPLEMENTADOS` recusava 17 nomes, e o `?acl` tinha ficado de fora.
+A primeira correção acrescentou `acl` e criou um teste que **percorria a própria lista** — código e
+teste concordando por construção, então nenhum dos dois podia ver o que faltava.
+
+Medido no head anterior, com o bucket de lápide do dono:
+
+```
+DELETE /s3/<b>?location   → 204   DELETE /s3/<b>?versioning → 204   DELETE /s3/<b>?lifecycle → 204
+DELETE /s3/<b>?uploads    → 204   DELETE /s3/<b>?versions   → 204   bucket ainda existe? false
+```
+
+`?versioning` é o pior dos cinco: o `PUT` do mesmo subrecurso **age** (grava a política), então "desligue
+o versionamento" **destruía o bucket**. `?lifecycle` é a política do varredor (§4.36); `?uploads` e
+`?versions` são listagens, e quem tentasse "cancelar" ou "limpar" esvaziava o bucket.
+
+### Agora
+
+- Os cinco nomes entram na guarda: `location`, `versioning`, `lifecycle`, `uploads`, `versions`.
+  `DELETE` em qualquer um deles responde `501 NotImplemented` e o bucket fica.
+- O teste **deriva a lista da rota**, não da constante: lê os `params` dos mapeamentos `/{bucket}` do
+  controlador, descarta os que têm `DELETE` próprio e os que não são `POST` de subrecurso (`?delete` é
+  o verbo do `DeleteObjects`, não subrecurso de bucket), e exige `501` para cada um. Um subrecurso
+  novo que ganhe `GET` e fique fora da guarda passa a derrubar o teste — é o único teste que fecha a
+  família, e não só o nome da vez.
+
+**Verificação:** `S3GatewayTests` **89/89**; o teste do `DELETE` percorre os nomes derivados (19) e
+cada um responde `501 <Code>NotImplemented</Code>` com o bucket intacto, que depois é apagado de
+verdade (`204`) e some de `ListBuckets`. Vermelho antes: com a guarda parada em `acl`, o teste falha
+em `DELETE ?lifecycle`. Harness `s3client.py`/`node-executor` do §25 segue verde (14 PASS, 6 mutações).

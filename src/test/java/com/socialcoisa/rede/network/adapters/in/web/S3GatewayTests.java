@@ -16,10 +16,12 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -653,6 +655,11 @@ class S3GatewayTests {
 
 	/**
 	 * Assinatura com outro segredo é recusada — e a resposta continua em XML do S3.
+	 *
+	 * <p>Aqui mora a asserção que mede o que importa: o segredo verdadeiro não pode aparecer na
+	 * resposta. É o caminho mais promissor para ele vazar (a recusa de assinatura é a única que o
+	 * tem em mãos). Antes, esta garantia ficava numa asserção {@code doesNotContain("abc")} — o
+	 * conteúdo do objeto —, que só caía por acaso, e nunca quando o segredo saía (ciclo 155).</p>
 	 */
 	@Test
 	void assinatura_com_segredo_errado_e_recusada() throws Exception {
@@ -661,7 +668,8 @@ class S3GatewayTests {
 		var result = mockMvc.perform(list).andReturn();
 
 		assertThat(result.getResponse().getStatus()).isEqualTo(403);
-		assertThat(result.getResponse().getContentAsString()).contains("SignatureDoesNotMatch");
+		assertThat(result.getResponse().getContentAsString()).contains("SignatureDoesNotMatch")
+			.doesNotContain(SECRET);
 	}
 
 	/**
@@ -1810,8 +1818,111 @@ class S3GatewayTests {
 	}
 
 	/**
-	 * Bucket que o dono da credencial <b>nunca gravou</b> continua {@code 403} — a
-	 * regra nova de
+	/**
+	 * O {@code DELETE /{bucket}?<subrecurso>} não é {@code DeleteBucket}: cada subrecurso de bucket
+	 * que este gateway não endereça responde {@code 501 NotImplemented} e o bucket continua lá.
+	 *
+	 * <p><b>Antes:</b> o §4.38 declarou a lista inteira recusada, mas nenhum teste percorria a lista
+	 * — e o {@code ?acl} tinha ficado <b>fora</b> dela: {@code DELETE /{bucket}?acl} num bucket sem
+	 * objeto vivo entrava no {@code DeleteBucket} e respondia {@code 204}, apagando o bucket em
+	 * resposta a "apague a ACL". É o mesmo defeito que o {@code ?cors} tinha, um nome à frente
+	 * (ciclo 155).</p>
+	 *
+	 * <p><b>Agora:</b> a lista é derivada dos mapeamentos de bucket do próprio controlador — todo
+	 * nome em {@code params} que não tem {@code DELETE} próprio — e percorrida inteira, um nome por
+	 * vez; depois o bucket é apagado de verdade ({@code 204}) e some de {@code ListBuckets} — a
+	 * recusa é do subrecurso, não da rota. Um teste que percorresse a constante da guarda
+	 * concordaria com ela por construção: foi assim que {@code ?acl} e depois {@code ?versioning},
+	 * {@code ?lifecycle}, {@code ?uploads}, {@code ?versions} e {@code ?location} ficaram de fora
+	 * (medido: {@code DELETE ?versioning} apagava o bucket) enquanto o teste ficava verde.</p>
+	 */
+	@Test
+	void delete_de_bucket_com_cada_subrecurso_recusa_e_nao_apaga_o_bucket() throws Exception {
+		// O bucket precisa existir do ponto de vista do dono: o `DeleteBucket` prova donagem pelo
+		// catálogo (objeto vivo ou lápide), e sem nenhuma linha o 403 viria antes da rota. Gravar e
+		// apagar deixa a lápide que o §4.38 usa como prova de donagem.
+		gravar("sub/acl.txt", "x");
+		MockHttpServletRequestBuilder limpar = delete("/s3/" + bucket + "/sub/acl.txt");
+		assinar(limpar, SECRET, shaVazio());
+		mockMvc.perform(limpar).andExpect(status().isNoContent());
+
+		var subrecursos = subrecursosDeBucketDaRota();
+		assertThat(subrecursos).as("a derivação achou os nomes reconhecidos pela rota").isNotEmpty()
+			.contains("acl", "versioning", "lifecycle", "uploads", "versions", "location");
+		for (String sub : subrecursos) {
+			MockHttpServletRequestBuilder d = delete("/s3/" + bucket + "?" + sub);
+			assinar(d, SECRET, shaVazio());
+			var resposta = mockMvc.perform(d).andReturn().getResponse();
+			assertThat(resposta.getStatus()).as("DELETE ?" + sub).isEqualTo(501);
+			assertThat(resposta.getContentAsString()).as("DELETE ?" + sub).contains("<Code>NotImplemented</Code>");
+		}
+
+		// O bucket sobreviveu a todas as recusas: apagar de verdade continua funcionando.
+		MockHttpServletRequestBuilder delBucket = delete("/s3/" + bucket);
+		assinar(delBucket, SECRET, shaVazio());
+		mockMvc.perform(delBucket).andExpect(status().isNoContent());
+		MockHttpServletRequestBuilder listar = get("/s3");
+		assinar(listar, SECRET, shaVazio());
+		var resultado = mockMvc.perform(listar).andExpect(status().isOk()).andReturn();
+		assertThat(resultado.getResponse().getContentAsString()).doesNotContain("<Name>" + bucket + "</Name>");
+	}
+
+	/**
+	 * Os subrecursos de <b>bucket</b> que a rota reconhece, lidos dos mapeamentos — não da constante
+	 * da guarda. É o que impede o sétimo nome de reabrir o {@code DeleteBucket}: quem ganhar um
+	 * {@code GET ?novo} passa a aparecer aqui e o teste do {@code DELETE} exige a recusa.
+	 *
+	 * <p>Ficam de fora os nomes com {@code DELETE} próprio ({@code ?delete}, do
+	 * {@code DeleteObjects}, e todo mapeamento com {@code method = DELETE}), e os de objeto
+	 * ({@code /{bucket}/{*key}}), que têm outra lista de recusa.</p>
+	 */
+	private static List<String> subrecursosDeBucketDaRota() {
+		var nomes = new TreeSet<String>();
+		for (var metodo : S3GatewayController.class.getDeclaredMethods()) {
+			for (var anotacao : metodo.getDeclaredAnnotations()) {
+				// A forma do mapeamento vem do atributo da PRÓPRIA anotação (`@GetMapping`,
+				// `@RequestMapping`). Lida pelo método (`MergedAnnotations.from(metodo)`), o Spring
+				// para na primeira meta-anotação e os `@GetMapping` do bucket somem: medido, a
+				// derivação achava só `lifecycle`, `versioning` e `delete`.
+				String[] valores = atributo(anotacao, "value");
+				String[] parametros = atributo(anotacao, "params");
+				Object[] metodos = (Object[]) atributoOu(anotacao, "method", new Object[0]);
+				if (valores.length == 0) {
+					continue;
+				}
+				if (Arrays.stream(metodos).anyMatch(m -> "DELETE".equals(m.toString()))
+						|| Arrays.stream(valores).noneMatch("/{bucket}"::equals)) {
+					continue;
+				}
+				for (String param : parametros) {
+					String nome = param.replace("=", "").trim();
+					if (!nome.isEmpty()) {
+						nomes.add(nome);
+					}
+				}
+			}
+		}
+		// `?delete` não é subrecurso de bucket no S3: é o verbo do `DeleteObjects`, que aqui só
+		// existe em `POST`. O `DELETE ?delete` não é uma operação que o gateway reconheça — ele cai
+		// no `DeleteBucket`, como qualquer outro `DELETE` de bucket, e não entra na guarda.
+		nomes.remove("delete");
+		return List.copyOf(nomes);
+	}
+
+	private static String[] atributo(java.lang.annotation.Annotation anotacao, String nome) {
+		return (String[]) atributoOu(anotacao, nome, new String[0]);
+	}
+
+	private static Object atributoOu(java.lang.annotation.Annotation anotacao, String nome, Object padrao) {
+		try {
+			return anotacao.annotationType().getMethod(nome).invoke(anotacao);
+		} catch (ReflectiveOperationException | ClassCastException e) {
+			return padrao;
+		}
+	}
+
+	/**
+	 * Bucket que o dono da credencial <b>nunca gravou</b> continua {@code 403} — a regra nova de
 	 * donagem não pode virar "qualquer bucket é apagável".
 	 *
 	 * <p>
@@ -3604,7 +3715,9 @@ class S3GatewayTests {
 	@Test
 	void assinatura_de_outro_servico_ou_regiao_e_recusada() throws Exception {
 		byte[] corpo = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-		String b = "sc" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		// O bucket nao comeca mais com "sc": o `<Resource>` do erro ecoa o caminho, e um sorteio que
+		// caia em `scabc...` fazia a assercao abaixo falhar sem vazar nada (ciclo 155).
+		String b = "bkt" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
 		MockHttpServletRequestBuilder r = put("/s3/" + b + "/x.txt").content(corpo);
 		assinar(r, SECRET, shaDe("abc"));
 		assertThat(mockMvc.perform(r).andReturn().getResponse().getStatus()).isEqualTo(200);
@@ -3634,6 +3747,11 @@ class S3GatewayTests {
 			assertThat(rr.getStatus()).as("regiao '" + e[0] + "' servico '" + e[1] + "'")
 					.isEqualTo(Integer.parseInt(e[2]));
 			if (!"200".equals(e[2])) {
+				// O escopo errado é recusado antes de a assinatura ser verificada — o segredo nunca
+				// entra em cena aqui. A garantia de que ele não sai na resposta mora no teste da
+				// assinatura errada (`assinatura_com_segredo_errado_e_recusada`). Antes esta linha
+				// proibia a string `"abc"` (o conteúdo do objeto, irrelevante nesta rota), que casava
+				// por acaso com um bucket sorteado `scabc...` (ciclo 155).
 				assertThat(rr.getContentAsString()).contains("<Code>SignatureDoesNotMatch</Code>")
 						.doesNotContain("abc");
 			}
