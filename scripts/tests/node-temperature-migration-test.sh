@@ -24,7 +24,7 @@ fail() { printf '[FAIL] %s\n' "$1" >&2; FAIL=$((FAIL + 1)); }
 
 IO_MIGRATIONS=(V305__network_nodes.sql V325__network_node_observability.sql
   V321__network_node_observed_disk.sql V341__network_node_observed_disk_total.sql
-  V343__network_node_observed_disk_total.sql V379__network_node_disk_io.sql
+  V343__network_node_observed_disk_total.sql V380__network_node_disk_io.sql
   V382__network_node_temperature.sql)
 for migration in "${IO_MIGRATIONS[@]}"; do
   [[ -f "$MIGRATIONS/$migration" ]] || { fail "migração ausente: $migration"; exit 1; }
@@ -100,7 +100,7 @@ column_exists() {
 
 for migration in V305__network_nodes.sql V325__network_node_observability.sql \
     V321__network_node_observed_disk.sql V341__network_node_observed_disk_total.sql \
-    V343__network_node_observed_disk_total.sql V379__network_node_disk_io.sql; do
+    V343__network_node_observed_disk_total.sql V380__network_node_disk_io.sql; do
   if apply "$migration" >/dev/null 2>&1; then
     pass "base aplica ($migration)"
   else
