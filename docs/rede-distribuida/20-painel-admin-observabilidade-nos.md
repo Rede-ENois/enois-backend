@@ -99,7 +99,7 @@ Um nó com 8 GB cedidos e 7,9 GB **livres** era "teto atingido" e saía do balan
 ociosa; um nó com 8 GB cedidos e 100 MB livres aparecia com "uso de 100 MB". Duas medidas opostas na
 mesma coluna, e a decisão de designação tomada sobre a errada.
 
-### Agora (V378)
+### Agora (V381)
 
 | campo | o que é | origem |
 |---|---|---|
@@ -119,8 +119,21 @@ Decisões:
   resposta honesta. Zero não deriva: `meminfo` ilegível não é "tudo em uso".
 - **Nada é inventado quando o kernel não expõe.** Sem PSI (kernel < 4.20, ou desligado) o campo não
   vai; sem swap no `meminfo`, idem. Nulo é "não medido", o mesmo contrato do resto do heartbeat.
-- **A coluna nova nasce nula no nó já registrado** — ninguém mediu o disponível dele ainda, e o
-  próximo heartbeat preenche.
+- **O nó já registrado é reinterpretado na migração**: todo valor não nulo de `observed_memory_mb`
+  anterior à V381 veio do runtime antigo, que mandava o disponível. A V381 copia esse número para
+  `observed_memory_available_mb` e deixa o uso nulo (`NULL|7900|…`), e o `usageFrom` deriva o uso
+  como para qualquer runtime antigo — nulo quando o disponível passa do declarado. Sem esse update
+  o nó que já estava gravado continuaria "teto atingido" até o próximo heartbeat, que é exatamente o
+  defeito que a V381 corrige.
+- **A série histórica usa o uso derivado**: `network_node_samples.memory_mb` recebe o valor que o
+  serviço derivou para o nó, não o campo cru do corpo. O runtime antigo registrava o disponível na
+  série também, e a amostra passaria a dizer "7,9 GB em uso" da máquina ociosa.
+- **Swap e pressão: medidos e enviados, ainda não consumidos.** O runtime do ciclo 157 mede
+  `swapUsedMb` (`SwapTotal - SwapFree`) e `memoryPressurePercent` (`avg300` do `some` em
+  `/proc/pressure/memory`) e os manda no corpo do heartbeat, mas o Control Plane **ainda não os
+  recebe** no contrato do `Observed` nem os guarda: hoje eles são descartados na borda. Quando
+  entrarem, precisam de coluna própria na série e do quadro na página do nó — o campo não aparece
+  no painel enquanto isso.
 
 ### Verificação
 
@@ -129,10 +142,10 @@ Decisões:
   disponível acima do declarado não vira uso; zero não vira uso; sem memória não afirma nada.
 - `node-executor-test` (**+4**, 223 asserções): o payload real do ciclo leva
   `memoryMb`, `memoryAvailableMb` e `swapUsedMb`, e o uso **não** é o mesmo número do disponível.
-- `scripts/tests/node-memory-migration-test.sh` em **MariaDB 11.4 real**: **16 PASS / 0 FAIL** —
-  V378 aplicada **duas vezes**; nó do contrato antigo preservado (`7900|NULL|2|8192|ACTIVE`); a
-  coluna nova não recebe zero; o update do heartbeat grava as três colunas; a régua do teto confere
-  no banco; tipo `int` e `NULL` aceito.
+- `scripts/tests/node-memory-migration-test.sh` em **MariaDB 11.4 real**: V381 aplicada **duas
+  vezes**; nó do contrato antigo reinterpretado (`NULL|7900|2|8192|ACTIVE`), inclusive quando o
+  disponível passa do declarado; a coluna nova não recebe zero; o update do heartbeat grava as três
+  colunas; a régua do teto confere no banco; tipo `int` e `NULL` aceito.
 - Mutações: runtime mandando o disponível no lugar do uso (derruba 1 do harness); não derivar o
   runtime antigo (2); derivar disponível acima do declarado (1); zero virando uso (1); migração sem
   a coluna (9 falhas). Todas restauradas verdes.

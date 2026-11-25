@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Migração V378 (memória do nó em uso + disponível) contra um MariaDB real, aplicada DUAS vezes.
+# Migração V381 (memória do nó em uso + disponível) contra um MariaDB real, aplicada DUAS vezes.
 #
 # O que esta migração promete e o que aqui se mede:
 #   1. `observed_memory_available_mb` nasce, e é idempotente (2ª rodada sem erro);
-#   2. nó já registrado ANTES da migração não perde nada: a linha continua inteira, e o disponível
-#      novo é nulo — "não medido" é a resposta para o que ninguém mediu ainda;
-#   3. o valor antigo de `observed_memory_mb` é preservado (a coluna não é renomeada, limpa nem
-#      convertida). Quem lê antes da migração continua lendo o mesmo número depois;
+#   2. nó já registrado ANTES da migração não perde a medida: o número que estava em
+#      `observed_memory_mb` era o DISPONÍVEL e vai para `observed_memory_available_mb`, com o uso
+#      nulo até o próximo heartbeat. Ler o antigo como uso manteria o nó "teto atingido" com a
+#      máquina ociosa — o defeito que a V381 corrige — até o heartbeat chegar;
 #   4. o UPSERT do heartbeat grava as duas colunas e não deixa `observed_running_tasks` para trás —
 #      o `set` novo é em uma instrução só, e uma coluna esquecida ali pararia de ser atualizada.
 #
@@ -24,7 +24,7 @@ FAIL=0
 pass() { printf '[PASS] %s\n' "$1"; PASS=$((PASS + 1)); }
 fail() { printf '[FAIL] %s\n' "$1" >&2; FAIL=$((FAIL + 1)); }
 
-MEM_MIGRATIONS=(V305__network_nodes.sql V378__network_node_memory_split.sql)
+MEM_MIGRATIONS=(V305__network_nodes.sql V381__network_node_memory_split.sql)
 for migration in "${MEM_MIGRATIONS[@]}"; do
   [[ -f "$MIGRATIONS/$migration" ]] || { fail "migração ausente: $migration"; exit 1; }
 done
@@ -105,14 +105,21 @@ else
   exit 1
 fi
 
-# Nó registrado ANTES da V378, com as medidas do contrato antigo: `observed_memory_mb` guardava o
-# DISPONÍVEL que o runtime mandava (7900 de 8192), porque era o único campo de memória.
+# Nó registrado ANTES da V381, com as medidas do contrato antigo: `observed_memory_mb` guardava o
+# DISPONÍVEL que o runtime mandava (7900 de 8192), porque era o único campo de memória. E um segundo
+# nó cuja "disponível" passava do declarado (4096 de 2048): derivar daria uso negativo.
 db >/dev/null 2>&1 <<'SQL'
 insert into network_nodes (id, display_name, owner_user_id, status, profiles, declared_cpu_cores,
   declared_memory_mb, declared_disk_mb, declared_bandwidth_mbps, region, country,
   observed_cpu_percent, observed_memory_mb, observed_running_tasks, last_seen_at, created_at)
 values ('nd_mem_mig001', 'no-legado', 'user-mem', 'ACTIVE', 'NODE_WORKER', 4, 8192, 102400, 100,
   'sa-east-1', 'BR', 12.5, 7900, 2, now(3), now(3));
+
+insert into network_nodes (id, display_name, owner_user_id, status, profiles, declared_cpu_cores,
+  declared_memory_mb, declared_disk_mb, declared_bandwidth_mbps, region, country,
+  observed_cpu_percent, observed_memory_mb, observed_running_tasks, last_seen_at, created_at)
+values ('nd_mem_mig002', 'no-grande', 'user-mem', 'ACTIVE', 'NODE_WORKER', 2, 2048, 51200, 100,
+  'sa-east-1', 'BR', 3.0, 4096, 1, now(3), now(3));
 SQL
 if [[ $? -eq 0 ]]; then
   pass "nó do contrato antigo gravado antes da migração (memória = 7900)"
@@ -121,24 +128,31 @@ else
   exit 1
 fi
 
-if apply V378__network_node_memory_split.sql >/dev/null 2>&1; then
-  pass "V378 aplica sobre a tabela existente"
+if apply V381__network_node_memory_split.sql >/dev/null 2>&1; then
+  pass "V381 aplica sobre a tabela existente"
 else
-  fail "V378 falhou na 1ª aplicação"
-  db < "$MIGRATIONS/V378__network_node_memory_split.sql" 2>&1 | head -3 >&2
+  fail "V381 falhou na 1ª aplicação"
+  db < "$MIGRATIONS/V381__network_node_memory_split.sql" 2>&1 | head -3 >&2
 fi
 
 column_exists observed_memory_available_mb \
   && pass "coluna observed_memory_available_mb existe" \
   || fail "coluna observed_memory_available_mb não nasceu"
 
-# ---------------------------------------------------------------- dados preservados
-row=$(db -N -e "select concat_ws('|', observed_memory_mb, ifnull(observed_memory_available_mb, 'NULL'),
-  observed_running_tasks, declared_memory_mb, status) from network_nodes where id = 'nd_mem_mig001'" \
-  2>/dev/null | tr -d '[:space:]')
-[[ "$row" == "7900|NULL|2|8192|ACTIVE" ]] \
-  && pass "nó existente preservado: memória 7900, disponível NULL (não medido), resto igual" \
+# ---------------------------------------------------------------- dados reinterpretados
+row=$(db -N -e "select concat_ws('|', ifnull(observed_memory_mb, 'NULL'),
+  ifnull(observed_memory_available_mb, 'NULL'), observed_running_tasks, declared_memory_mb, status)
+  from network_nodes where id = 'nd_mem_mig001'" 2>/dev/null | tr -d '[:space:]')
+[[ "$row" == "NULL|7900|2|8192|ACTIVE" ]] \
+  && pass "nó antigo reinterpretado: disponível 7900, uso NULL (não medido), resto igual" \
   || fail "linha do nó mudou na migração (achei '$row')"
+
+row_grande=$(db -N -e "select concat_ws('|', ifnull(observed_memory_mb, 'NULL'),
+  ifnull(observed_memory_available_mb, 'NULL')) from network_nodes where id = 'nd_mem_mig002'" \
+  2>/dev/null | tr -d '[:space:]')
+[[ "$row_grande" == "NULL|4096" ]] \
+  && pass "disponível acima do declarado também vai para a coluna do disponível" \
+  || fail "nó com disponível acima do declarado ficou '$row_grande'"
 
 # A coluna nova não tem valor inventado: `NULL` é "não medido", e `0` afirmaria máquina sem memória
 # livre — a mesma distinção que o contrato faz em toda medida.
@@ -148,22 +162,25 @@ zeros=$(db -N -e "select count(*) from network_nodes where observed_memory_avail
   || fail "migração inventou zero em $zeros nó(s)"
 
 # ---------------------------------------------------------------- 2ª aplicação
-if apply V378__network_node_memory_split.sql >/dev/null 2>&1; then
-  pass "V378 reaplica sem erro (idempotente)"
+if apply V381__network_node_memory_split.sql >/dev/null 2>&1; then
+  pass "V381 reaplica sem erro (idempotente)"
 else
-  fail "V378 falhou na 2ª aplicação"
+  fail "V381 falhou na 2ª aplicação"
 fi
 column_exists observed_memory_available_mb \
   && pass "coluna continua existindo depois da 2ª rodada" \
   || fail "coluna sumiu na 2ª rodada"
+# `concat_ws` SALTA nulos: a linha reinterpretada é `NULL|7900|...`, e o recorte de duas colunas
+# volta só `7900`. A comparação é com essa forma, que é a mesma nas duas rodadas.
+antes_2a=$(printf '%s' "$row" | cut -d'|' -f2)
 row2=$(db -N -e "select concat_ws('|', observed_memory_mb, ifnull(observed_memory_available_mb, 'NULL'))
   from network_nodes where id = 'nd_mem_mig001'" 2>/dev/null | tr -d '[:space:]')
-[[ "$row2" == "$row" || "$row2" == "7900|NULL" ]] \
+[[ "$row2" == "$antes_2a" ]] \
   && pass "dados seguem intactos depois da 2ª rodada" \
   || fail "dados mudaram na 2ª rodada (achei '$row2')"
 
 # ---------------------------------------------------------------- upsert do heartbeat
-# A forma que o adapter usa: uma instrução só, com todas as colunas do heartbeat V378.
+# A forma que o adapter usa: uma instrução só, com todas as colunas do heartbeat V381.
 if db -e "update network_nodes set runtime_version = '0.1.0', observed_cpu_percent = 30.0,
   observed_memory_mb = 8000, observed_memory_available_mb = 192, observed_running_tasks = 0,
   last_seen_at = now(3) where id = 'nd_mem_mig001'" 2>/dev/null; then

@@ -156,7 +156,7 @@ assert_contains 'resultado carrega a tentativa vigente' "$(cat "$TMP/curl-calls"
 assert_contains 'output ecoa o idempotencyKey (prova de ciclo)' "$(cat "$TMP/curl-calls")" \
   '"output":"{\"echo\":\"idem-42\"}"'
 
-# Memória em DUAS medidas (V378): `memoryMb` é USO, `memoryAvailableMb` o disponível. O runtime
+# Memória em DUAS medidas (V381): `memoryMb` é USO, `memoryAvailableMb` o disponível. O runtime
 # mandava só `MemAvailable` como `memoryMb` — e o Control Plane comparava com o teto cedido, então
 # 7,9 GB livres de 8 GB declarados viravam "teto atingido". A prova no payload real do ciclo: os
 # dois campos presentes e DISTINTOS, dos quais o uso é menor que o disponível numa máquina ociosa
