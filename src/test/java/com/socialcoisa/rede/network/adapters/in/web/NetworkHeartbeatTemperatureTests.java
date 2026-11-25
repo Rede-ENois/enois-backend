@@ -99,6 +99,46 @@ class NetworkHeartbeatTemperatureTests {
 		assertThat(dbTemperature(node, "observed_temperature_c")).isEqualByComparingTo("39.4");
 	}
 
+	/**
+	 * O guarda de faixa do {@code graus()}: leitura fora de −40…110 °C não é temperatura. A faixa
+	 * existe porque sensor de ponto de critério (~115–125 °C) e sensor quebrado publicam valores que
+	 * não são a temperatura corrente — virarem alarme no painel seria pior que "não medido". Os testes
+	 * acima cobrem 39,6 / 39,4 / ausência; aqui ficam os dois extremos, o lixo não numérico e o
+	 * valor no limite, que é o caso que uma faixa mal escrita (inclusiva/exclusiva) deixa passar.
+	 */
+	@Test
+	void leituraForaDaFaixaOperacionalNaoViraTemperatura() throws Exception {
+		String admin = adminToken();
+		Node node = activeNode(admin, "fora-de-faixa");
+
+		// Um valor por heartbeat, na ordem: os dois fora, o lixo e o limite de cima (que É medida).
+		for (Object medida : List.of(150.0, -273.0, Double.NaN, 110.0)) {
+			jdbc.update("delete from network_node_samples where node_id = ?", node.id());
+			heartbeat(node, Map.of("cpuPercent", 5.0, "temperatureC", medida));
+			BigDecimal no = dbTemperature(node, "observed_temperature_c");
+			Double amostra = jdbc.queryForObject(
+				"select temperature_c from network_node_samples where node_id = ? order by sampled_at desc limit 1",
+				Double.class, node.id());
+			boolean limite = medida instanceof Double d && Double.isFinite(d) && d == 110.0;
+			if (limite) {
+				assertThat(no).as("110 °C é o limite da faixa, e é medida").isEqualByComparingTo("110.0");
+				assertThat(amostra).isEqualTo(110.0);
+			} else {
+				assertThat(no).as("leitura %s não é temperatura", medida).isNull();
+				assertThat(amostra).as("nem a série recebe o lixo (%s)", medida).isNull();
+			}
+		}
+
+		var painel = mockMvc
+			.perform(get("/admin/network/nodes/" + node.id() + "/observability").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andReturn();
+		var tree = objectMapper.readTree(painel.getResponse().getContentAsString());
+		assertThat(tree.get("summary").get("temperatureCLatest").asDouble())
+			.as("o painel diz a única medida real, e nunca 150")
+			.isEqualTo(110.0);
+	}
+
 	@Test
 	void semSensorOTemperaturaFicaDesconhecida() throws Exception {
 		String admin = adminToken();

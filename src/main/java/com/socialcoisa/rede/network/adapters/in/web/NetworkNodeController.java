@@ -120,19 +120,6 @@ class NetworkNodeController {
 	 * dele (brief §18, "consultar tráfego"); o Control Plane só recebe a contagem e não soma nada
 	 * por conta própria — quem transfere é a máquina do participante, e é ela que mede.
 	 */
-	/**
-	 * A temperatura em graus com uma casa — a precisão que um sensor tem. Vem como {@code Double} no
-	 * JSON e vira {@code BigDecimal} de uma casa para o banco guardar o número digitalizado (39,6 e
-	 * 39,4 são temperaturas diferentes, e arredondamento binário as confundiria). Leitura fora da
-	 * faixa operacional não é temperatura: o sensor devolveu lixo, e lixo não vira alarme.
-	 */
-	private static BigDecimal graus(Double celsius) {
-		if (celsius == null || celsius.isNaN() || celsius < -40 || celsius > 110) {
-			return null;
-		}
-		return BigDecimal.valueOf(celsius).setScale(1, java.math.RoundingMode.HALF_UP);
-	}
-
 	record Observed(Double cpuPercent, Integer memoryMb, Integer memoryAvailableMb, Integer runningTasks,
 			Long diskFreeMb, Long diskTotalMb, Double diskIops, Double diskLatencyMs, Double temperatureC, Long usedMb,
 			Long bytesInMb, Long bytesOutMb) {
@@ -232,6 +219,19 @@ class NetworkNodeController {
 			}
 		}
 		return remoteAddr == null || remoteAddr.isBlank() ? null : remoteAddr;
+	}
+
+	/**
+	 * A temperatura em graus com uma casa — a precisão que um sensor tem. Vem como {@code Double} no
+	 * JSON e vira {@code BigDecimal} de uma casa para o banco guardar o número digitalizado (39,6 e
+	 * 39,4 são temperaturas diferentes, e arredondamento binário as confundiria). Leitura fora da
+	 * faixa operacional não é temperatura: o sensor devolveu lixo, e lixo não vira alarme.
+	 */
+	private static BigDecimal graus(Double celsius) {
+		if (celsius == null || celsius.isNaN() || celsius < -40 || celsius > 110) {
+			return null;
+		}
+		return BigDecimal.valueOf(celsius).setScale(1, java.math.RoundingMode.HALF_UP);
 	}
 
 	@PostMapping("/nodes/heartbeat")
