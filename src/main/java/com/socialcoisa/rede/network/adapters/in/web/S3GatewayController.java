@@ -2799,7 +2799,7 @@ class S3GatewayController {
 			? s3Error(recusado.status(), "InvalidBucketName", recusado.getMessage())
 			: s3Error(recusado.status(), recusado.code(), recusado.getMessage());
 		if (recusado.etag() != null && !recusado.etag().isBlank()) {
-			traduzida.withEtag(recusado.etag());
+			traduzida = traduzida.withEtag(recusado.etag());
 		}
 		return traduzida;
 	}

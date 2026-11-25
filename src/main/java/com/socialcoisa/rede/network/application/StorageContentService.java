@@ -206,7 +206,7 @@ public class StorageContentService {
 		if (ifMatch != null && !ifMatch.isBlank() && !matchesForte(etag(object), ifMatch)) {
 			throw new ApiException(412, "PreconditionFailed",
 				"A pre-condicao If-Match nao confere com o ETag atual.").withEtag(etag(object));
-			}
+		}
 
 		List<StoragePlacement> location = storage.location(object.id());
 		if (location.isEmpty()) {

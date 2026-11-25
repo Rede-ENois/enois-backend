@@ -1898,7 +1898,7 @@ para evitar, por outra porta.
 | pedido | antes | agora |
 |---|---|---|
 | `If-Match` com o ETag atual | `200` | `200` (fluxo normal) |
-| `If-Match` com `"velho"`, `W/"velho"` ou lista sem o atual | `200` / `206` | `412 PreconditionFailed`, sem corpo, com `ETag` |
+| `If-Match` com `"velho"`, `W/"velho"` ou lista sem o atual | `200` / `206` | `412 PreconditionFailed`, XML (`<Code>PreconditionFailed</Code>`), com `ETag` |
 | `If-Match` com `W/<etag atual>` (validador fraco) | `200` / `206` | `412 PreconditionFailed` (comparação forte) |
 | `If-Match: *` | `200` | `200` (o objeto existe) |
 | `If-Match` com lista que **contém** o atual | `200` | `200` |
@@ -1914,7 +1914,7 @@ para evitar, por outra porta.
 - `If-Range` continua com a semântica dele (§4.47): sem casar, o corpo inteiro sai com `200`.
 
 **Verificação:** `S3GatewayTests` **+1** (`get_e_head_com_if_match_divergente_sao_412`): cinco
-divergentes × com e sem `Range`, no `GET` e no `HEAD` → `412` com o `ETag` e sem corpo — o quinto é o
+divergentes × com e sem `Range`, no `GET` e no `HEAD` → `412` com o `ETag` e XML (`<Code>PreconditionFailed</Code>`) — o quinto é o
 `W/<etag atual>`, que a comparação forte recusa; três formas que casam (ETag, `*`, lista com o atual)
 → `200` com o corpo; `If-Match` + `Range` válido → `206`; `If-Match` atual + `If-None-Match` atual →
 `304`. Vermelho antes: `200` em `"velho"`. Mutações **6/6**: `GET` sem a condição; `HEAD` sem a
