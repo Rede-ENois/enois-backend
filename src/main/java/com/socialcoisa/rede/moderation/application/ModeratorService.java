@@ -62,7 +62,6 @@ public class ModeratorService {
 	private final com.socialcoisa.rede.feed.application.port.in.PurgeAuthorContentUseCase contentPurge;
 	private final com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate;
 	private final IpBlockService ipBlockService;
-	private final ProvaDaPunicao prova;
 	private final Clock clock;
 	private final int minReputation;
 	private final int voteQuorum;
@@ -74,7 +73,6 @@ public class ModeratorService {
 			com.socialcoisa.rede.feed.application.port.in.PurgeAuthorContentUseCase contentPurge,
 			com.socialcoisa.rede.shared.sanctions.SanctionGateReader sanctionGate,
 			IpBlockService ipBlockService,
-			ProvaDaPunicao prova,
 			Clock clock,
 			@Value("${rede.moderation.moderator-min-reputation:200}") int minReputation,
 			@Value("${rede.moderation.vote-quorum:3}") int voteQuorum) {
@@ -92,7 +90,6 @@ public class ModeratorService {
 		this.contentPurge = contentPurge;
 		this.sanctionGate = sanctionGate;
 		this.ipBlockService = ipBlockService;
-		this.prova = prova;
 		this.clock = clock;
 		this.minReputation = minReputation;
 		this.voteQuorum = Math.max(1, voteQuorum);
@@ -357,14 +354,13 @@ public class ModeratorService {
 						cleanReason, Instant.now(clock));
 				});
 			sanctionService.banAuthor(sanction, target.id(), adminId, sessions);
-			// O motivo do painel é a justificativa; o conteúdo removido vira a prova. Lido aqui,
-			// antes da limpeza da conta, que acontece logo acima.
-			String trecho = reports.findById(reference).flatMap(prova::trechoDe).orElse(null);
+			// Punição direta do painel: não há denúncia por trás, então a justificativa é o motivo
+			// escrito pelo administrador. Sem trecho citado — nada aqui é conteúdo denunciado.
 			notifications.create(target.id(), "SANCAO", adminId, "Conta banida",
 				SanctionService.notificacaoDireta(
 					"Sua conta foi banida por decisao de um administrador. Voce nao podera entrar nem publicar",
-					cleanReason, trecho),
-				"/api/penalidades", "Ver", trecho);
+					cleanReason),
+				"/api/penalidades", "Ver");
 		}
 		else {
 			if (active.isPresent() && active.get().isBlocked()) {

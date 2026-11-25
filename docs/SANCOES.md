@@ -234,17 +234,18 @@ do `ReportView`. Registros antigos não recebem autoria retroativa inventada.
   e das capacidades já existentes dos módulos; esta integração não amplia tipos de alvo.
 - Conteúdo anônimo (`DESABAFO_POST`, `DESABAFO_COMMENT`, `CONFESSIONARIO_POST`,
   `CONFESSIONARIO_COMMENT`) também tem autor identificável para a moderação. O anonimato é do
-  contrato publico, nao um apagamento do vinculo: `penalize` e `ban` recaem sobre a conta que
-  publicou, e a decisao de um administrador nao depende de quorum, como em qualquer outro alvo.
-
-### A notificacao de punicao carrega a prova
-
-Quem e punido recebe uma notificacao `SANCAO` com o que vale (restricao ou banimento), a
-justificativa e o trecho do conteudo denunciado em `preview`, abaixo do corpo. O conteudo sai do ar
-na mesma decisao, entao a notificacao e o registro que sobra para a pessoa entender o que quebrou
-e recorrer. O trecho e lido antes da remocao; a justificativa da denuncia vem em portugues, e a
-punicao direta do painel usa o motivo escrito pelo administrador.
+  contrato público, não um apagamento do vínculo: `penalize` e `ban` recaem sobre a conta que
+  publicou, e a decisão de um administrador não depende de quórum, como em qualquer outro alvo.
 - **Concorrência: limitação preexistente, identificada por inspeção estática.** A proteção contra
   repetição sequencial não comprova execução única em paralelo. Esta integração não modifica a
   estratégia de concorrência existente e não inclui validação concorrente; essa garantia exige
   avaliação específica antes de ser assumida pelo consumidor.
+
+### A notificação de punição carrega a prova
+
+Quem é punido recebe uma notificação `SANCAO` com o que vale (restrição ou banimento), a
+justificativa e o trecho do conteúdo denunciado em `preview`, abaixo do corpo. O conteúdo sai do
+ar na mesma decisão, então a notificação é o registro que sobra para a pessoa entender o que
+quebrou e recorrer. O trecho é lido antes da remoção; a justificativa da denúncia vem em
+português, e a punição direta do painel usa o motivo escrito pelo administrador — na punição
+direta não há trecho, porque não existe denúncia por trás dela.
