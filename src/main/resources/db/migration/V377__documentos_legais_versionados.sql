@@ -19,8 +19,8 @@ create table if not exists documentos_legais (
   -- Hash SHA-256 do conteúdo: o aceite aponta para o texto exato, mesmo que alguém tente editar
   -- o registro no banco depois. A aplicação nunca atualiza o conteúdo de uma versão existente.
   conteudo_hash char(64) not null,
-  exige_aceite tinyint(1) not null default 1,
-  aprovado tinyint(1) not null default 0,
+  exige_aceite boolean not null default true,
+  aprovado boolean not null default false,
   vigente_desde timestamp null,
   criado_em timestamp not null,
   criado_por varchar(64) null,
