@@ -178,7 +178,7 @@ class ExternalJobsTextoUtf8mb4MigrationTests(unittest.TestCase):
     def coluna(self, coluna):
         return self.sql(f"""
             select concat(character_set_name, '|', collation_name, '|', is_nullable, '|',
-                          column_type, '|', coalesce(column_default, ''))
+                          column_type, '|', ifnull(column_default, '<null>'))
             from information_schema.columns
             where table_schema = 'vagas' and table_name = '{TABELA}' and column_name = '{coluna}';
         """)
@@ -187,7 +187,7 @@ class ExternalJobsTextoUtf8mb4MigrationTests(unittest.TestCase):
         for coluna, tipo, nulidade, default in COLUNAS:
             self.assertEqual(
                 self.coluna(coluna),
-                f"utf8mb4|utf8mb4_unicode_ci|{nulidade}|{tipo}|{default or ''}",
+                f"utf8mb4|utf8mb4_unicode_ci|{nulidade}|{tipo}|{default or '<null>'}",
                 msg=f"{TABELA}.{coluna} nao ficou em utf8mb4 como esperado",
             )
 
@@ -199,7 +199,19 @@ class ExternalJobsTextoUtf8mb4MigrationTests(unittest.TestCase):
               and data_type in ('char', 'varchar', 'text', 'mediumtext', 'longtext')
               and character_set_name <> 'utf8mb4';
         """)
-        self.assertEqual(restantes, "NULL", msg=f"colunas fora do utf8mb4: {restantes}")
+        # `id` fica no charset antigo de proposito: converter a pk (alvo do uk) e o drift de
+        # collation que a migracao evita.
+        self.assertEqual(restantes, "id", msg=f"colunas fora do utf8mb4: {restantes}")
+
+    def test_id_continua_na_collation_original(self):
+        self.assertEqual(
+            self.sql(f"""
+                select concat(character_set_name, '|', collation_name)
+                from information_schema.columns
+                where table_schema = 'vagas' and table_name = '{TABELA}' and column_name = 'id';
+            """),
+            "latin1|latin1_swedish_ci",
+        )
 
     def test_conteudo_legado_continua_igual(self):
         self.assertEqual(
