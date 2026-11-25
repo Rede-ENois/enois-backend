@@ -10,7 +10,7 @@
 -- conta como o texto atual enquanto não for aprovada e entrar em vigor.
 
 create table if not exists documentos_legais (
-  id varchar(64) not null,
+  id varvarchar(64) not null,
   tipo varchar(32) not null,
   versao int not null,
   titulo varchar(160) not null,
@@ -18,29 +18,29 @@ create table if not exists documentos_legais (
   conteudo mediumtext not null,
   -- Hash SHA-256 do conteúdo: o aceite aponta para o texto exato, mesmo que alguém tente editar
   -- o registro no banco depois. A aplicação nunca atualiza o conteúdo de uma versão existente.
-  conteudo_hash char(64) not null,
+  conteudo_hash varchar(64) not null,
   exige_aceite boolean not null default true,
   aprovado boolean not null default false,
   vigente_desde timestamp null,
   criado_em timestamp not null,
-  criado_por varchar(64) null,
+  criado_por varvarchar(64) null,
   aprovado_em timestamp null,
-  aprovado_por varchar(64) null,
+  aprovado_por varvarchar(64) null,
   primary key (id),
   unique key uk_documentos_legais_tipo_versao (tipo, versao),
   key idx_documentos_legais_vigente (tipo, vigente_desde)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
 create table if not exists documentos_legais_aceites (
-  id varchar(64) not null,
-  documento_id varchar(64) not null,
-  user_id varchar(64) not null,
+  id varvarchar(64) not null,
+  documento_id varvarchar(64) not null,
+  user_id varvarchar(64) not null,
   documento_tipo varchar(32) not null,
   documento_versao int not null,
-  conteudo_hash char(64) not null,
+  conteudo_hash varchar(64) not null,
   origem varchar(32) not null,
   aceito_em timestamp not null,
-  ip_hash char(64) null,
+  ip_hash varchar(64) null,
   user_agent varchar(255) null,
   -- coluna só para o índice não depender de valor NULL (mesma regra das outras tabelas)
   update_scope tinyint not null default 0,
