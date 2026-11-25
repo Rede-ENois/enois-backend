@@ -48,6 +48,19 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 		)
 		""";
 
+	/**
+	 * Soma na faixa da hora corrente. O instante é truncado em hora: é a régua da coluna, e truncar
+	 * aqui (e não confiar no chamador) garante que duas tarefas do mesmo minuto caem na MESMA linha.
+	 */
+	private static final String UPSERT_LATENCY = """
+		insert into network_task_latency_buckets (node_id, metrics_hour, bucket_upper_ms, samples)
+		values (?, ?, ?, 1)
+		on duplicate key update samples = samples + 1
+		""";
+
+	private static final String SUM_LATENCY = "select bucket_upper_ms, sum(samples) from network_task_latency_buckets "
+		+ "where node_id = ? and metrics_hour >= ? and metrics_hour <= ? group by bucket_upper_ms";
+
 	private static final String INSERT_LOG = "insert into network_node_logs (id, node_id, logged_at, level, message) "
 		+ "values (?, ?, ?, ?, ?)";
 
@@ -97,6 +110,22 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 		// recentes) e a lista volta invertida.
 		List<Sample> newestFirst = jdbc.query(LIST_SAMPLES, SAMPLE_MAPPER, nodeId, limit);
 		return newestFirst.reversed();
+	}
+
+	@Override
+	public void addLatencySample(String nodeId, Instant at, int bucketUpperMs) {
+		jdbc.update(UPSERT_LATENCY, nodeId, Timestamp.from(at.truncatedTo(java.time.temporal.ChronoUnit.HOURS)),
+			bucketUpperMs);
+	}
+
+	@Override
+	public java.util.Map<Integer, Integer> latencySamples(String nodeId, Instant now, int hours) {
+		Instant from = now.minusSeconds(hours * 3600L).truncatedTo(java.time.temporal.ChronoUnit.HOURS);
+		java.util.Map<Integer, Integer> samples = new java.util.TreeMap<>();
+		jdbc.query(SUM_LATENCY, rs -> {
+			samples.put(rs.getInt(1), rs.getInt(2));
+		}, nodeId, Timestamp.from(from), Timestamp.from(now));
+		return samples;
 	}
 
 	@Override
