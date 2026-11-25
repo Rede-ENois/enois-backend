@@ -18,14 +18,12 @@ MIGRATION = ROOT / "src/main/resources/db/migration/V379__vagas_externas_texto_u
 TABELA = "external_jobs"
 
 # Colunas de texto depois da migracao, na forma como a consulta do teste devolve cada linha:
-# coluna, charset, collation, nulidade, tipo e default (o conjunto de resultados do MariaDB e o
-# texto '' para default nulo; o cast do '<sem default>' no fim e literal e distingue da consulta
-# vazia). Sem default, so a coluna default fica vazia; as demais nunca saem em branco.
-# Nenhuma mao unica pode acabar em NULL: o mariadb --batch escreve esse NULL igual ao de consulta
-# vazia, e o teste perde a coluna que ficou de fora.
+# coluna, charset, collation, nulidade, tipo e default. Nenhuma linha sai so com NULL: sem default
+# o coalesce escreve o termo, e coluna que ficou de fora da migracao aparece como linha faltando
+# (a guarda de tamanho no teste pega isso antes do diff).
 COLUNAS = f"""
     select column_name, character_set_name, collation_name, is_nullable, column_type,
-           cast('<sem default>' as char) as sem_default
+           coalesce(column_default, '<sem default>')
     from information_schema.columns
     where table_schema = 'vagas' and table_name = 'external_jobs' and column_name in (
         'platform', 'external_id', 'title', 'company', 'location', 'url', 'canonical_url',
@@ -36,32 +34,33 @@ COLUNAS = f"""
     order by column_name;
 """
 
-ESPERADO = """
-    attribution_url|utf8mb4|utf8mb4_unicode_ci|YES|varchar(1000)|<sem default>
-    apply_email|utf8mb4|utf8mb4_unicode_ci|YES|varchar(320)|<sem default>
-    city|utf8mb4|utf8mb4_unicode_ci|YES|varchar(120)|<sem default>
-    company|utf8mb4|utf8mb4_unicode_ci|YES|varchar(255)|<sem default>
-    country|utf8mb4|utf8mb4_unicode_ci|YES|varchar(60)|<sem default>
-    currency|utf8mb4|utf8mb4_unicode_ci|YES|varchar(8)|<sem default>
-    description|utf8mb4|utf8mb4_unicode_ci|YES|varchar(5000)|<sem default>
-    employment_type|utf8mb4|utf8mb4_unicode_ci|YES|varchar(40)|<sem default>
-    external_id|utf8mb4|utf8mb4_unicode_ci|NO|varchar(255)|<sem default>
-    external_status|utf8mb4|utf8mb4_unicode_ci|NO|varchar(32)|FOUND|<sem default>
-    level|utf8mb4|utf8mb4_unicode_ci|YES|varchar(20)|<sem default>
-    location|utf8mb4|utf8mb4_unicode_ci|YES|varchar(255)|<sem default>
-    platform|utf8mb4|utf8mb4_unicode_ci|NO|varchar(64)|<sem default>
-    salary|utf8mb4|utf8mb4_unicode_ci|YES|varchar(255)|<sem default>
-    salary_currency|utf8mb4|utf8mb4_unicode_ci|YES|varchar(8)|<sem default>
-    salary_max|utf8mb4|utf8mb4_unicode_ci|YES|varchar(50)|<sem default>
-    salary_min|utf8mb4|utf8mb4_unicode_ci|YES|varchar(50)|<sem default>
-    salary_period|utf8mb4|utf8mb4_unicode_ci|YES|varchar(20)|<sem default>
-    salary_period_code|utf8mb4|utf8mb4_unicode_ci|YES|varchar(10)|<sem default>
-    state|utf8mb4|utf8mb4_unicode_ci|YES|varchar(60)|<sem default>
-    submitted_by|utf8mb4|utf8mb4_unicode_ci|YES|varchar(255)|<sem default>
-    title|utf8mb4|utf8mb4_unicode_ci|NO|varchar(500)|<sem default>
-    url|utf8mb4|utf8mb4_unicode_ci|NO|varchar(1000)|<sem default>
-    work_model|utf8mb4|utf8mb4_unicode_ci|YES|varchar(20)|<sem default>
-"""
+ESPERADO = [
+    "apply_email|utf8mb4|utf8mb4_unicode_ci|YES|varchar(320)|<sem default>",
+    "attribution_url|utf8mb4|utf8mb4_unicode_ci|YES|varchar(1000)|<sem default>",
+    "canonical_url|utf8mb4|utf8mb4_unicode_ci|YES|varchar(1000)|<sem default>",
+    "city|utf8mb4|utf8mb4_unicode_ci|YES|varchar(120)|<sem default>",
+    "company|utf8mb4|utf8mb4_unicode_ci|YES|varchar(255)|<sem default>",
+    "country|utf8mb4|utf8mb4_unicode_ci|YES|varchar(60)|<sem default>",
+    "currency|utf8mb4|utf8mb4_unicode_ci|YES|varchar(8)|<sem default>",
+    "description|utf8mb4|utf8mb4_unicode_ci|YES|varchar(5000)|<sem default>",
+    "employment_type|utf8mb4|utf8mb4_unicode_ci|YES|varchar(40)|<sem default>",
+    "external_id|utf8mb4|utf8mb4_unicode_ci|NO|varchar(255)|<sem default>",
+    "external_status|utf8mb4|utf8mb4_unicode_ci|NO|varchar(32)|FOUND|<sem default>",
+    "level|utf8mb4|utf8mb4_unicode_ci|YES|varchar(20)|<sem default>",
+    "location|utf8mb4|utf8mb4_unicode_ci|YES|varchar(255)|<sem default>",
+    "platform|utf8mb4|utf8mb4_unicode_ci|NO|varchar(64)|<sem default>",
+    "salary|utf8mb4|utf8mb4_unicode_ci|YES|varchar(255)|<sem default>",
+    "salary_currency|utf8mb4|utf8mb4_unicode_ci|YES|varchar(8)|<sem default>",
+    "salary_max|utf8mb4|utf8mb4_unicode_ci|YES|varchar(50)|<sem default>",
+    "salary_min|utf8mb4|utf8mb4_unicode_ci|YES|varchar(50)|<sem default>",
+    "salary_period|utf8mb4|utf8mb4_unicode_ci|YES|varchar(20)|<sem default>",
+    "salary_period_code|utf8mb4|utf8mb4_unicode_ci|YES|varchar(10)|<sem default>",
+    "state|utf8mb4|utf8mb4_unicode_ci|YES|varchar(60)|<sem default>",
+    "submitted_by|utf8mb4|utf8mb4_unicode_ci|YES|varchar(255)|<sem default>",
+    "title|utf8mb4|utf8mb4_unicode_ci|NO|varchar(500)|<sem default>",
+    "url|utf8mb4|utf8mb4_unicode_ci|NO|varchar(1000)|<sem default>",
+    "work_model|utf8mb4|utf8mb4_unicode_ci|YES|varchar(20)|<sem default>",
+]
 
 # O que o anuncio das fontes traz: espaco fino (U+202F) antes do simbolo de moeda, que e o byte da
 # linha do log da qa, mais acento e emoji.
@@ -193,11 +192,9 @@ class ExternalJobsTextoUtf8mb4MigrationTests(unittest.TestCase):
         cls.comando("docker", "rm", "-f", "--volumes", cls.container)
 
     def test_colunas_de_texto_declaram_utf8mb4(self):
-        self.maxDiff = None
-        self.assertEqual(
-            "\n".join("\t".join(linha.split("|")) for linha in ESPERADO.strip().splitlines()),
-            self.sql(COLUNAS),
-        )
+        linhas = self.sql(COLUNAS).splitlines()
+        self.assertEqual(len(linhas), len(ESPERADO), msg="consulta e esperado com tamanhos diferentes")
+        self.assertEqual(linhas, ESPERADO)
 
     def test_nenhuma_coluna_de_texto_ficou_no_charset_legado(self):
         restantes = self.sql(f"""
