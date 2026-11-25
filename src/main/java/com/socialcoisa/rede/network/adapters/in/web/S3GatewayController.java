@@ -1662,9 +1662,17 @@ class S3GatewayController {
 		requireBucket(credential, bucket);
 		var upload = uploadDaChave(credential, bucket, request);
 		java.util.List<Parte> pedidas = partesDoXml(body(request));
-		var concluido = multipart.complete(upload, pedidas.stream().map(Parte::numero).toList(),
-			pedidas.stream().collect(java.util.stream.Collectors.toMap(Parte::numero,
-				p -> p.etag() == null ? "" : p.etag(), (a, b) -> a)));
+		com.socialcoisa.rede.network.application.StorageMultipartService.Completed concluido;
+		try {
+			concluido = multipart.complete(upload, pedidas.stream().map(Parte::numero).toList(),
+				pedidas.stream().collect(java.util.stream.Collectors.toMap(Parte::numero,
+					p -> p.etag() == null ? "" : p.etag(), (a, b) -> a)));
+		}
+		catch (ApiException recusado) {
+			// As outras rotas do multipart já traduziam; esta era a única que deixava a recusa vazar
+			// como JSON do Control Plane — e é a recusa que o cliente vê depois de enviar tudo (§4.58).
+			throw noVocabularioDoS3(recusado);
+		}
 		S3Xml xml = new S3Xml();
 		xml.root("CompleteMultipartUploadResult").element("Location", bucket + "/" + concluido.key())
 			.element("Bucket", bucket).element("Key", concluido.key()).element("ETag", "\"" + concluido.etag() + "\"");
