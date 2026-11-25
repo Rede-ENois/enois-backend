@@ -45,7 +45,8 @@ class AceiteDeDocumentoJpaEntity {
 	@Column(name = "user_agent")
 	private String userAgent;
 
-	@Column(name = "update_scope", nullable = false)
+	// `tinyint` na migração: o Hibernate esperaria INTEGER e a validação de schema derrubava o boot.
+	@Column(name = "update_scope", nullable = false, columnDefinition = "tinyint")
 	private int updateScope;
 
 	protected AceiteDeDocumentoJpaEntity() {
