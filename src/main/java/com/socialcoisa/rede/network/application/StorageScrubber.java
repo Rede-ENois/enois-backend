@@ -227,13 +227,23 @@ public class StorageScrubber {
 					.stream()
 					.filter(p -> p.state() == StoragePlacement.State.OK)
 					.toList();
-				// Cópia num nó REVOGADO não é durabilidade: o nó não volta, não autentica mais e as
-				// chaves dele foram revogadas. Contá-la dizia "duas cópias" para um objeto que tem
-				// uma, e o healing nunca recebia a lacuna — o objeto ficava com durabilidade que
-				// existe só no catálogo. O placement já não escolhe nó revogado (`storageReady` exige
-				// ACTIVE); quem faltava era a leitura.
+				// Cópia num nó que não serve mais não é durabilidade. A régua é a MESMA da colocação
+				// (o `storageReady` exige `ACTIVE`): só nó `ACTIVE` recebe cópia nova. Antes, a
+				// varredura descartava só o `REVOKED`, então um nó `SUSPENDED` ou `QUARANTINED`
+				// continuava contando como cópia — o scrub dizia "duas cópias" para um objeto que a
+				// colocação já não usava, e a lacuna nunca aparecia. O §25.11 pede "a
+				// indisponibilidade de um nó não comprometer arquivos com redundância saudável"; a
+				// régua da durabilidade tem de ser a da recuperação, senão o objeto parece saudável
+				// até o nó sumir.
+				//
+				// A réplica 0 fica de fora: ela é o corpo do Control Plane, e o CP não precisa ser
+				// nó operável para servir o objeto. A linha dela aponta para o nó que hospeda o CP,
+				// que pode estar suspenso enquanto o processo serve normalmente.
 				List<StoragePlacement> revogadas = ok.stream()
-					.filter(p -> nodes.findById(p.nodeId()).map(n -> n.status() == NodeStatus.REVOKED).orElse(false))
+					.filter(p -> p.replica() != 0)
+					.filter(p -> nodes.findById(p.nodeId())
+						.map(n -> !n.status().canOperate())
+						.orElse(false))
 					.toList();
 				if (!revogadas.isEmpty()) {
 					emNoRevogado.addAll(revogadas.stream().map(p -> new Report.OnRevokedNode(id, p.replica(),
