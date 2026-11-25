@@ -88,7 +88,6 @@ public final class ReactionIcons {
 		CODIGO.put(ReactionType.TONGUE, "muscle");
 		CODIGO.put(ReactionType.KISS, "starstruck");
 		CODIGO.put(ReactionType.DROOL, "tongue");
-		CODIGO.put(ReactionType.HEART_PURPLE, "heart_purple");
 		CODIGO.put(ReactionType.STARSTRUCK, "kiss");
 		CODIGO.put(ReactionType.VULCAN, "drool");
 		CODIGO.put(ReactionType.CROSSED, "insightful");
@@ -98,12 +97,16 @@ public final class ReactionIcons {
 		CODIGO.put(ReactionType.COWBOY, "nails");
 		CODIGO.put(ReactionType.SMIRK, "useful");
 		CODIGO.put(ReactionType.GHOST, "salute");
+		CODIGO.put(ReactionType.HEART_PURPLE, "heart_purple");
 	}
 
 	private ReactionIcons() {
 	}
 
-	/** Códigos do pacote, na ordem do enum — o teste ao lado confere a bijeção com as 77 reações. */
+	/**
+	 * Códigos do pacote, na ordem de inserção do mapa (que é a do enum, e o teste confere): quantos
+	 * tipos, tantos códigos; menos que isso é reação sem ícone.
+	 */
 	public static List<String> codigos() {
 		return ReactionType.values().length == CODIGO.size()
 			? CODIGO.values().stream().toList()

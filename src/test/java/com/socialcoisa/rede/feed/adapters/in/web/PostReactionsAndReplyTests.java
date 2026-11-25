@@ -62,8 +62,8 @@ class PostReactionsAndReplyTests {
 
 	@Test
 	void oCoracaoRoxoEUmTipoDeReacaoComoQualquerOutro() throws Exception {
-		// The purple heart joined the pack after the 76 expressions: the API must take the type and
-		// answer with it, like the older reactions.
+		// O coração roxo entrou no pacote depois das 76 expressões: a API tem de aceitar o tipo e
+		// responder com ele, como as reações de antes.
 		var author = auth.authenticate("user_react_heart_author");
 		var reactor = auth.authenticate("user_react_heart_actor");
 		String postId = publish(author, "Purple heart reaction must go through.");
