@@ -178,7 +178,7 @@ class ExternalJobsTextoUtf8mb4MigrationTests(unittest.TestCase):
     def coluna(self, coluna):
         return self.sql(f"""
             select concat(character_set_name, '|', collation_name, '|', is_nullable, '|',
-                          column_type, '|', ifnull(column_default, '<null>'))
+                          column_type, '|', column_default)
             from information_schema.columns
             where table_schema = 'vagas' and table_name = '{TABELA}' and column_name = '{coluna}';
         """)
@@ -187,7 +187,8 @@ class ExternalJobsTextoUtf8mb4MigrationTests(unittest.TestCase):
         for coluna, tipo, nulidade, default in COLUNAS:
             self.assertEqual(
                 self.coluna(coluna),
-                f"utf8mb4|utf8mb4_unicode_ci|{nulidade}|{tipo}|{default or '<null>'}",
+                # Sem default, o mariadb --batch escreve o proprio NULL desta linha.
+                f"utf8mb4|utf8mb4_unicode_ci|{nulidade}|{tipo}|{default or 'NULL'}",
                 msg=f"{TABELA}.{coluna} nao ficou em utf8mb4 como esperado",
             )
 
