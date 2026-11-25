@@ -65,6 +65,14 @@ class NetworkNodeJpaEntity {
 	@Column(name = "observed_disk_total_mb")
 	private Long observedDiskTotalMb;
 
+	/** IOPS medido entre dois heartbeats (brief §8.2); {@code null} = não medido, diferente de 0. */
+	@Column(name = "observed_disk_iops")
+	private Double observedDiskIops;
+
+	/** Latência média por operação de disco no último intervalo; {@code null} = não medido. */
+	@Column(name = "observed_disk_latency_ms")
+	private Double observedDiskLatencyMs;
+
 	@Column(name = "observed_content_used_mb")
 	private Long observedContentUsedMb;
 
@@ -156,9 +164,9 @@ class NetworkNodeJpaEntity {
 			NodeProfilesCsv.parse(profiles), region, country, runtimeVersion, lastSeenAt, declaredCpuCores,
 			declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
 			NetworkNode.usageFrom(observedMemoryMb, observedMemoryAvailableMb, declaredMemoryMb),
-			observedMemoryAvailableMb, observedRunningTasks, observedLatencyMs, observedDiskFreeMb, observedDiskTotalMb, observedContentUsedMb,
-			observedBytesInMb, observedBytesOutMb, consecutiveFailures,
-			quarantinedUntil, quarantineReason);
+			observedMemoryAvailableMb, observedRunningTasks, observedLatencyMs, observedDiskFreeMb,
+			observedDiskTotalMb, observedDiskIops, observedDiskLatencyMs, observedContentUsedMb,
+			observedBytesInMb, observedBytesOutMb, consecutiveFailures, quarantinedUntil, quarantineReason);
 	}
 
 	String status() {

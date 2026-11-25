@@ -88,10 +88,10 @@ class NetworkNodePersistenceAdapter implements NetworkNodeRepository {
 
 	@Override
 	public void touch(String id, String runtimeVersion, Double cpuPercent, Integer memoryMb,
-			Integer memoryAvailableMb, Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Long contentUsedMb,
-			Long bytesInMb, Long bytesOutMb, Instant now) {
+			Integer memoryAvailableMb, Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Double diskIops,
+			Double diskLatencyMs, Long contentUsedMb, Long bytesInMb, Long bytesOutMb, Instant now) {
 		repository.heartbeat(id, runtimeVersion, cpuPercent, memoryMb, memoryAvailableMb, runningTasks, diskFreeMb,
-			diskTotalMb, contentUsedMb, bytesInMb, bytesOutMb, now);
+			diskTotalMb, diskIops, diskLatencyMs, contentUsedMb, bytesInMb, bytesOutMb, now);
 	}
 
 	@Override

@@ -54,6 +54,13 @@ EVENTS_MAX=20
 # apagar a linha que ainda não subiu). O arquivo é do nó, fica em 0600 junto da chave e é esvaziado
 # assim que o heartbeat leva as linhas.
 EVENTS_FILE="$NODE_HOME/pending-events"
+# Contadores do disco no fim do ciclo ANTERIOR (`/proc/diskstats`), para o I/O do intervalo. O
+# intervalo é entre heartbeats e não pode estar em memória: `cycle` roda num processo por volta.
+DISKSTATE_FILE="$NODE_HOME/disk-prev"
+# O arquivo de contadores do kernel lido pela medição de I/O do ciclo. Variável e não caminho fixo
+# para o harness poder servir contadores conhecidos; em produção o padrão é o do kernel.
+DISKSTATS_FILE="${DISKSTATS_FILE:-/proc/diskstats}"
+
 event() {
   # event <nivel> <mensagem>: guarda para o próximo heartbeat.
   local level="$1" message="$2"
@@ -1343,6 +1350,7 @@ exec_api_request() {
 cycle() {
   # 1. heartbeat: estado, modo e se pode pedir tarefa.
   local hb mode accept_tasks observed_cpu observed_mem observed_avail mem_swap mem_pressure observed_disk observed_term term_part disk_part mem_part
+  local disk_now disk_prev disk_prev_at disk_now_ns d_reads d_writes d_ms p_reads p_writes p_ms ops disk_io_iops disk_io_latency disk_io_part=
   observed_cpu=$(awk 'NR==1 {printf "%.1f", $1}' /proc/loadavg 2>/dev/null || echo 0)
   # Memória em DUAS medidas, como o Control Plane lê desde a V378: `memoryMb` é o USO e
   # `memoryAvailableMb` o DISPONÍVEL. Antes o runtime media só `MemAvailable` e o mandava como
@@ -1389,6 +1397,78 @@ cycle() {
   # linha para nomes com espaço.
   observed_disk=$(df -P -m "$NODE_HOME" 2>/dev/null | awk 'NR==2 {print $4}')
   [[ "$observed_disk" =~ ^[0-9]+$ ]] || observed_disk=''
+  # IOPS e latência de disco (brief §8.2), medidos como DELTA entre este ciclo e o anterior em
+  # `/proc/diskstats` — o arquivo apontado por `DISKSTATS_FILE`, que em produção é o do kernel. Ler o
+  # contador absoluto e mandar o total seria inútil: os campos são taxa e tempo por operação.
+  #
+  # O denominador é o intervalo desde a MEDIDA anterior, gravado em NANOSSEGUNDOS neste mesmo
+  # arquivo de estado. Tempo de arquivo (`stat -c %Y`) seria mais barato, mas a precisão dele varia
+  # com o sistema de arquivos da máquina do participante — e num intervalo de 5 s, 1 s de erro
+  # vira 20% de IOPS. O relógio do runtime é a única fonte que tem a mesma resolução no `/tmp`, em
+  # tmpfs e em qualquer volume.
+  #
+  # O que conta como disco: `sd*`, `nvme*n1`, `vd*`, `xvd*` e `hd*` — os nomes que o kernel dá aos
+  # discos físicos e virtuais. Ficam de fora partições (`sda1`) e dispositivos de bloco que não são
+  # disco (loop, ram, dm, md): o I/O deles já aparece no disco de baixo, e somar os dois contaria
+  # em dobro. Contadores não numéricos (disco removido) são ignorados.
+  #
+  # SEM MEDIDA no primeiro ciclo (não há anterior para subtrair) e sem amostra válida quando o
+  # intervalo é zero ou algum contador retrocedeu (disco trocado, contador de 32 bits reiniciado):
+  # nesses casos o campo NÃO vai. Retrocesso por campo é o que impede uma taxa falsa e enorme de
+  # virar o "IOPS" do nó no painel.
+  disk_io_part=''
+  if [[ -r "$DISKSTATS_FILE" ]]; then
+    disk_now=$(awk '
+      {
+        name = $3
+        if (name !~ /^(sd[a-z]+|nvme[0-9]+n[0-9]+|vd[a-z]+|xvd[a-z]+|hd[a-z]+)$/) next
+        # Layout do kernel: 4 = leituras concluídas, 6 = setores lidos, 7 = ms lendo,
+        # 8 = escritas concluídas, 10 = setores escritos, 11 = ms escrevendo. As colunas de
+        # SETORES (6 e 10) não são tempo: usar 6/10 para latência daria sempre 0 ms.
+        if (NF < 11) next
+        reads += $4; writes += $8
+        ms += ($7 ~ /^[0-9]+$/ ? $7 : 0) + ($11 ~ /^[0-9]+$/ ? $11 : 0)
+        seen = 1
+      }
+      END {
+        if (!seen) exit 0
+        printf "%d %d %d", reads, writes, ms
+      }' "$DISKSTATS_FILE") || disk_now=''
+    if [[ -n "$disk_now" ]]; then
+      disk_prev_at=''
+      disk_prev=''
+      if [[ -r "$DISKSTATE_FILE" ]]; then
+        read -r disk_prev_at disk_prev < "$DISKSTATE_FILE" 2>/dev/null || true
+      fi
+      if [[ "$disk_now" =~ ^[0-9]+\ [0-9]+\ [0-9]+$ && "$disk_prev" =~ ^[0-9]+\ [0-9]+\ [0-9]+$ \
+            && "$disk_prev_at" =~ ^[0-9]+$ ]]; then
+        disk_now_ns=$(date +%s%N)
+        if [[ "$disk_now_ns" =~ ^[0-9]+$ ]] && (( disk_now_ns > disk_prev_at )); then
+          read -r d_reads d_writes d_ms <<<"$disk_now"
+          read -r p_reads p_writes p_ms <<<"$disk_prev"
+          if (( d_reads >= p_reads && d_writes >= p_writes && d_ms >= p_ms )); then
+            ops=$(( (d_reads - p_reads) + (d_writes - p_writes) ))
+            disk_io_iops=$(awk -v o="$ops" -v ns="$(( disk_now_ns - disk_prev_at ))" \
+              'BEGIN {printf "%.2f", o / (ns / 1000000000)}')
+            disk_io_part="\"diskIops\":$disk_io_iops"
+            # Latência só faz sentido com operação concluída: sem I/O o tempo total é zero, e dividir
+            # afirmaria "0 ms", que não mede coisa nenhuma.
+            if (( ops > 0 )); then
+              disk_io_latency=$(awk -v ms="$(( d_ms - p_ms ))" -v o="$ops" 'BEGIN {printf "%.2f", ms / o}')
+              disk_io_part="$disk_io_part,\"diskLatencyMs\":$disk_io_latency"
+            fi
+          fi
+        fi
+      fi
+      # O estado do próximo ciclo é o de AGORA — mesmo quando esta rodada não mediu: se o arquivo
+      # não avançasse, um contador reiniciado deixaria o nó sem I/O até o processo reiniciar.
+      disk_now_ns=$(date +%s%N)
+      if [[ "$disk_now_ns" =~ ^[0-9]+$ ]]; then
+        printf '%s %s\n' "$disk_now_ns" "$disk_now" > "$DISKSTATE_FILE" 2>/dev/null \
+          && chmod 600 "$DISKSTATE_FILE" 2>/dev/null || true
+      fi
+    fi
+  fi
   # Tamanho do volume medido na MESMA chamada do livre: os dois saem da mesma linha do `df`, então
   # um não pode estar descrevendo um sistema de arquivos diferente do outro. É o que permite ao
   # Control Plane separar "espaço reservado pelo participante" (total - declarado) do "oferecido"
@@ -1432,7 +1512,7 @@ cycle() {
   events=$(events_json)
   [[ -n "$events" ]] && logs_part=",\"logs\":[$events]"
   hb=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
-    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"runningTasks\":0$mem_part$disk_part$net_part}$term_part$logs_part}" \
+    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"runningTasks\":0$mem_part$disk_io_part$disk_part$net_part}$term_part$logs_part}" \
     "$CONTROL_PLANE/network/nodes/heartbeat") || { printf '[executor] heartbeat falhou\n' >&2; return 1; }
   : > "$EVENTS_FILE" 2>/dev/null || true
   mode=$(json_field "$hb" mode)

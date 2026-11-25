@@ -1721,6 +1721,102 @@ out=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SE
   /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true)
 assert_not_contains 'no sem OBJECT_PUT nao manda relatorio' "$(cat "$TMP/curl-calls")" '/network/storage/scrub'
 
+# ------------------------------------------------- cenário: IOPS e latência de disco (§8.2)
+# O runtime mede o I/O como DELTA do `/proc/diskstats` entre dois ciclos, com o referencial no
+# arquivo de estado do nó (o ciclo é um processo por volta) e o denominador no relógio da medida
+# anterior (nanossegundos, porque a resolução de tempo de arquivo varia com o sistema de arquivos).
+# A leitura é do arquivo apontado por `DISKSTATS_FILE` — o harness serve contadores conhecidos.
+# O que se prova, sobre o corpo real do heartbeat:
+#   1. o PRIMEIRO ciclo não manda IOPS nem latência — sem anterior não há intervalo, e 0 afirmaria
+#      um disco parado que ninguém mediu;
+#   2. o segundo ciclo calcula: IOPS = operações do intervalo / segundos e latência = ms / operação,
+#      com partição (`sda1`), loop e `dm` fora da conta. O denominador é o intervalo REAL entre as
+#      duas medições, então a prova do IOPS é a fórmula sobre o número que o nó mandou; a latência
+#      tem valor EXATO (operações e ms fixos, sem depender do relógio);
+#   3. contador que RETROCEDEU (disco trocado) não vira taxa, e o referencial avança mesmo assim;
+#   4. intervalo sem operação concluída: IOPS 0.00 (é medida) e latência ausente (não há por onde
+#      dividir).
+IOPS_HOME="$TMP/node-home-disco"
+mkdir -p "$IOPS_HOME"
+cp "$NH/node.json" "$NH/api-key" "$IOPS_HOME/"
+
+# Formato do kernel: MAJOR MINOR NOME leituras MERGES SETORES ms_leitura escritas MERGES SETORES
+# ms_escrita ... As colunas 4 (leituras), 7 (ms lendo), 8 (escritas) e 11 (ms escrevendo) são as que
+# a medição usa. As colunas 6 e 10 são SETORES, não tempo — trocá-las por 7 e 11 daria latência 0.
+diskstats() {
+  cat > "$TMP/diskstats"
+  DISKSTATS="$TMP/diskstats"
+}
+
+run_io_cycle() {
+  # run_io_cycle <home> <segundos desde a medida anterior>: roda UM ciclo com o diskstats atual.
+  # A idade é forjada no arquivo de estado (nanossegundos contadores).
+  local home="$1" ago_secs="${2:-}"
+  if [[ -n "$ago_secs" ]]; then
+    printf '%s %s\n' "$(( $(date +%s%N) - ago_secs * 1000000000 ))" "$(cut -d' ' -f2- "$home/disk-prev")" \
+      > "$home/disk-prev"
+  fi
+  : > "$TMP/curl-calls"
+  CONTROL_PLANE_URL=https://cp.test NODE_HOME="$home" PATH="$TMP" NODE_POLL_SECONDS=1 \
+    DISKSTATS_FILE="$TMP/diskstats" \
+    /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true
+}
+
+# 1º ciclo: só grava o referencial. `sda1` (partição) e `loop0` não contam.
+DISKSTATS=""
+diskstats <<'DS'
+   8       0 sda 100 0 0 0 0 0 0 0 0 0 0
+   8       1 sda1 90 0 0 0 0 0 0 0 0 0 0
+   7       0 loop0 5 0 0 0 0 0 0 0 0 0 0
+DS
+run_io_cycle "$IOPS_HOME"
+hb1=$(/bin/grep 'network/nodes/heartbeat' "$TMP/curl-calls" | head -n 1)
+assert_not_contains 'primeiro ciclo nao manda IOPS (sem intervalo)' "$hb1" '"diskIops":'
+assert_not_contains 'primeiro ciclo nao manda latencia (sem intervalo)' "$hb1" '"diskLatencyMs":'
+assert_contains 'primeiro ciclo grava o referencial do disco' \
+  "$(cat "$IOPS_HOME/disk-prev" 2>/dev/null)" ' 100 0 0'
+
+# 2º ciclo, 5 s depois: sda faz 400 leituras (500 ms lendo) e o nvme faz 200 escritas (1000 ms
+# escrevendo). A partição e o loop mudam MUITO e não entram em nada.
+DISKSTATS=""
+diskstats <<'DS'
+   8       0 sda 400 0 0 500 0 0 0 0 0 0 0
+   8       1 sda1 999 0 0 999 0 0 0 999 0 0 0
+ 259       0 nvme0n1 0 0 0 0 200 0 0 1000 0 0 0
+   7       0 loop0 777 0 0 777 0 0 0 777 0 0 0
+DS
+run_io_cycle "$IOPS_HOME" 5
+hb2=$(/bin/grep 'network/nodes/heartbeat' "$TMP/curl-calls" | head -n 1)
+# O intervalo real entre as duas medições é ~5 s, nunca menos: IOPS = 500 / segundos ≤ 100, e 100
+# só num intervalo instantâneo. O que se prova é a conta sobre o número que o nó mandou.
+iops2=$(printf '%s' "$hb2" | /bin/grep -o '"diskIops":[0-9.]*' | /bin/grep -o '[0-9.]*$')
+assert_eq 'segundo ciclo manda IOPS do intervalo (500 ops / 5 s)' 'sim' \
+  "$(awk -v v="${iops2:-}" 'BEGIN { print (v != "" && v > 99 && v <= 100) ? "sim" : "nao" }')"
+assert_contains 'segundo ciclo manda a latencia por operacao' "$hb2" '"diskLatencyMs":3.00'
+assert_contains 'segundo ciclo grava o referencial do disco' \
+  "$(cat "$IOPS_HOME/disk-prev" 2>/dev/null)" ' 400 200 1500'
+
+# 3º ciclo com o contador RETROCEDENDO (disco trocado): nenhuma taxa inventada.
+DISKSTATS=""
+diskstats <<'DS'
+   8       0 sda 50 0 0 10 0 0 0 0 0 0 0
+ 259       0 nvme0n1 0 0 0 0 10 0 0 10 0 0 0
+DS
+run_io_cycle "$IOPS_HOME" 5
+hb3=$(/bin/grep 'network/nodes/heartbeat' "$TMP/curl-calls" | head -n 1)
+assert_not_contains 'contador que retrocedeu nao vira IOPS' "$hb3" '"diskIops":'
+assert_not_contains 'contador que retrocedeu nao vira latencia' "$hb3" '"diskLatencyMs":'
+# O referencial passa a ser o de agora mesmo assim: sem isso o nó ficaria sem I/O até reiniciar.
+assert_contains 'referencial assume o contador novo depois do retrocesso' \
+  "$(cat "$IOPS_HOME/disk-prev" 2>/dev/null)" ' 50 10 20'
+
+# 4º ciclo: intervalo SEM operação concluída. IOPS é 0.00 — é medida, não ausência — e a latência
+# NÃO vai: não há operação por onde dividir.
+run_io_cycle "$IOPS_HOME" 4
+hb4=$(/bin/grep 'network/nodes/heartbeat' "$TMP/curl-calls" | head -n 1)
+assert_contains 'intervalo sem operacao mede IOPS zero' "$hb4" '"diskIops":0.0'
+assert_not_contains 'sem operacao no intervalo, latencia fica ausente' "$hb4" '"diskLatencyMs":'
+
 # ------------------------------------- atualizacao do runtime: e do HOST, nao do container
 # O slot de reserva nao se atualizava sozinho: saia release, o master recebia deploy, e a reserva
 # ficava na versao antiga -- justamente ela que assume quando o master cai. A correcao vive no
