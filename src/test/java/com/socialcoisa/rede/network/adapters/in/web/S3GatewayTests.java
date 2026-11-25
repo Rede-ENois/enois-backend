@@ -3667,6 +3667,77 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		}
 	}
 
+	/**
+	 * `HeadBucket` usa a MESMA régua de dono do resto do gateway — inclusive a lápide.
+	 *
+	 * <p><b>Antes:</b> o `HeadBucket` perguntava só ao criador <b>registrado</b>
+	 * ({@code donoDoBucketRegistrado}), enquanto o `GET` do bucket, o {@code ?location}, o
+	 * {@code ?list-type=2} e o `PUT` usavam a régua de dono do gateway — {@code bucketsOf} (objetos
+	 * vivos) <b>ou</b> {@code bucketHasObjectsOf} (vivo ou lápide). No bucket que nasceu do primeiro
+	 * upload (sem {@code CreateBucket}) e cujo último objeto foi apagado, as duas respostas divergiam
+	 * para a mesma credencial:</p>
+	 *
+	 * <pre>
+	 * DELETE /s3/&lt;b&gt;/unico.txt   → 204    (só fica a lápide)
+	 * HEAD    /s3/&lt;b&gt;              → 404    ← furo: "esse bucket não é seu"
+	 * GET     /s3/&lt;b&gt;?list-type=2  → 200
+	 * GET     /s3/&lt;b&gt;?location     → 200
+	 * </pre>
+	 *
+	 * <p>O cliente que usa o `HeadBucket` como sonda de existência (é para isso que ele existe: o
+	 * `aws s3 ls` e o `rclone` perguntam antes de listar) conclui que o bucket sumiu e o recria — ou
+	 * para de sincronizar. A régua do gateway é uma só, e a lápide conta: quem criou o bucket não o
+	 * perde para a própria leitura por ter apagado a última chave (§4.23).</p>
+	 *
+	 * <p><b>Agora:</b> `HeadBucket` responde `200` para bucket da régua do dono (vivo ou lápide) e
+	 * {@code 404} para o que não é do dono — as duas respostas concordam com o `GET`. Bucket de outra
+	 * conta continua `404` (não revela existência, o comentário que já estava aqui).</p>
+	 */
+	@Test
+	void head_bucket_concorda_com_o_get_do_mesmo_bucket() throws Exception {
+		String b = "hb" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		MockHttpServletRequestBuilder p1 = put("/s3/" + b + "/unico.txt")
+			.content("aaaa".getBytes(StandardCharsets.UTF_8));
+		assinar(p1, SECRET, shaDe("aaaa"));
+		assertThat(mockMvc.perform(p1).andReturn().getResponse().getStatus()).isEqualTo(200);
+
+		// Antes de apagar: as duas respostas concordam.
+		assertThat(headBucket(b)).as("HEAD com objeto vivo").isEqualTo(200);
+		assertThat(statusOf(get("/s3/" + b + "?list-type=2"), "list-type")).isEqualTo(200);
+
+		MockHttpServletRequestBuilder d = MockMvcRequestBuilders.delete("/s3/" + b + "/unico.txt");
+		assinar(d, SECRET, shaVazio());
+		assertThat(mockMvc.perform(d).andReturn().getResponse().getStatus()).isEqualTo(204);
+
+		// Depois de apagar (só a lápide fica): o HEAD continua 200, como o GET e o ?location.
+		assertThat(jdbc.queryForObject(
+			"select state from network_storage_objects where bucket = ? and object_key = 'unico.txt'", String.class, b))
+			.isEqualTo("DELETED");
+		assertThat(headBucket(b)).as("HEAD com só a lápide").isEqualTo(200);
+		assertThat(statusOf(get("/s3/" + b + "?list-type=2"), "list-type")).isEqualTo(200);
+		assertThat(statusOf(get("/s3/" + b + "?location"), "location")).isEqualTo(200);
+
+		// Bucket que este dono nunca tocou: 404 nas duas perguntas (não revela a existência).
+		String alheio = "xx" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		assertThat(headBucket(alheio)).as("HEAD de bucket que não é do dono").isEqualTo(404);
+		assertThat(statusOf(get("/s3/" + alheio + "?list-type=2"), "GET de bucket alheio")).isEqualTo(403);
+	}
+
+	private int headBucket(String b) throws Exception {
+		MockHttpServletRequestBuilder h = MockMvcRequestBuilders.head("/s3/" + b);
+		assinar(h, SECRET, shaVazio());
+		var rr = mockMvc.perform(h).andReturn();
+		return (rr.getRequest().isAsyncStarted() ? mockMvc.perform(asyncDispatch(rr)).andReturn() : rr)
+			.getResponse().getStatus();
+	}
+
+	private int statusOf(MockHttpServletRequestBuilder b, String rotulo) throws Exception {
+		assinar(b, SECRET, shaVazio());
+		var rr = mockMvc.perform(b).andReturn();
+		var resp = rr.getRequest().isAsyncStarted() ? mockMvc.perform(asyncDispatch(rr)).andReturn() : rr;
+		return resp.getResponse().getStatus();
+	}
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {
