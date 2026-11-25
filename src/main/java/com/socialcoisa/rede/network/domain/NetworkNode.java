@@ -246,7 +246,7 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 	 * <p>Duas medidas, um campo na rede:</p>
 	 * <ul>
 	 * <li>{@code usedMb} informado → é o uso, e {@code availableMb} é o disponível;</li>
-	 * <li>só {@code availableMb} (runtime anterior a V380, que mandava o <b>disponível</b> em
+	 * <li>só {@code availableMb} (runtime anterior a V381, que mandava o <b>disponível</b> em
 	 * {@code memoryMb}) → o uso é derivado, {@code declarado - disponível}, <b>quando</b> o
 	 * disponível não passa do declarado;</li>
 	 * <li>só {@code usedMb} → o disponível é desconhecido, e fica nulo.</li>

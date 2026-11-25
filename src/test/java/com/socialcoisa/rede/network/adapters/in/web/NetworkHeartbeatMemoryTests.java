@@ -98,7 +98,7 @@ class NetworkHeartbeatMemoryTests {
 	/**
 	 * A série histórica do gráfico sofre do mesmo significado invertido: o runtime antigo manda o
 	 * disponível em {@code memoryMb}, e a amostra recebia o campo cru. Um nó ocioso de 8 GB aparecia
-	 * no gráfico com 7,9 GB em uso — exatamente o sintoma que a V380 corrige no nó, sobrevivendo na
+	 * no gráfico com 7,9 GB em uso — exatamente o sintoma que a V381 corrige no nó, sobrevivendo na
 	 * série, que é o que o painel desenha.
 	 */
 	@Test

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Migração V380 (memória do nó em uso + disponível) contra um MariaDB real, aplicada DUAS vezes.
+# Migração V381 (memória do nó em uso + disponível) contra um MariaDB real, aplicada DUAS vezes.
 #
 # O que esta migração promete e o que aqui se mede:
 #   1. `observed_memory_available_mb` nasce, e é idempotente (2ª rodada sem erro);
 #   2. nó já registrado ANTES da migração não perde a medida: o número que estava em
 #      `observed_memory_mb` era o DISPONÍVEL e vai para `observed_memory_available_mb`, com o uso
 #      nulo até o próximo heartbeat. Ler o antigo como uso manteria o nó "teto atingido" com a
-#      máquina ociosa — o defeito que a V380 corrige — até o heartbeat chegar;
+#      máquina ociosa — o defeito que a V381 corrige — até o heartbeat chegar;
 #   4. o UPSERT do heartbeat grava as duas colunas e não deixa `observed_running_tasks` para trás —
 #      o `set` novo é em uma instrução só, e uma coluna esquecida ali pararia de ser atualizada.
 #
@@ -24,7 +24,7 @@ FAIL=0
 pass() { printf '[PASS] %s\n' "$1"; PASS=$((PASS + 1)); }
 fail() { printf '[FAIL] %s\n' "$1" >&2; FAIL=$((FAIL + 1)); }
 
-MEM_MIGRATIONS=(V305__network_nodes.sql V380__network_node_memory_split.sql)
+MEM_MIGRATIONS=(V305__network_nodes.sql V381__network_node_memory_split.sql)
 for migration in "${MEM_MIGRATIONS[@]}"; do
   [[ -f "$MIGRATIONS/$migration" ]] || { fail "migração ausente: $migration"; exit 1; }
 done
@@ -105,7 +105,7 @@ else
   exit 1
 fi
 
-# Nó registrado ANTES da V380, com as medidas do contrato antigo: `observed_memory_mb` guardava o
+# Nó registrado ANTES da V381, com as medidas do contrato antigo: `observed_memory_mb` guardava o
 # DISPONÍVEL que o runtime mandava (7900 de 8192), porque era o único campo de memória. E um segundo
 # nó cuja "disponível" passava do declarado (4096 de 2048): derivar daria uso negativo.
 db >/dev/null 2>&1 <<'SQL'
@@ -128,11 +128,11 @@ else
   exit 1
 fi
 
-if apply V380__network_node_memory_split.sql >/dev/null 2>&1; then
-  pass "V380 aplica sobre a tabela existente"
+if apply V381__network_node_memory_split.sql >/dev/null 2>&1; then
+  pass "V381 aplica sobre a tabela existente"
 else
-  fail "V380 falhou na 1ª aplicação"
-  db < "$MIGRATIONS/V380__network_node_memory_split.sql" 2>&1 | head -3 >&2
+  fail "V381 falhou na 1ª aplicação"
+  db < "$MIGRATIONS/V381__network_node_memory_split.sql" 2>&1 | head -3 >&2
 fi
 
 column_exists observed_memory_available_mb \
@@ -162,10 +162,10 @@ zeros=$(db -N -e "select count(*) from network_nodes where observed_memory_avail
   || fail "migração inventou zero em $zeros nó(s)"
 
 # ---------------------------------------------------------------- 2ª aplicação
-if apply V380__network_node_memory_split.sql >/dev/null 2>&1; then
-  pass "V380 reaplica sem erro (idempotente)"
+if apply V381__network_node_memory_split.sql >/dev/null 2>&1; then
+  pass "V381 reaplica sem erro (idempotente)"
 else
-  fail "V380 falhou na 2ª aplicação"
+  fail "V381 falhou na 2ª aplicação"
 fi
 column_exists observed_memory_available_mb \
   && pass "coluna continua existindo depois da 2ª rodada" \
@@ -180,7 +180,7 @@ row2=$(db -N -e "select concat_ws('|', observed_memory_mb, ifnull(observed_memor
   || fail "dados mudaram na 2ª rodada (achei '$row2')"
 
 # ---------------------------------------------------------------- upsert do heartbeat
-# A forma que o adapter usa: uma instrução só, com todas as colunas do heartbeat V380.
+# A forma que o adapter usa: uma instrução só, com todas as colunas do heartbeat V381.
 if db -e "update network_nodes set runtime_version = '0.1.0', observed_cpu_percent = 30.0,
   observed_memory_mb = 8000, observed_memory_available_mb = 192, observed_running_tasks = 0,
   last_seen_at = now(3) where id = 'nd_mem_mig001'" 2>/dev/null; then

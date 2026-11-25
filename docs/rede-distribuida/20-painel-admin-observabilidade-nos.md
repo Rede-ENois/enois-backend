@@ -98,7 +98,7 @@ Um nó com 8 GB cedidos e 7,9 GB **livres** era "teto atingido" e saía do balan
 ociosa; um nó com 8 GB cedidos e 100 MB livres aparecia com "uso de 100 MB". Duas medidas opostas na
 mesma coluna, e a decisão de designação tomada sobre a errada.
 
-### Agora (V380)
+### Agora (V381)
 
 | campo | o que é | origem |
 |---|---|---|
@@ -119,11 +119,11 @@ Decisões:
 - **Nada é inventado quando o kernel não expõe.** Sem PSI (kernel < 4.20, ou desligado) o campo não
   vai; sem swap no `meminfo`, idem. Nulo é "não medido", o mesmo contrato do resto do heartbeat.
 - **O nó já registrado é reinterpretado na migração**: todo valor não nulo de `observed_memory_mb`
-  anterior à V380 veio do runtime antigo, que mandava o disponível. A V380 copia esse número para
+  anterior à V381 veio do runtime antigo, que mandava o disponível. A V381 copia esse número para
   `observed_memory_available_mb` e deixa o uso nulo (`NULL|7900|…`), e o `usageFrom` deriva o uso
   como para qualquer runtime antigo — nulo quando o disponível passa do declarado. Sem esse update
   o nó que já estava gravado continuaria "teto atingido" até o próximo heartbeat, que é exatamente o
-  defeito que a V380 corrige.
+  defeito que a V381 corrige.
 - **A série histórica usa o uso derivado**: `network_node_samples.memory_mb` recebe o valor que o
   serviço derivou para o nó, não o campo cru do corpo. O runtime antigo registrava o disponível na
   série também, e a amostra passaria a dizer "7,9 GB em uso" da máquina ociosa.
@@ -141,7 +141,7 @@ Decisões:
   disponível acima do declarado não vira uso; zero não vira uso; sem memória não afirma nada.
 - `node-executor-test` (**+4**, 223 asserções): o payload real do ciclo leva
   `memoryMb`, `memoryAvailableMb` e `swapUsedMb`, e o uso **não** é o mesmo número do disponível.
-- `scripts/tests/node-memory-migration-test.sh` em **MariaDB 11.4 real**: V380 aplicada **duas
+- `scripts/tests/node-memory-migration-test.sh` em **MariaDB 11.4 real**: V381 aplicada **duas
   vezes**; nó do contrato antigo reinterpretado (`NULL|7900|2|8192|ACTIVE`), inclusive quando o
   disponível passa do declarado; a coluna nova não recebe zero; o update do heartbeat grava as três
   colunas; a régua do teto confere no banco; tipo `int` e `NULL` aceito.
@@ -158,7 +158,7 @@ heartbeat que já existe. O caminho inteiro entrou neste ciclo:
 | lado | estado |
 |---|---|
 | rota (`Observed.diskIops`, `Observed.diskLatencyMs`) | existe |
-| banco (`V379`: `observed_disk_iops`, `observed_disk_latency_ms` em `network_nodes`; `disk_iops`, `disk_latency_ms` em `network_node_samples`) | existe |
+| banco (`V381`: `observed_disk_iops`, `observed_disk_latency_ms` em `network_nodes`; `disk_iops`, `disk_latency_ms` em `network_node_samples`) | existe |
 | quadro do nó (`series[].diskIops/diskLatencyMs`, `summary.diskIopsLatest/diskLatencyMsLatest`) | existe |
 | runtime medindo `/proc/diskstats` | existe — delta entre ciclos, §9 |
 
@@ -178,10 +178,10 @@ A série curta guarda as duas por minuto (o mesmo ponto do minuto é trocado, n�
 - `NetworkHeartbeatDiskIoTests` **3**, pela rota e pelo banco: o heartbeat grava e o quadro mostra
   as duas medidas; IOPS 0 medido sai como `0.0` e a latência sem operação sai nula; sem medida, os
   quatro campos do quadro são nulos.
-- `scripts/tests/node-disk-io-migration-test.sh` **26 PASS / 0 FAIL** em MariaDB 11.4 real: V379
+- `scripts/tests/node-disk-io-migration-test.sh` **26 PASS / 0 FAIL** em MariaDB 11.4 real: V381
   aplicada **duas vezes**, nó e amostra do contrato antigo preservados com `NULL`, update do nó e
   upsert da amostra gravando as colunas, zero medido distinto de nulo, tipo `double` aceitando `NULL`.
-- Mutação: V379 sem as colunas derruba **17** asserções do harness.
+- Mutação: V381 sem as colunas derruba **17** asserções do harness.
 
 ## 9. A medição no runtime (`/proc/diskstats`)
 

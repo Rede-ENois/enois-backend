@@ -130,6 +130,32 @@ class NetworkHeartbeatDiskIoTests {
 		assertThat(tree.get("summary").get("diskLatencyMsLatest").isNull()).isTrue();
 	}
 
+	/**
+	 * Medida fisicamente impossível não entra: nada de IOPS negativo nem latência negativa. O
+	 * runtime já não manda, mas a borda não pode depender do medidor — um corpo forjado com a chave
+	 * do nó gravaria {@code -42.5} IOPS no quadro e na série, que é pior que "não medido".
+	 */
+	@Test
+	void medidaNegativaNoHeartbeatNaoViraMedida() throws Exception {
+		String admin = adminToken();
+		Node node = activeNode(admin, "disco-negativo");
+
+		heartbeat(node, Map.of("cpuPercent", 5.0, "diskIops", -42.5, "diskLatencyMs", -1.0));
+
+		assertThat(dbDouble(node, "observed_disk_iops")).as("IOPS negativo").isNull();
+		assertThat(dbDouble(node, "observed_disk_latency_ms")).as("latência negativa").isNull();
+		Double amostra = jdbc.queryForObject(
+			"select disk_iops from network_node_samples where node_id = ? order by sampled_at desc limit 1",
+			Double.class, node.id());
+		assertThat(amostra).as("série também não recebe negativo").isNull();
+
+		var painel = mockMvc
+			.perform(get("/admin/network/nodes/" + node.id() + "/observability").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andReturn();
+		assertThat(painel.getResponse().getContentAsString()).doesNotContain("-42.5", "-1.0");
+	}
+
 	private void heartbeat(Node node, Map<String, Object> observed) throws Exception {
 		Map<String, Object> body = new HashMap<>();
 		body.put("runtimeVersion", "0.1.0");
