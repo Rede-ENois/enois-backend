@@ -21,7 +21,7 @@ public class S3ApiException extends ApiException {
 	}
 
 	private S3ApiException(int status, String code, String message, String etag) {
-			super(status, code, message,etag);	
+			super(status, code, message, etag);
 	}
 
 	@Override

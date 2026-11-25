@@ -122,13 +122,14 @@ public class StorageContentService {
 	 * {@code If-Match} ao {@code GET} e ao {@code HEAD}.</p>
 	 *
 	 * <p><b>Agora:</b> na ordem do HTTP, {@code If-Match} vem antes de {@code If-None-Match}: o que
-	 * não casa é {@code 412} com o ETag e sem corpo; o que casa deixa o resto do fluxo igual (§4.63).
+	 * não casa é {@code 412} com o ETag e o XML {@code <Code>PreconditionFailed</Code>}; o que casa deixa
+	 * o resto do fluxo igual (§4.63).
 	 * {@code paraGet=false} é o {@code HEAD}, que não abre a cópia só para o 412.</p>
 	 */
 	private ResponseEntity<StreamingResponseBody> respond(StorageObject object, String rangeHeader, String ifNoneMatch,
 			String ifModifiedSince, String ifRange, String ifMatch, boolean abrirCopia) {
 		// `If-Match` antes de abrir a cópia (§4.63): a pergunta é sobre a versão do catálogo, e o
-		// 412 não precisa do corpo. O ETag é o mesmo que a resposta devolve.
+		// 412 com o XML do erro, no formato que o SDK lê. O ETag é o mesmo que a resposta devolve.
 		if (ifMatch != null && !ifMatch.isBlank() && !matchesForte(etag(object), ifMatch)) {
 			throw new ApiException(412, "PreconditionFailed",
 				"A pre-condicao If-Match nao confere com o ETag atual.").withEtag(etag(object));
@@ -200,7 +201,7 @@ public class StorageContentService {
 		return head(object, ifNoneMatch, ifModifiedSince, null);
 	}
 
-	/** O {@code HEAD} com {@code If-Match} (§4.63): a mesma pergunta do {@code GET}, sem corpo. */
+	/** O {@code HEAD} com {@code If-Match} (§4.63): a mesma pergunta do {@code GET}, sem corpo na resposta. */
 	public ResponseEntity<StreamingResponseBody> head(StorageObject object, String ifNoneMatch, String ifModifiedSince,
 			String ifMatch) {
 		if (ifMatch != null && !ifMatch.isBlank() && !matchesForte(etag(object), ifMatch)) {

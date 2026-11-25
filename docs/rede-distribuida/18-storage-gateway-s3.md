@@ -1905,8 +1905,8 @@ para evitar, por outra porta.
 | `If-Match` atual + `If-None-Match` atual | `200` | `304` (o `If-Match` não engole o 304) |
 | `HEAD` com `If-Match` divergente | `200` | `412` |
 
-- A ordem é a do HTTP: `If-Match` antes de `If-None-Match`, e antes de abrir a cópia — o `412` não
-  precisa do corpo, e um objeto sem cópia registrada responde `412` antes de `409`.
+- A ordem é a do HTTP: `If-Match` antes de `If-None-Match`, e antes de abrir a cópia — o `412` leva
+  só o XML do erro, sem abrir a cópia, e um objeto sem cópia registrada responde `412` antes de `409`.
 - Vale no `GET` e no `HEAD`. A comparação do `If-Match` é a **forte** (RFC 9110 §13.1.1), em
   `StorageContentService.matchesForte`: o `W/<etag atual>` não casa — validador fraco não é o da
   representação — e a lista separada por vírgula casa quando qualquer item casa. O `If-None-Match`
