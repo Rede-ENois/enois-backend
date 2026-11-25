@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.network.adapters.in.web;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 
@@ -101,12 +102,27 @@ class NetworkNodeController {
 	}
 
 	/**
-	 * O que o nó mediu. {@code bytesInMb}/{@code bytesOutMb} são o tráfego ACUMULADO nas interfaces
+	 * O que o nó mediu. {@code memoryMb} é memória <b>em uso</b> e {@code memoryAvailableMb} a
+	 * <b>disponível</b> — o runtime anterior à V381 mandava o disponível em {@code memoryMb}, e o
+	 * Control Plane deriva o uso dele (ver {@code NetworkNode.usageFrom}). Os dois nulos são "não
+	 * medido", nunca zero: zero de uso afirmaria máquina ociosa.
+	 *
+	 * <p>{@code diskIops}/{@code diskLatencyMs} são o I/O do disco medido pelo nó no intervalo entre
+	 * dois heartbeats (brief §8.2). Nulo é "não medido" — primeiro ciclo depois de subir, runtime
+	 * antigo, ou disco não identificável — e não zero: zero IOPS é uma medida ("medi e não houve
+	 * operação"), e a latência fica nula quando o intervalo não teve operação concluída.</p>
+	 *
+	 * <p>{@code temperatureC} é a MAIOR temperatura entre os sensores da máquina, em graus (brief
+	 * §8.2, "quando disponível"). Nulo é "a máquina não tem sensor legível" — máquina virtual,
+	 * container sem o {@code /sys} do host — e não uma temperatura medida.</p>
+	 *
+	 * <p>{@code bytesInMb}/{@code bytesOutMb} são o tráfego ACUMULADO nas interfaces
 	 * dele (brief §18, "consultar tráfego"); o Control Plane só recebe a contagem e não soma nada
 	 * por conta própria — quem transfere é a máquina do participante, e é ela que mede.
 	 */
-	record Observed(Double cpuPercent, Integer memoryMb, Integer runningTasks, Long diskFreeMb,
-			Long diskTotalMb, Long usedMb, Long bytesInMb, Long bytesOutMb) {
+	record Observed(Double cpuPercent, Integer memoryMb, Integer memoryAvailableMb, Integer runningTasks,
+			Long diskFreeMb, Long diskTotalMb, Double diskIops, Double diskLatencyMs, Double temperatureC, Long usedMb,
+			Long bytesInMb, Long bytesOutMb) {
 	}
 
 	/**
@@ -205,6 +221,19 @@ class NetworkNodeController {
 		return remoteAddr == null || remoteAddr.isBlank() ? null : remoteAddr;
 	}
 
+	/**
+	 * A temperatura em graus com uma casa — a precisão que um sensor tem. Vem como {@code Double} no
+	 * JSON e vira {@code BigDecimal} de uma casa para o banco guardar o número digitalizado (39,6 e
+	 * 39,4 são temperaturas diferentes, e arredondamento binário as confundiria). Leitura fora da
+	 * faixa operacional não é temperatura: o sensor devolveu lixo, e lixo não vira alarme.
+	 */
+	private static BigDecimal graus(Double celsius) {
+		if (celsius == null || celsius.isNaN() || celsius < -40 || celsius > 110) {
+			return null;
+		}
+		return BigDecimal.valueOf(celsius).setScale(1, java.math.RoundingMode.HALF_UP);
+	}
+
 	@PostMapping("/nodes/heartbeat")
 	HeartbeatResponse heartbeat(@RequestHeader(value = "X-Node-Id", required = false) String nodeId,
 			@RequestHeader(value = "X-Node-Key", required = false) String nodeKey,
@@ -214,8 +243,11 @@ class NetworkNodeController {
 		Observed observed = request == null ? null : request.observed();
 		NetworkNode updated = nodes.heartbeat(node, new NetworkNodeService.HeartbeatCommand(
 			request == null ? null : request.runtimeVersion(), observed == null ? null : observed.cpuPercent(),
-			observed == null ? null : observed.memoryMb(), observed == null ? null : observed.runningTasks(),
+			observed == null ? null : observed.memoryMb(), observed == null ? null : observed.memoryAvailableMb(),
+			observed == null ? null : observed.runningTasks(),
 			observed == null ? null : observed.diskFreeMb(), observed == null ? null : observed.diskTotalMb(),
+			observed == null ? null : observed.diskIops(), observed == null ? null : observed.diskLatencyMs(),
+			observed == null ? null : graus(observed.temperatureC()),
 			observed == null ? null : observed.usedMb(), observed == null ? null : observed.bytesInMb(),
 			observed == null ? null : observed.bytesOutMb(), request == null ? null : request.observedTerm(),
 			peerIp(forwardedFor, peerAddressFromRequest())));
@@ -232,8 +264,15 @@ class NetworkNodeController {
 		// quem participa. Nada disto bloqueia a resposta do heartbeat: uma amostra que falhe não
 		// pode impedir um nó de receber permissão de operar.
 		if (observed != null) {
-			observability.record(updated, observed.cpuPercent(), observed.memoryMb(), observed.diskFreeMb(),
-				observed.runningTasks());
+			// O uso vem do nó JÁ derivado (`updated`), não do campo cru: para o runtime antigo o
+			// `memoryMb` do corpo é o DISPONÍVEL, e passar o cru gravaria a máquina ociosa com 7,9 GB
+			// em uso na série histórica — o mesmo defeito que a derivação corrige em `network_nodes`.
+			// Disco vem do nó JÁ gravado (`updated`), não do corpo: a borda do serviço anula medida
+			// impossível (IOPS ou latência negativos), e passar o cru poria o negativo na série mesmo
+			// com a coluna do nó nula. A temperatura usa a mesma régua da coluna (`graus`).
+			observability.record(updated, observed.cpuPercent(), updated.observedMemoryMb(), observed.diskFreeMb(),
+				observed.runningTasks(), updated.observedDiskIops(), updated.observedDiskLatencyMs(),
+				graus(observed.temperatureC()));
 		}
 		if (request != null && request.logs() != null) {
 			for (LogRequest line : request.logs()) {

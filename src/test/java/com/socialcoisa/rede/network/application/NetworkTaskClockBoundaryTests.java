@@ -67,7 +67,7 @@ class NetworkTaskClockBoundaryTests {
 			nodes.create(nodeId, "no-fronteira-temporal", "owner-clock", List.of(NodeProfile.NODE_WORKER),
 				null, null, 4, 8192, 51200, 100, MICRO);
 			nodes.updateStatus(nodeId, NodeStatus.ACTIVE, "admin-clock", MICRO);
-			nodes.touch(nodeId, "0.1.0", 5.0, 1024, 0, 51200L, 0L, 0L, 0L, 0L, MICRO);
+			nodes.touch(nodeId, "0.1.0", 5.0, 1024, 7168, 0, 51200L, 102400L, 12.0, 2.5, null, 0L, 0L, 0L, MICRO);
 		});
 	}
 

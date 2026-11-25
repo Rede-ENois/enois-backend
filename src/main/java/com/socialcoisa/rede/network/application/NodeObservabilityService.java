@@ -64,14 +64,40 @@ public class NodeObservabilityService {
 	 *
 	 * <p>Valores ausentes continuam ausentes: um nó que não reportou CPU não vira "0% usado" no
 	 * gráfico — nulo e zero são coisas diferentes, como no disco livre.</p>
+	 *
+	 * <p>{@code memoryMb} é o <b>uso</b>, já derivado pelo serviço do nó (runtime antigo manda o
+	 * disponível em {@code memoryMb}, e a amostra sem a derivação registraria a máquina ociosa com
+	 * "7,9 GB em uso").</p>
 	 */
 	@Transactional
 	public void record(NetworkNode node, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
 			Integer runningTasks) {
+		record(node, cpuPercent, memoryMb, diskFreeMb, runningTasks, null, null);
+	}
+
+	/**
+	 * A amostra com o I/O de disco medido (brief §8.2). Separada da assinatura acima pelo mesmo
+	 * motivo dos outros contratos deste módulo: os chamadores que não medem disco continuam vendo o
+	 * nó "sem medição", e não "com 0 IOPS".
+	 */
+	@Transactional
+	public void record(NetworkNode node, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
+			Integer runningTasks, Double diskIops, Double diskLatencyMs) {
+		record(node, cpuPercent, memoryMb, diskFreeMb, runningTasks, diskIops, diskLatencyMs, null);
+	}
+
+	/**
+	 * A amostra com a temperatura da máquina (brief §8.2, "quando disponível"). O nó sem sensor
+	 * legível manda nulo, e o ponto do minuto fica sem temperatura — o gráfico mostra a lacuna em vez
+	 * de uma linha em 0 °C que ninguém mediu.
+	 */
+	@Transactional
+	public void record(NetworkNode node, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
+			Integer runningTasks, Double diskIops, Double diskLatencyMs, java.math.BigDecimal temperatureC) {
 		Instant now = clock.instant();
 		Instant minute = now.truncatedTo(java.time.temporal.ChronoUnit.MINUTES);
 		repository.saveSample(new Sample(node.id(), minute, cpuPercent, memoryMb, diskFreeMb, runningTasks, null,
-			node.status().name(), null));
+			node.status().name(), null, diskIops, diskLatencyMs, temperatureC));
 		repository.trimSamples(node.id(), SAMPLE_KEEP);
 	}
 
@@ -170,7 +196,8 @@ public class NodeObservabilityService {
 	 * disco não pode ter a média puxada para baixo por zeros que ninguém mediu.
 	 */
 	record Summary(Double cpuAvgPercent, Double cpuMaxPercent, Integer memoryMbLatest, Long diskFreeMbLatest,
-			Integer runningTasksLatest, int sampleCount) {
+			Integer runningTasksLatest, int sampleCount, Double diskIopsLatest, Double diskLatencyMsLatest,
+			java.math.BigDecimal temperatureCLatest) {
 	}
 
 	record View(String id, String at, String level, String message) {
@@ -192,7 +219,8 @@ public class NodeObservabilityService {
 		return new Summary(avg == null ? null : Math.round(avg * 10) / 10.0,
 			max == null ? null : Math.round(max * 10) / 10.0, latest == null ? null : latest.memoryMb(),
 			latest == null ? null : latest.diskFreeMb(), latest == null ? null : latest.runningTasks(),
-			samples.size());
+			samples.size(), latest == null ? null : latest.diskIops(),
+			latest == null ? null : latest.diskLatencyMs(), latest == null ? null : latest.temperatureC());
 	}
 
 	private static java.util.Map<String, Long> logLevels(List<LogLine> logs) {

@@ -104,8 +104,11 @@ carrega linha nenhuma — o segundo é o que a leva. O harness fixa os dois lado
 | verificação | resultado |
 |---|---|
 | `NetworkNodeObservabilityTests` | 5 — heartbeat alimenta série e console; dois no mesmo minuto = um ponto; teto de 200 na escrita; janela de um nó não vaza para outro; admin exigido e nó desconhecido é 404 |
-| `node-executor-test` | **177** asserções (172 + 5 do painel): primeiro heartbeat sem linha, segundo com `"logs":[`, nível, mensagem e instante |
+| `NetworkHeartbeatTemperatureTests` | 3 — a temperatura medida chega ao banco e ao quadro; a casa decimal é da medida (39,6 ≠ 39,4); sem sensor, série e `summary` nulos |
+| `node-temperature-migration-test` | **23** asserções em MariaDB 11.4 real: `V382` 2×, nó e amostra antigos com `NULL`, 39,6 preservado |
+| `node-executor-test` | **239** asserções (177 do painel e anteriores + 12 de IOPS/latência + as do ciclo 157): primeiro heartbeat sem linha, segundo com `"logs":[`, nível, mensagem e instante; e, no mesmo arquivo, os quatro ciclos de I/O — ver `20-painel-admin-observabilidade-nos.md` §9 |
 | `node-observability-migration-test` | **26** asserções em MariaDB 11.4 real, migrações 2× com dados |
+| `node-disk-io-migration-test` | **26** asserções em MariaDB 11.4 real: `V380` 2×, nó e amostra antigos preservados com `NULL`, zero medido distinto de nulo |
 
 Mutações conferidas: remover a gravação da amostra/linha no heartbeat derruba 4 dos 5 testes;
 remover `trimLogs` derruba `oTetoDoConsoleValeNaEscrita…`; tirar `logs_part` do corpo do heartbeat

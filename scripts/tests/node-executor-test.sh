@@ -156,6 +156,21 @@ assert_contains 'resultado carrega a tentativa vigente' "$(cat "$TMP/curl-calls"
 assert_contains 'output ecoa o idempotencyKey (prova de ciclo)' "$(cat "$TMP/curl-calls")" \
   '"output":"{\"echo\":\"idem-42\"}"'
 
+# Memória em DUAS medidas (V381): `memoryMb` é USO, `memoryAvailableMb` o disponível. O runtime
+# mandava só `MemAvailable` como `memoryMb` — e o Control Plane comparava com o teto cedido, então
+# 7,9 GB livres de 8 GB declarados viravam "teto atingido". A prova no payload real do ciclo: os
+# dois campos presentes e DISTINTOS, dos quais o uso é menor que o disponível numa máquina ociosa
+# (o CI é). Swap e pressão só vão quando o kernel os expõe — aqui se exige o swap do `meminfo`.
+HB_CALL=$(/bin/grep 'network/nodes/heartbeat' "$TMP/curl-calls" | head -n 1)
+assert_contains 'heartbeat manda o uso de memória (memoryMb)' "$HB_CALL" '"memoryMb":'
+assert_contains 'heartbeat manda o disponível separado (memoryAvailableMb)' "$HB_CALL" '"memoryAvailableMb":'
+assert_contains 'heartbeat manda o swap em uso (swapUsedMb)' "$HB_CALL" '"swapUsedMb":'
+# Uso e disponível são medidas opostas: o par com os dois iguais seria as duas colunas preenchidas
+# com o mesmo número — o defeito de antes, agora em dois campos. O awk compara os pares do JSON.
+PAR_IGUAL=$(printf '%s' "$HB_CALL" | /bin/grep -o '"memoryMb":[0-9]*,"memoryAvailableMb":[0-9]*' \
+  | awk -F'[:,]' '$2 == $4 { print }')
+assert_eq 'uso e disponível não são o mesmo número' '' "$PAR_IGUAL"
+
 # O painel do nó exibe as linhas do runtime, e elas só chegam ao Control Plane pelo heartbeat (o nó
 # não abre porta — brief §17). O primeiro ciclo não tem nada a mandar: a linha de aceite nasce da
 # RESPOSTA do heartbeat. O segundo é o que prova o caminho — o buffer do ciclo anterior entra no
@@ -1705,6 +1720,153 @@ SCRUB_CONFIG="$SCRUB_CONFIG_SEM_STORAGE" make_curl_scrub
 out=$(CONTROL_PLANE_URL=https://cp.test NODE_HOME="$NH" PATH="$TMP" NODE_POLL_SECONDS=1 \
   /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true)
 assert_not_contains 'no sem OBJECT_PUT nao manda relatorio' "$(cat "$TMP/curl-calls")" '/network/storage/scrub'
+
+# ------------------------------------------------- cenário: IOPS e latência de disco (§8.2)
+# O runtime mede o I/O como DELTA do `/proc/diskstats` entre dois ciclos, com o referencial no
+# arquivo de estado do nó (o ciclo é um processo por volta) e o denominador no relógio da medida
+# anterior (nanossegundos, porque a resolução de tempo de arquivo varia com o sistema de arquivos).
+# A leitura é do arquivo apontado por `DISKSTATS_FILE` — o harness serve contadores conhecidos.
+# O que se prova, sobre o corpo real do heartbeat:
+#   1. o PRIMEIRO ciclo não manda IOPS nem latência — sem anterior não há intervalo, e 0 afirmaria
+#      um disco parado que ninguém mediu;
+#   2. o segundo ciclo calcula: IOPS = operações do intervalo / segundos e latência = ms / operação,
+#      com partição (`sda1`), loop e `dm` fora da conta. O denominador é o intervalo REAL entre as
+#      duas medições, então a prova do IOPS é a fórmula sobre o número que o nó mandou; a latência
+#      tem valor EXATO (operações e ms fixos, sem depender do relógio);
+#   3. contador que RETROCEDEU (disco trocado) não vira taxa, e o referencial avança mesmo assim;
+#   4. intervalo sem operação concluída: IOPS 0.00 (é medida) e latência ausente (não há por onde
+#      dividir).
+IOPS_HOME="$TMP/node-home-disco"
+mkdir -p "$IOPS_HOME"
+cp "$NH/node.json" "$NH/api-key" "$IOPS_HOME/"
+
+# Formato do kernel: MAJOR MINOR NOME leituras MERGES SETORES ms_leitura escritas MERGES SETORES
+# ms_escrita ... As colunas 4 (leituras), 7 (ms lendo), 8 (escritas) e 11 (ms escrevendo) são as que
+# a medição usa. As colunas 6 e 10 são SETORES, não tempo — trocá-las por 7 e 11 daria latência 0.
+diskstats() {
+  cat > "$TMP/diskstats"
+  DISKSTATS="$TMP/diskstats"
+}
+
+run_io_cycle() {
+  # run_io_cycle <home> <segundos desde a medida anterior>: roda UM ciclo com o diskstats atual.
+  # A idade é forjada no arquivo de estado (nanossegundos contadores).
+  local home="$1" ago_secs="${2:-}"
+  if [[ -n "$ago_secs" ]]; then
+    printf '%s %s\n' "$(( $(date +%s%N) - ago_secs * 1000000000 ))" "$(cut -d' ' -f2- "$home/disk-prev")" \
+      > "$home/disk-prev"
+  fi
+  : > "$TMP/curl-calls"
+  CONTROL_PLANE_URL=https://cp.test NODE_HOME="$home" PATH="$TMP" NODE_POLL_SECONDS=1 \
+    DISKSTATS_FILE="$TMP/diskstats" \
+    /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true
+}
+
+# 1º ciclo: só grava o referencial. `sda1` (partição) e `loop0` não contam.
+DISKSTATS=""
+diskstats <<'DS'
+   8       0 sda 100 0 0 0 0 0 0 0 0 0 0
+   8       1 sda1 90 0 0 0 0 0 0 0 0 0 0
+   7       0 loop0 5 0 0 0 0 0 0 0 0 0 0
+DS
+run_io_cycle "$IOPS_HOME"
+hb1=$(/bin/grep 'network/nodes/heartbeat' "$TMP/curl-calls" | head -n 1)
+assert_not_contains 'primeiro ciclo nao manda IOPS (sem intervalo)' "$hb1" '"diskIops":'
+assert_not_contains 'primeiro ciclo nao manda latencia (sem intervalo)' "$hb1" '"diskLatencyMs":'
+assert_contains 'primeiro ciclo grava o referencial do disco' \
+  "$(cat "$IOPS_HOME/disk-prev" 2>/dev/null)" ' 100 0 0'
+
+# 2º ciclo, 5 s depois: sda faz 400 leituras (500 ms lendo) e o nvme faz 200 escritas (1000 ms
+# escrevendo). A partição e o loop mudam MUITO e não entram em nada.
+DISKSTATS=""
+diskstats <<'DS'
+   8       0 sda 400 0 0 500 0 0 0 0 0 0 0
+   8       1 sda1 999 0 0 999 0 0 0 999 0 0 0
+ 259       0 nvme0n1 0 0 0 0 200 0 0 1000 0 0 0
+   7       0 loop0 777 0 0 777 0 0 0 777 0 0 0
+DS
+run_io_cycle "$IOPS_HOME" 5
+hb2=$(/bin/grep 'network/nodes/heartbeat' "$TMP/curl-calls" | head -n 1)
+# O intervalo real entre as duas medições é ~5 s, nunca menos: IOPS = 500 / segundos ≤ 100, e 100
+# só num intervalo instantâneo. O que se prova é a conta sobre o número que o nó mandou.
+iops2=$(printf '%s' "$hb2" | /bin/grep -o '"diskIops":[0-9.]*' | /bin/grep -o '[0-9.]*$')
+assert_eq 'segundo ciclo manda IOPS do intervalo (500 ops / 5 s)' 'sim' \
+  "$(awk -v v="${iops2:-}" 'BEGIN { print (v != "" && v > 99 && v <= 100) ? "sim" : "nao" }')"
+assert_contains 'segundo ciclo manda a latencia por operacao' "$hb2" '"diskLatencyMs":3.00'
+assert_contains 'segundo ciclo grava o referencial do disco' \
+  "$(cat "$IOPS_HOME/disk-prev" 2>/dev/null)" ' 400 200 1500'
+
+# 3º ciclo com o contador RETROCEDENDO (disco trocado): nenhuma taxa inventada.
+DISKSTATS=""
+diskstats <<'DS'
+   8       0 sda 50 0 0 10 0 0 0 0 0 0 0
+ 259       0 nvme0n1 0 0 0 0 10 0 0 10 0 0 0
+DS
+run_io_cycle "$IOPS_HOME" 5
+hb3=$(/bin/grep 'network/nodes/heartbeat' "$TMP/curl-calls" | head -n 1)
+assert_not_contains 'contador que retrocedeu nao vira IOPS' "$hb3" '"diskIops":'
+assert_not_contains 'contador que retrocedeu nao vira latencia' "$hb3" '"diskLatencyMs":'
+# O referencial passa a ser o de agora mesmo assim: sem isso o nó ficaria sem I/O até reiniciar.
+assert_contains 'referencial assume o contador novo depois do retrocesso' \
+  "$(cat "$IOPS_HOME/disk-prev" 2>/dev/null)" ' 50 10 20'
+
+# 4º ciclo: intervalo SEM operação concluída. IOPS é 0.00 — é medida, não ausência — e a latência
+# NÃO vai: não há operação por onde dividir.
+run_io_cycle "$IOPS_HOME" 4
+hb4=$(/bin/grep 'network/nodes/heartbeat' "$TMP/curl-calls" | head -n 1)
+assert_contains 'intervalo sem operacao mede IOPS zero' "$hb4" '"diskIops":0.0'
+assert_not_contains 'sem operacao no intervalo, latencia fica ausente' "$hb4" '"diskLatencyMs":'
+
+# ------------------------------------------------ cenário: temperatura do nó (§8.2)
+# O runtime lê `THERMAL_HWMON_DIR/hwmon*/temp*_input` e `THERMAL_ZONE_DIR/thermal_zone*/temp` — os
+# mesmos caminhos do `/sys` do kernel, apontáveis no harness — e manda a MAIOR leitura válida:
+# máquina com CPU, GPU e NVMe tem três temperaturas, e a que decide risco de limiar é a maior.
+# O que se prova, sobre o corpo real do heartbeat:
+#   1. sem sensor (máquina virtual, container sem o `/sys` do host) o campo NÃO vai — 0 °C seria
+#      uma medida que ninguém fez;
+#   2. com várias fontes, vai a maior, em graus, e a leitura fora da faixa física é descartada
+#      (sensor quebrado devolve lixo, e lixo viraria alarme);
+#   3. zona térmica ACPI conta quando o hwmon não tem nada.
+TEMP_HOME="$TMP/node-home-temp"
+mkdir -p "$TEMP_HOME" "$TMP/hwmon-vazio" "$TMP/thermal-vazio"
+cp "$NH/node.json" "$NH/api-key" "$TEMP_HOME/"
+: > "$TMP/curl-calls"
+
+run_temp_cycle() {
+  # run_temp_cycle <home> <dir hwmon> <dir thermal>: roda UM ciclo só com os sensores indicados.
+  CONTROL_PLANE_URL=https://cp.test NODE_HOME="$1" PATH="$TMP" NODE_POLL_SECONDS=1 \
+    THERMAL_HWMON_DIR="$2" THERMAL_ZONE_DIR="$3" \
+    /bin/bash -c "$(sed -n '1,/^while true; do$/p' "$NODE_DIR/node-runtime.sh" | sed '/^while true; do$/d'; echo cycle)" 2>&1 || true
+}
+
+run_temp_cycle "$TEMP_HOME" "$TMP/hwmon-vazio" "$TMP/thermal-vazio"
+hb_sem=$(/bin/grep 'network/nodes/heartbeat' "$TMP/curl-calls" | head -n 1)
+assert_not_contains 'sem sensor de temperatura o campo nao vai' "$hb_sem" '"temperatureC":'
+
+# Três fontes como numa máquina real: NVMe em 37,85 °C, GPU em 38,00 e CPU em 39,62 — e um quarto
+# sensor em 125 °C, acima da faixa de OPERAÇÃO (é sensor de ponto de critério, não temperatura
+# corrente). A leitura da CPU é a que vale: 39,6 °C, COM a casa decimal — o kernel publica milésimos
+# e a divisão inteira do shell truncava 39625 para 39 antes de o Control Plane ver.
+mkdir -p "$TMP/hwmon"/hwmon{0,1,2,3} "$TMP/thermal-vazio2"
+printf '38850\n' > "$TMP/hwmon/hwmon0/temp1_input"
+printf '38000\n' > "$TMP/hwmon/hwmon1/temp1_input"
+printf '39625\n' > "$TMP/hwmon/hwmon2/temp1_input"
+printf '125000\n' > "$TMP/hwmon/hwmon3/temp1_input"
+: > "$TMP/curl-calls"
+run_temp_cycle "$TEMP_HOME" "$TMP/hwmon" "$TMP/thermal-vazio2"
+hb_temp=$(/bin/grep 'network/nodes/heartbeat' "$TMP/curl-calls" | head -n 1)
+assert_contains 'varias fontes: vai a maior temperatura, com a casa decimal' "$hb_temp" '"temperatureC":39.6'
+assert_not_contains 'leitura acima da faixa de operacao e descartada' "$hb_temp" '"temperatureC":125'
+assert_not_contains 'e nao da 38,0 da GPU' "$hb_temp" '"temperatureC":38.0'
+assert_not_contains 'nem 37,9 do NVMe' "$hb_temp" '"temperatureC":37.8'
+
+# Zona térmica ACPI sozinha: é fonte válida quando o hwmon não tem nada.
+mkdir -p "$TMP/thermal"/thermal_zone0 "$TMP/hwmon-vazio2"
+printf '52000\n' > "$TMP/thermal/thermal_zone0/temp"
+: > "$TMP/curl-calls"
+run_temp_cycle "$TEMP_HOME" "$TMP/hwmon-vazio2" "$TMP/thermal"
+hb_zone=$(/bin/grep 'network/nodes/heartbeat' "$TMP/curl-calls" | head -n 1)
+assert_contains 'zona termica ACPI conta como fonte' "$hb_zone" '"temperatureC":52'
 
 # ------------------------------------- atualizacao do runtime: e do HOST, nao do container
 # O slot de reserva nao se atualizava sozinho: saia release, o master recebia deploy, e a reserva

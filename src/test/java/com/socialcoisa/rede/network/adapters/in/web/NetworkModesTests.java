@@ -361,7 +361,7 @@ class NetworkModesTests {
 			.perform(post("/network/nodes/heartbeat").header("X-Node-Id", node.id())
 				.header("X-Node-Key", node.key()).contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("runtimeVersion", "0.1.0", "observed",
-					Map.of("cpuPercent", 5.0, "memoryMb", 8192, "runningTasks", 0)))))
+					Map.of("cpuPercent", 5.0, "memoryMb", 8192, "memoryAvailableMb", 0, "runningTasks", 0)))))
 			.andExpect(status().isOk());
 
 		enqueue("mem", 2);
@@ -446,7 +446,7 @@ class NetworkModesTests {
 			.perform(post("/network/nodes/heartbeat").header("X-Node-Id", node.id())
 				.header("X-Node-Key", node.key()).contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("runtimeVersion", "0.1.0", "observed",
-					Map.of("cpuPercent", 5.0, "memoryMb", 1024, "runningTasks", 0)))))
+					Map.of("cpuPercent", 5.0, "memoryMb", 1024, "memoryAvailableMb", 7168, "runningTasks", 0)))))
 			.andExpect(status().isOk());
 		return node;
 	}

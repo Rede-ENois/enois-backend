@@ -536,7 +536,8 @@ class NetworkTasksTests {
 			.perform(post("/network/nodes/heartbeat").header("X-Node-Id", node.id())
 				.header("X-Node-Key", node.key()).contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("runtimeVersion", "0.1.0", "observed",
-					Map.of("cpuPercent", cpuPercent, "memoryMb", 1024, "runningTasks", runningTasks)))))
+					Map.of("cpuPercent", cpuPercent, "memoryMb", 1024, "memoryAvailableMb", 7168,
+						"runningTasks", runningTasks)))))
 			.andExpect(status().isOk());
 	}
 
@@ -546,7 +547,8 @@ class NetworkTasksTests {
 			.perform(post("/network/nodes/heartbeat").header("X-Node-Id", node.id())
 				.header("X-Node-Key", node.key()).contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("runtimeVersion", "0.1.0", "observed",
-					Map.of("cpuPercent", cpuPercent, "memoryMb", memoryMb, "runningTasks", runningTasks)))))
+					Map.of("cpuPercent", cpuPercent, "memoryMb", memoryMb,
+						"memoryAvailableMb", Math.max(0, 8192 - memoryMb), "runningTasks", runningTasks)))))
 			.andExpect(status().isOk());
 	}
 
