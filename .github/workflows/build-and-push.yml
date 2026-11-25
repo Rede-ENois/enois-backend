@@ -226,6 +226,9 @@ jobs:
       - name: 🧪 Upgrade do HTML de projetos em schema legado
         run: python3 scripts/tests/user-project-html-migration-test.py
 
+      - name: 🧪 Upgrade do texto livre do feed em schema legado
+        run: python3 scripts/tests/feed-texto-utf8mb4-migration-test.py
+
   # ===========================================================================
   # Build + Push para Harbor (push/workflow_dispatch em main ou qa, hosted runner)
   # ===========================================================================
