@@ -45,10 +45,14 @@ ao lado de um conector não forma par (`vou pra casa`, `quero na sexta` são fra
 O pareamento é guloso, da esquerda para a direita, e **não sobrepõe**: "meetup de rust na sexta"
 vira `meetup de rust` + `sexta`.
 
-**A palavra do par não sai solta.** O assunto é o cluster já decidido na extração: a palavra que
-entrou num par fica coberta por ele e não vira assunto próprio — a lista mostra `mercado de
-trabalho`, e não `mercado`, `trabalho` e `mercado de trabalho`. Só as palavras que não couberam em
-par nenhum entram sozinhas.
+**Só o assunto com contexto vira assunto.** Desde a regra de 2026-11-25, o que entra na lista é
+**apenas a expressão de contexto** (duas ou mais palavras: `mercado de trabalho`, `inteligencia
+artificial`, `meetup de rust`). A palavra solta (`rust`, `praia`, `java`) **não** vira assunto nem
+como sobra do cluster — ela é vocabulário comum da rede e, sozinha, produzia alta de ruído (foi o
+bug das palavras soltas no ranking). Um texto que só tenha palavra solta não gera assunto: ele
+entra nas contagens, não na lista. A tag declarada pelo autor continua valendo como assunto.
+Consequência: o denominador da discriminação (`janelaPublicacoes`) agora conta só publicações
+**com assunto de contexto**, porque as demais não geram fala.
 
 ## Pontuação: dois fatores, e os dois são necessários
 

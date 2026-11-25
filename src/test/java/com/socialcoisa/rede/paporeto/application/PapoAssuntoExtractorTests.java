@@ -15,30 +15,42 @@ class PapoAssuntoExtractorTests {
 
 	private final PapoAssuntoExtractor extractor = new PapoAssuntoExtractor();
 
+
+	@Test
+	void palavraSoltaNaoViraAssunto() {
+		// O bug das palavras soltas: uma palavra sozinha ("rust", "praia", "trabalho") é
+		// vocabulário comum, não conversa. Só a expressão com contexto (2+ palavras) vira assunto.
+		// Palavra sozinha: não é conversa.
+		assertThat(extractor.assuntos(extractor.extrair("rust", "POST"))).isEmpty();
+		assertThat(extractor.assuntos(extractor.extrair("praia", "POST"))).isEmpty();
+		// Já o par de palavras vizinhas ("adoro rust") é contexto: vira assunto.
+		assertThat(extractor.assuntos(extractor.extrair("adoro rust e gosto", "POST")))
+			.contains("adoro rust");
+	}
 	@Test
 	void dobraAcentoECaixa() {
 		List<PapoAssuntoExtractor.Fala> falas = extractor.extrair("Inteligência Artificial mudou tudo",
 				"POST");
 
-		// O par é a conversa: a palavra que entrou nele não sai solta.
+		// Só o composto com contexto vira assunto; "mudou" (palavra solta) não é conversa.
 		assertThat(falas).extracting(PapoAssuntoExtractor.Fala::expressao)
-			.containsExactly("inteligencia artificial", "mudou");
+			.containsExactly("inteligencia artificial");
 	}
 
 	@Test
 	void palavrasVaziasETokensPequenosNaoViramAssunto() {
 		List<PapoAssuntoExtractor.Fala> falas = extractor.extrair("eu to na praia com o cachorro dela", "POST");
 
-		// As vazias ("eu", "to", "com", "o", "dela") saem; e "praia" e "cachorro" NÃO colam
-		// em bigrama porque no texto têm "com o" no meio — vizinhança é no texto original.
-		assertThat(falas).extracting(PapoAssuntoExtractor.Fala::expressao).containsExactly("praia", "cachorro");
+		// As vazias ("eu", "to", "com", "o", "dela") saem; "praia" e "cachorro" não colam em
+		// bigrama ("com o" no meio) e, sozinhas, não são contexto: nenhuma vira assunto.
+		assertThat(falas).isEmpty();
 	}
 
 	@Test
 	void aMesmaPalavraNoMesmoTextoContaUmaVezSo() {
 		List<PapoAssuntoExtractor.Fala> falas = extractor.extrair("praia praia praia", "POST");
 
-		assertThat(falas).extracting(PapoAssuntoExtractor.Fala::expressao).containsExactly("praia");
+		assertThat(falas).isEmpty();
 	}
 
 	@Test
@@ -55,9 +67,7 @@ class PapoAssuntoExtractorTests {
 		String bagaco = "y".repeat(5000);
 
 		assertThat(extractor.extrair(bagaco, "POST")).isEmpty();
-		assertThat(extractor.extrair("meetup " + bagaco + " na praia", "POST"))
-			.extracting(PapoAssuntoExtractor.Fala::expressao)
-			.containsExactly("meetup", "praia");
+		assertThat(extractor.extrair("meetup " + bagaco + " na praia", "POST")).isEmpty();
 	}
 
 	@Test
@@ -65,16 +75,15 @@ class PapoAssuntoExtractorTests {
 		List<PapoAssuntoExtractor.Fala> falas = extractor.extrair("inteligencia artificial na praia", "POST");
 
 		List<String> assuntos = extractor.assuntos(falas);
-		assertThat(assuntos).containsExactlyInAnyOrder("inteligencia artificial", "praia");
+		assertThat(assuntos).containsExactly("inteligencia artificial");
 	}
 
 	@Test
 	void pontuacaoNaoColaPalavra() {
 		List<PapoAssuntoExtractor.Fala> falas = extractor.extrair("feei o meetup, bora?", "POST");
 
-		assertThat(falas).extracting(PapoAssuntoExtractor.Fala::expressao)
-			.contains("meetup")
-			.doesNotContain("feei meetup");
+		// "meetup" sozinho não é contexto; e pontuação não cola ("feei meetup" não existe).
+		assertThat(falas).isEmpty();
 	}
 
 	@Test
@@ -130,7 +139,7 @@ class PapoAssuntoExtractorTests {
 		List<String> assuntos = extractor.assuntos(
 				extractor.extrair("mercado de trabalho na minha cidade", "POST"));
 
-		assertThat(assuntos).containsExactly("mercado de trabalho", "cidade");
+		assertThat(assuntos).containsExactly("mercado de trabalho");
 	}
 
 	@Test
@@ -150,7 +159,7 @@ class PapoAssuntoExtractorTests {
 		List<String> assuntos = extractor.assuntos(
 				extractor.extrair("dia na praia com o cachorro na sexta", "POST"));
 
-		assertThat(assuntos).containsExactly("cachorro na sexta", "praia");
+		assertThat(assuntos).containsExactly("cachorro na sexta");
 	}
 
 	@Test
@@ -158,8 +167,8 @@ class PapoAssuntoExtractorTests {
 		// "quero na sexta" é o desejo de alguém, não a conversa da sexta: o verbo diz quem age,
 		// e o conector só cola quando o tema vem antes dele. Na cadeia, o conector depois do
 		// verbo não o liga à palavra da esquerda.
-		assertThat(extractor.assuntos(extractor.extrair("quero na sexta ver ao vivo", "POST")))
-			.containsExactly("sexta", "vivo");
+		// O "sexta" sozinho e o "vivo" sozinho não são contexto: não viram assunto.
+		assertThat(extractor.assuntos(extractor.extrair("quero na sexta ver ao vivo", "POST"))).isEmpty();
 		assertThat(extractor.assuntos(extractor.extrair("vou pra casa de praia", "POST")))
 			.containsExactly("casa de praia");
 	}
@@ -181,17 +190,18 @@ class PapoAssuntoExtractorTests {
 		List<String> assuntos = extractor.assuntos(
 				extractor.extrair("meetup de rust na sexta", "POST"));
 
-		assertThat(assuntos).containsExactly("meetup de rust", "sexta");
+		// O par vence e não sobrepõe; o "sexta" sozinho não vira assunto.
+		assertThat(assuntos).containsExactly("meetup de rust");
 	}
 
 	@Test
 	void conectorForaDaListaNaoColaPalavra() {
-		// "com" não é conector de expressão composta: "inteligencia com artificial" são duas
-		// palavras no mesmo texto, não um assunto.
+		// "com" não é conector de expressão composta: "inteligencia" e "artificial" ficam
+		// soltas e, sem contexto, não viram assunto.
 		List<String> assuntos = extractor.assuntos(
 				extractor.extrair("inteligencia com artificial", "POST"));
 
-		assertThat(assuntos).containsExactly("inteligencia", "artificial");
+		assertThat(assuntos).isEmpty();
 	}
 
 	@Test
@@ -222,13 +232,10 @@ class PapoAssuntoExtractorTests {
 		assertThat(extractor.assuntoValido("dando")).isFalse();
 		assertThat(extractor.assuntoValido("trabalhando")).isFalse();
 		assertThat(extractor.extrair("o que voce esta fazendo", "POST")).isEmpty();
-		assertThat(extractor.extrair("dando voltas sem parar", "POST"))
-			.extracting(PapoAssuntoExtractor.Fala::expressao)
-			.containsExactly("voltas", "parar");
-		// O substantivo ao lado do verbo continua nomeando a conversa: só o gerúndio sai.
-		assertThat(extractor.extrair("todo mundo dando palpite", "POST"))
-			.extracting(PapoAssuntoExtractor.Fala::expressao)
-			.containsExactly("palpite");
+		// O gerúndio sai; e as sobras ("voltas", "parar", "palpite") são palavras soltas,
+		// não contexto — nada vira assunto.
+		assertThat(extractor.extrair("dando voltas sem parar", "POST")).isEmpty();
+		assertThat(extractor.extrair("todo mundo dando palpite", "POST")).isEmpty();
 	}
 
 	@Test

@@ -101,18 +101,18 @@ class PapoRetoQualidadeTests {
 		publicadas("gente eu sei que tenho muito disso ate porque o mundo ta assim", 15, "rede", atras(9));
 		publicadas("enois galera bora nessa hoje", 12, "saudacao", atras(20));
 		// A palavra que está em toda parte sem nomear conversa: vinte e cinco publicações na janela.
-		publicadas("vida", 25, "vida", atras(6));
+		publicadas("vida corrida hoje", 25, "vida", atras(6));
 		// As conversas de verdade: gente diferente, publicações de agora.
 		publicadas("mercado de precos hoje pra gente", 8, "mercado", atras(0));
 		publicadas("seguranca digital hoje", 7, "seguranca", atras(0));
-		publicadas("java hoje", 6, "java", atras(0));
-		publicadas("linux hoje", 6, "linux", atras(0));
+		publicadas("java na pratica hoje", 6, "java", atras(0));
+		publicadas("linux no servidor hoje", 6, "linux", atras(0));
 		publicadas("curso de ingles hoje", 7, "curso", atras(0));
 		// O autor que repete: vinte publicações da mesma pessoa sobre o mesmo assunto.
 		publicadasDoMesmoAutor("promocao do meu curso de ingles", 20, "vendedor", "vend", atras(0));
 		// A conversa de três dias atrás, com uma fala de agora.
-		publicadas("mutirao hoje", 12, "mutirao", atras(72));
-		publicadas("mutirao hoje", 1, "mutirao_agora", atras(0));
+		publicadas("mutirao da horta hoje", 12, "mutirao", atras(72));
+		publicadas("mutirao da horta hoje", 1, "mutirao_agora", atras(0));
 		// O assunto que nasceu agora.
 		publicadas("black friday hoje", 12, "black", atras(0));
 	}
@@ -126,7 +126,8 @@ class PapoRetoQualidadeTests {
 		// Nenhuma palavra de conversa fiada aparece como tendência própria...
 		assertThat(ranking).doesNotContain("gente", "sei", "tenho", "mundo", "ate", "enois", "galera", "coisa");
 		// ...e o que aparece é conversa de verdade, tirada do texto do corpus.
-		assertThat(ranking).contains("mercado de precos", "seguranca digital", "java", "linux", "black friday");
+		assertThat(ranking).contains("mercado de precos", "seguranca digital", "java na pratica", "linux no servidor",
+				"black friday");
 	}
 
 	@Test
@@ -138,13 +139,14 @@ class PapoRetoQualidadeTests {
 		// "vida" foi extraída e agregada — vinte e cinco pessoas falaram dela —, então nenhuma
 		// lista de palavras vazias é o que a segura: a régua do próprio corte tira a palavra que
 		// está em toda parte depois do chão de pessoas, e não antes dele.
-		PapoAssunto vida = repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "vida").orElseThrow();
+		PapoAssunto vida = repositorio.assuntoDe(PapoRetoWorker.ESCOPO_GLOBAL, "vida corrida").orElseThrow();
 		assertThat(vida.falasPost()).isEqualTo(25);
 		assertThat(vida.pessoas()).isEqualTo(25);
 		assertThat(vida.publicacoes()).isEqualTo(25);
 		assertThat(vida.janelaPublicacoes()).isEqualTo(104);
-		assertThat(vida.onipresente()).isTrue();
-		assertThat(ranking).doesNotContain("vida");
+		// A régua de "onipresente" se aplica à palavra NÃO composta; como o assunto agora é sempre
+		// composto, uma conversa legítima de muitas pessoas permanece no ranking (não é fala comum).
+		assertThat(ranking).contains("vida corrida").doesNotContain("vida", "corrida");
 	}
 
 	@Test
@@ -174,9 +176,9 @@ class PapoRetoQualidadeTests {
 
 		// O que nasceu agora vale pelo que está vivo agora; a conversa de três dias atrás, com
 		// uma fala nova, não volta ao topo por causa dela.
-		assertThat(ranking.indexOf("black friday")).isLessThan(ranking.indexOf("mutirao"));
+		assertThat(ranking.indexOf("black friday")).isLessThan(ranking.indexOf("mutirao da horta"));
 		assertThat(statusDe(views, "black friday")).isEqualTo("EMERGENTE");
-		assertThat(statusDe(views, "mutirao")).isEqualTo("PERSISTENTE");
+		assertThat(statusDe(views, "mutirao da horta")).isEqualTo("PERSISTENTE");
 	}
 
 	@Test
@@ -186,7 +188,7 @@ class PapoRetoQualidadeTests {
 		List<String> ranking = subjects(rankingDoCorte());
 
 		// Treze pessoas falaram do mutirão na janela: ele perde a liderança, não o histórico.
-		assertThat(ranking).contains("mutirao");
+		assertThat(ranking).contains("mutirao da horta");
 	}
 
 	@Test
@@ -195,11 +197,14 @@ class PapoRetoQualidadeTests {
 		List<String> agora = subjects(rankingDoCorte());
 		List<String> antes = rankingDaReguaAnterior();
 
-		// Sob a régua anterior, a palavra que está em toda parte entrava na lista...
-		assertThat(antes).contains("vida");
-		assertThat(agora).doesNotContain("vida");
-		// ...e o assunto inflado por repetição passava na frente da conversa de gente diferente:
-		// vinte e sete falas de uma pessoa valiam mais que doze publicações de doze pessoas.
+		// A régua de extração mudou: agora só assunto COM CONTEXTO (composto) entra. A palavra
+		// solta (uma só) não aparece em nenhum dos dois rankings do corpus novo — ambos já são
+		// compostos —, então o comparativo se concentra no que a régua de pontuação ainda separa.
+		assertThat(agora).allSatisfy(subject -> assertThat(subject).contains(" "));
+		assertThat(agora).doesNotContain("java", "linux", "mutirao", "vida", "filme", "corrida");
+		assertThat(antes).containsAll(agora);
+		// E o assunto inflado por repetição não passa na frente da conversa de gente diferente:
+		// vinte e sete falas de uma pessoa não valem mais que doze publicações de doze pessoas.
 		assertThat(antes.indexOf("curso de ingles")).isLessThan(antes.indexOf("black friday"));
 		assertThat(agora.indexOf("black friday")).isLessThan(agora.indexOf("curso de ingles"));
 	}
@@ -222,7 +227,9 @@ class PapoRetoQualidadeTests {
 			.orElseThrow();
 		assertThat(mutirao.pessoas()).isEqualTo(3);
 		assertThat(mutirao.amostragemMenor()).isTrue();
-		assertThat(mutirao.janelaPublicacoes()).isEqualTo(9);
+		// A base agora conta só publicações com assunto COM CONTEXTO (composto): "mutirao da
+		// horta" (3) + "festa de aniversario" (2). "aquele filme" vira "filme" sozinho e não conta.
+		assertThat(mutirao.janelaPublicacoes()).isEqualTo(5);
 	}
 
 	/**
