@@ -1278,9 +1278,10 @@ public class StorageCatalogService {
 	/**
 	 * A linha da versão pedida, com a régua de serventia da corrente.
 	 *
-	 * <p>{@code catalog.versions} devolve o histórico da chave; aqui a escolha é pela versão. Não
-	 * filtra por dono: o chamador já passou pelo {@code requireBucketDoDono}, e a chave é do bucket,
-	 * que é do dono.</p>
+	 * <p>{@code catalog.versions} devolve o histórico da chave — inclusive linhas de outras contas no
+	 * mesmo bucket —; aqui a escolha é pela versão. Não filtra por dono porque não conhece a
+	 * credencial: quem confere é o chamador, em
+	 * {@code S3GatewayController.objetoPedido}, que recusa com {@code 403 AccessDenied} (§4.68).</p>
 	 */
 	private StorageObject doRequireVersao(String bucket, String key, long versao) {
 		StorageObject object = catalog.versions(bucket, key).stream()
