@@ -17,34 +17,49 @@ IMAGE = os.environ.get(
 MIGRATION = ROOT / "src/main/resources/db/migration/V379__vagas_externas_texto_utf8mb4.sql"
 TABELA = "external_jobs"
 
-# (coluna, tipo, nulidade, default) das colunas de texto depois da migracao.
-COLUNAS = [
-    ("platform", "varchar(64)", "NO", None),
-    ("external_id", "varchar(255)", "NO", None),
-    ("title", "varchar(500)", "NO", None),
-    ("company", "varchar(255)", "YES", None),
-    ("location", "varchar(255)", "YES", None),
-    ("url", "varchar(1000)", "NO", None),
-    ("canonical_url", "varchar(1000)", "YES", None),
-    ("external_status", "varchar(32)", "NO", "FOUND"),
-    ("salary", "varchar(255)", "YES", None),
-    ("currency", "varchar(8)", "YES", None),
-    ("salary_min", "varchar(50)", "YES", None),
-    ("salary_max", "varchar(50)", "YES", None),
-    ("salary_period", "varchar(20)", "YES", None),
-    ("apply_email", "varchar(320)", "YES", None),
-    ("submitted_by", "varchar(255)", "YES", None),
-    ("description", "varchar(5000)", "YES", None),
-    ("employment_type", "varchar(40)", "YES", None),
-    ("level", "varchar(20)", "YES", None),
-    ("work_model", "varchar(20)", "YES", None),
-    ("city", "varchar(120)", "YES", None),
-    ("state", "varchar(60)", "YES", None),
-    ("country", "varchar(60)", "YES", None),
-    ("salary_currency", "varchar(8)", "YES", None),
-    ("salary_period_code", "varchar(10)", "YES", None),
-    ("attribution_url", "varchar(1000)", "YES", None),
-]
+# Colunas de texto depois da migracao, na forma como a consulta do teste devolve cada linha:
+# coluna, charset, collation, nulidade, tipo e default (o coalesce marca quem nao tem default).
+# Nenhuma mao unica pode acabar em NULL: o mariadb --batch escreve esse NULL igual ao de consulta
+# vazia, e o teste perde a coluna que ficou de fora.
+COLUNAS = f"""
+    select column_name, character_set_name, collation_name, is_nullable, column_type,
+           coalesce(column_default, '<sem default>')
+    from information_schema.columns
+    where table_schema = 'vagas' and table_name = 'external_jobs' and column_name in (
+        'platform', 'external_id', 'title', 'company', 'location', 'url', 'canonical_url',
+        'external_status', 'salary', 'currency', 'salary_min', 'salary_max', 'salary_period',
+        'apply_email', 'submitted_by', 'description', 'employment_type', 'level', 'work_model',
+        'city', 'state', 'country', 'salary_currency', 'salary_period_code', 'attribution_url'
+    )
+    order by column_name;
+"""
+
+ESPERADO = """
+    attribution_url|utf8mb4|utf8mb4_unicode_ci|YES|varchar(1000)|<sem default>
+    apply_email|utf8mb4|utf8mb4_unicode_ci|YES|varchar(320)|<sem default>
+    city|utf8mb4|utf8mb4_unicode_ci|YES|varchar(120)|<sem default>
+    company|utf8mb4|utf8mb4_unicode_ci|YES|varchar(255)|<sem default>
+    country|utf8mb4|utf8mb4_unicode_ci|YES|varchar(60)|<sem default>
+    currency|utf8mb4|utf8mb4_unicode_ci|YES|varchar(8)|<sem default>
+    description|utf8mb4|utf8mb4_unicode_ci|YES|varchar(5000)|<sem default>
+    employment_type|utf8mb4|utf8mb4_unicode_ci|YES|varchar(40)|<sem default>
+    external_id|utf8mb4|utf8mb4_unicode_ci|NO|varchar(255)|<sem default>
+    external_status|utf8mb4|utf8mb4_unicode_ci|NO|varchar(32)|FOUND
+    level|utf8mb4|utf8mb4_unicode_ci|YES|varchar(20)|<sem default>
+    location|utf8mb4|utf8mb4_unicode_ci|YES|varchar(255)|<sem default>
+    platform|utf8mb4|utf8mb4_unicode_ci|NO|varchar(64)|<sem default>
+    salary|utf8mb4|utf8mb4_unicode_ci|YES|varchar(255)|<sem default>
+    salary_currency|utf8mb4|utf8mb4_unicode_ci|YES|varchar(8)|<sem default>
+    salary_max|utf8mb4|utf8mb4_unicode_ci|YES|varchar(50)|<sem default>
+    salary_min|utf8mb4|utf8mb4_unicode_ci|YES|varchar(50)|<sem default>
+    salary_period|utf8mb4|utf8mb4_unicode_ci|YES|varchar(20)|<sem default>
+    salary_period_code|utf8mb4|utf8mb4_unicode_ci|YES|varchar(10)|<sem default>
+    state|utf8mb4|utf8mb4_unicode_ci|YES|varchar(60)|<sem default>
+    submitted_by|utf8mb4|utf8mb4_unicode_ci|YES|varchar(255)|<sem default>
+    title|utf8mb4|utf8mb4_unicode_ci|NO|varchar(500)|<sem default>
+    url|utf8mb4|utf8mb4_unicode_ci|NO|varchar(1000)|<sem default>
+    work_model|utf8mb4|utf8mb4_unicode_ci|YES|varchar(20)|<sem default>
+"""
 
 # O que o anuncio das fontes traz: espaco fino (U+202F) antes do simbolo de moeda, que e o byte da
 # linha do log da qa, mais acento e emoji.
@@ -176,19 +191,11 @@ class ExternalJobsTextoUtf8mb4MigrationTests(unittest.TestCase):
         cls.comando("docker", "rm", "-f", "--volumes", cls.container)
 
     def test_colunas_de_texto_declaram_utf8mb4(self):
-        # Uma consulta so: com uma linha por coluna, a mao unica de linha sem default sai igual ao
-        # NULL de consulta vazia e esconde coluna que ficou de fora.
-        esperado = "\n".join("|".join(c or "<sem default>" for c in linha) for linha in COLUNAS)
-        self.assertEqual(self.sql(
-            f"""
-                select column_name, character_set_name, collation_name, is_nullable, column_type,
-                       coalesce(column_default, '<sem default>')
-                from information_schema.columns
-                where table_schema = 'vagas' and table_name = '{TABELA}'
-                  and column_name in ({", ".join(f"'{c[0]}'" for c in COLUNAS)})
-                order by field(column_name, {", ".join(f"'{c[0]}'" for c in COLUNAS)});
-            """
-        ), esperado)
+        self.maxDiff = None
+        self.assertEqual(
+            "\n".join("	".join(linha.split("|")) for linha in ESPERADO.strip().splitlines()),
+            self.sql(COLUNAS),
+        )
 
     def test_nenhuma_coluna_de_texto_ficou_no_charset_legado(self):
         restantes = self.sql(f"""
