@@ -142,6 +142,7 @@ class NetworkTaskClockBoundaryTests {
 		NetworkTaskService service = new NetworkTaskService(repository, nodes,
 			context.getBeanProvider(MediaResultVerifier.class), context.getBeanProvider(EdgeDeliverVerifier.class),
 			context.getBeanProvider(StorageResultVerifier.class),
+			context.getBeanProvider(com.socialcoisa.rede.network.application.port.out.NodeObservabilityRepository.class),
 			modes, regions, audit, Clock.fixed(agora, ZoneOffset.UTC), 120, 180, 5, 900, 600);
 		return new TransactionTemplate(transactions).execute(status -> acao.apply(service));
 	}

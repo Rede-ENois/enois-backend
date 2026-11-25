@@ -1,0 +1,92 @@
+package com.socialcoisa.rede.network.domain;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.Map;
+
+import org.junit.jupiter.api.Test;
+
+/**
+ * O histograma de latência por nó (brief §8.2, p50/p95/p99).
+ *
+ * <p>O que aqui se prende é a <b>aritmética do percentil</b>, que é onde um erro passa despercebido:
+ * um p99 calculado como se fosse p90 ainda "parece" um número grande e plausível. Cada caso usa uma
+ * distribuição cuja resposta correta é conhecida de antemão.</p>
+ */
+class TaskLatencyTests {
+
+	@Test
+	void semAmostraNaoExistePercentil() {
+		TaskLatency vazia = TaskLatency.empty();
+		assertThat(vazia.total()).isZero();
+		// Zero seria "toda tarefa concluiu em 0 ms", que é medida de execução, não ausência dela.
+		assertThat(vazia.p50Ms()).isNull();
+		assertThat(vazia.p95Ms()).isNull();
+		assertThat(vazia.p99Ms()).isNull();
+	}
+
+	@Test
+	void faixaDobraAteSaturar() {
+		assertThat(TaskLatency.bucketOf(0)).isEqualTo(1);
+		assertThat(TaskLatency.bucketOf(1)).isEqualTo(1);
+		assertThat(TaskLatency.bucketOf(2)).isEqualTo(2);
+		assertThat(TaskLatency.bucketOf(3)).isEqualTo(4);
+		assertThat(TaskLatency.bucketOf(4)).isEqualTo(4);
+		assertThat(TaskLatency.bucketOf(5)).isEqualTo(8);
+		assertThat(TaskLatency.bucketOf(1000)).isEqualTo(1024);
+		// Acima do teto, tudo cai na última faixa: a tarefa não terminou em tempo útil.
+		assertThat(TaskLatency.bucketOf(1 << 20)).isEqualTo(1 << 16);
+	}
+
+	/**
+	 * 90 tarefas rápidas e 10 lentas: o p95 tem de cair LÁ EM CIMA das lentas. Um p95 que olhasse só
+	 * a contagem acumulada sem interpolar devolveria o limite da faixa das rápidas.
+	 */
+	@Test
+	void oPercentilDaCaudaNaoParaNaFaixaDasRapidas() {
+		// 90 em <=64 ms (faixa 64) e 10 em <=4096 ms (faixa 4096).
+		TaskLatency distribuicao = new TaskLatency(Map.of(64, 90, 4096, 10));
+
+		assertThat(distribuicao.total()).isEqualTo(100);
+		// p95 = posição 95: cai nas 10 lentas, a 5ª delas → 64 + (5/10)*(4096-64) = 2080.
+		assertThat(distribuicao.p95Ms()).isEqualTo(2080);
+		// p99 = posição 99: 64 + (9/10)*(4096-64) = 3692,8 → 3693.
+		assertThat(distribuicao.p99Ms()).isEqualTo(3693);
+		// p50 = posição 50: dentro das 90 rápidas → 0 + (50/90)*64 = 35,6 → 36.
+		assertThat(distribuicao.p50Ms()).isEqualTo(36);
+	}
+
+	/**
+	 * Todas as amostras na mesma faixa: o piso é 0, porque abaixo dela NÃO HÁ mediana nenhuma — dizer
+	 * que o percentil está acima de 512 seria afirmar o que ninguém mediu.
+	 */
+	@Test
+	void amostrasNaMesmaFaixaNaoInventamPiso() {
+		TaskLatency distribuicao = new TaskLatency(Map.of(1024, 100));
+		assertThat(distribuicao.p50Ms()).isEqualTo(512);
+		assertThat(distribuicao.p95Ms()).isEqualTo(973);
+		assertThat(distribuicao.p99Ms()).isEqualTo(1014);
+	}
+
+	/** Faixa vazia no meio não desloca a posição: só conta quem tem amostra. */
+	@Test
+	void faixaComZeroNaoContaPosicao() {
+		TaskLatency comVazio = new TaskLatency(Map.of(8, 0, 16, 10));
+		TaskLatency semVazio = new TaskLatency(Map.of(16, 10));
+		assertThat(comVazio.total()).isEqualTo(semVazio.total());
+		assertThat(comVazio.p95Ms()).isEqualTo(semVazio.p95Ms());
+	}
+
+	/**
+	 * Uma única amostra numa faixa sem nada abaixo: o percentil é o teto da faixa (o piso é 0), e não
+	 * metade dela — que é o que uma interpolação "de dentro" devolveria, afirmando 128 ms para uma
+	 * tarefa que só se sabe estar abaixo de 256 ms.
+	 */
+	@Test
+	void umaAmostraSoRespondeOTetoDaFaixa() {
+		TaskLatency uma = new TaskLatency(Map.of(256, 1));
+		assertThat(uma.p50Ms()).isEqualTo(256);
+		assertThat(uma.p95Ms()).isEqualTo(256);
+		assertThat(uma.p99Ms()).isEqualTo(256);
+	}
+}

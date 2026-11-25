@@ -374,6 +374,52 @@ fi
 # O nó com cópia para de operar sem sair da rede — é o que um participante desliga faz: `PAUSED` é a
 # pausa dele próprio (mantém a chave), e é a única transição que tem volta pelo mesmo caminho.
 # `SUSPENDED` não serve aqui: ele revoga as chaves e o nó não voltaria para o §25.11.
+# ---------------------------------------------------------------- §25.10 nó indisponível
+# A durabilidade é `cópias confirmadas < alvo`. Com `rede.storage.replicas: 2` o alvo é a réplica 0
+# do Control Plane MAIS uma cópia de nó: o objeto só está completo quando a cópia do nó confirma
+# (`OK`). Com o nó pausado as cópias dele não contam mais — e a varredura passa a acusar o objeto.
+#
+# A varredura não tem relógio próprio: lê o status do banco na hora. Então o que a asserção mede
+# honestamente é a TRANSIÇÃO: antes da pausa, nenhuma lacuna (a cópia do nó está OK); depois, a
+# lacuna daquele objeto. Antes, o §25.7 só garantia "pelo menos o alvo" e o teste seguia mesmo com a
+# cópia do nó ainda em trânsito — a lacuna já existia sem ninguém pausado, e a asserção passava ou
+# falhava pelo tempo do executor, não pela pausa.
+OBJ_ID="$(sql "select id from network_storage_objects where bucket = '$BUCKET' and object_key = 'foto/aceite.txt' limit 1")"
+# A linha do objeto e as cópias NÃO-OK dele, pelo banco: é o estado que a varredura lê.
+#   "sem"   = objeto sem cópia confirmada de nó (nada pendente a executar)
+#   "pend"  = há cópia designada ainda em trânsito (o executor do nó tem trabalho a fazer)
+#   "ok"    = a cópia do nó confirmou
+copia() {
+  local pend linhas
+  linhas="$(sql "select state, node_id from network_storage_placements where object_id = '$OBJ_ID' and replica <> 0")"
+  pend="$(printf '%s\n' "$linhas" | awk -F'\t' '$1 != "OK" && $1 != "GONE" { c++ } END { print c + 0 }')"
+  if printf '%s\n' "$linhas" | awk -F'\t' '$1 == "OK" { f=2 } END { exit !(f == 2) }'; then
+    printf 'ok'
+  elif [[ "$pend" -gt 0 ]]; then
+    printf 'pend'
+  else
+    printf 'sem'
+  fi
+}
+lacuna_dele() { # lacuna_dele -> "sim" se a varredura acusa ESTE objeto
+  req GET "/admin/network/nodes/storage/scrub?bucket=$BUCKET" | grep -q "\"objectId\":\"$OBJ_ID\""
+}
+
+# Antes da pausa: a cópia do nó confirmada e nenhuma lacuna. Executa o pendente até chegar lá.
+ANTES=""
+for _ in $(seq 1 30); do
+  ANTES="$(copia)"
+  [[ "$ANTES" == "ok" ]] && break
+  [[ "$ANTES" == "sem" ]] && break
+  no_executa "$NO1" "$CHAVE1" 2 || fail "§25.10 o executor de $NO1 falhou"
+  no_executa "$NO2" "$CHAVE2" 2 || fail "§25.10 o executor de $NO2 falhou"
+done
+if [[ "$ANTES" == "ok" ]] && ! lacuna_dele; then
+  pass "§25.10 com os nós no ar, a cópia do nó está confirmada e a varredura não vê lacuna"
+else
+  fail "§25.10 antes da pausa a cópia está '$ANTES' — a varredura não pode medir a pausa assim"
+fi
+
 req_jar "$COOKIE_DONO2" POST "/network/participant/nodes/$NO2/pause" >/dev/null
 STATUS_PAUSA="$STATUS"
 if [[ "$STATUS_PAUSA" != "200" ]]; then
@@ -388,23 +434,23 @@ else
   fail "§25.10 a leitura falhou com um nó indisponível: $(printf '%s' "$DEPOIS" | head -2)"
 fi
 
-# O Control Plane guarda o último heartbeat de cada nó; a pausa é observada no pedido seguinte, não
-# no mesmo instante (é o que um participante desligando faz: ele simplesmente para de responder).
-# O laço espera essa janela — e o objeto continua sendo servido durante ela.
-VARREDURA=""
+# A pausa vale no pedido seguinte (o nó pausado continua no heartbeat e nas medições). O laço espera
+# a varredura passar a acusar — sem tocar mais no executor do nó pausado.
+DEPOIS_LACUNA="nao"
 for _ in $(seq 1 15); do
-  # `req` roda em subshell dentro de `$()`: o `$STATUS` dele não volta, mas o corpo sim, e é o
-  # corpo que a asserção lê.
-  VARREDURA="$(curl -sS "$BASE/admin/network/nodes/storage/scrub?bucket=$BUCKET" \
-    -H 'X-Client-Origin: https://enois.ia.br' -H "X-Session-Token: $ADMIN_TOKEN")"
-  printf '%s' "$VARREDURA" | grep -q '"objectId"' && break
+  if lacuna_dele; then DEPOIS_LACUNA="sim"; break; fi
   sleep 1
 done
-if printf '%s' "$VARREDURA" | grep -q '"objectId"'; then
+if [[ "$DEPOIS_LACUNA" == "sim" ]]; then
   pass "§25.10 a varredura aponta a lacuna que a indisponibilidade abriu"
 else
-  fail "§25.10 a varredura não viu a lacuna: $(printf '%s' "$VARREDURA" | head -c 300); no2=$(sql "select status from network_nodes where id = '$NO2'")"
+  fail "§25.10 a pausa de $NO2 não abriu lacuna para o objeto ($OBJ_ID)"
 fi
+
+# Devolve o nó ao ar ANTES de pedir a cura: com ele ainda pausado a cura não teria onde designar e a
+# cópia pendente da primeira colocação seria recolocada no mesmo nó pausado.
+req_jar "$COOKIE_DONO2" POST "/network/participant/nodes/$NO2/resume" >/dev/null
+batimento "$NO2" "$CHAVE2"
 
 # ---------------------------------------------------------------- §25.11 recuperação
 # O participante volta a emprestar a máquina: a pausa é dele, e a volta também.
@@ -413,16 +459,20 @@ batimento "$NO2" "$CHAVE2"
 
 # `dispatch=true` é o caminho do operador que designa E enfileira: sem ele a cura só grava a
 # designação e o nó nunca recebe a tarefa (é o padrão seguro para quem só quer ver o custo).
-CURA="$(req POST "/admin/network/nodes/storage/heal?dispatch=true")"
-# A cura designou a cópia nova; quem a traz é o nó, no poll seguinte.
-# O nó voltou a operar: as tarefas da cura são dele, e o laço confere a durabilidade no fim.
-ESPERA=30
-while [[ $ESPERA -gt 0 ]]; do
-  no_executa "$NO2" "$CHAVE2" 2 || fail "§25.11 o executor de $NO2 falhou"
-  QTD="$(colocadas | awk -F'\t' '$3 == "OK"' | wc -l | tr -d ' ')"
-  [[ "$QTD" -ge "$ALVO" ]] && break
-  sleep 1
-  ESPERA=$((ESPERA - 1))
+CURA=""
+QTD=0
+# A cura designa cópia nova quando o objeto está abaixo do alvo; quem a traz é o nó, no poll
+# seguinte. Uma designação pode cair num nó que ainda não voltou a operar, então o laço repete a
+# cura com folga entre as rodadas — e para assim que a durabilidade volta ao alvo.
+for tentativa in $(seq 1 6); do
+  CURA="$(req POST "/admin/network/nodes/storage/heal?dispatch=true")"
+  for _ in $(seq 1 8); do
+    no_executa "$NO2" "$CHAVE2" 2 || fail "§25.11 o executor de $NO2 falhou"
+    no_executa "$NO1" "$CHAVE1" 2 || fail "§25.11 o executor de $NO1 falhou"
+    QTD="$(colocadas | awk -F'\t' '$3 == "OK"' | wc -l | tr -d ' ')"
+    [[ "$QTD" -ge "$ALVO" ]] && break 2
+    sleep 1
+  done
 done
 if [[ "${QTD:-0}" -ge "$ALVO" ]]; then
   pass "§25.11 a cura repôs a cópia: durabilidade de volta ao alvo"

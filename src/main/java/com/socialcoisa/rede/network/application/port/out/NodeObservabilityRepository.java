@@ -55,4 +55,16 @@ public interface NodeObservabilityRepository {
 
 	/** Console do nó, mais nova primeiro — é a ordem em que o terminal mostra. */
 	List<LogLine> logs(String nodeId, int limit);
+
+	/**
+	 * Soma uma tarefa concluída na faixa de duração da hora de {@code at} (brief §8.2). A soma é
+	 * feita pelo banco ({@code samples = samples + 1}): dois desfechos simultâneos não se perdem.
+	 */
+	void addLatencySample(String nodeId, Instant at, int bucketUpperMs);
+
+	/**
+	 * Contagem por faixa deste nó nas últimas {@code hours} horas, até {@code now}. Faixa sem tarefa
+	 * não aparece: o que não foi medido não é zero.
+	 */
+	java.util.Map<Integer, Integer> latencySamples(String nodeId, Instant now, int hours);
 }
