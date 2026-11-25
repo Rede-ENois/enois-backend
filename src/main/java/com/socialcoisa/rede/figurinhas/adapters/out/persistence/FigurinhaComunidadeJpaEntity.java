@@ -55,11 +55,17 @@ class FigurinhaComunidadeJpaEntity {
 	@Column(nullable = false)
 	private int bytes;
 
-	/** 1 enquanto ativa; NULL depois de desativar (é a metade da chave única das ativas). */
-	@Column
+	/**
+	 * 1 enquanto ativa; NULL depois de desativar (é a metade da chave única das ativas).
+	 *
+	 * <p>`tinyint` na migração: sem o `columnDefinition` o Hibernate esperaria INTEGER e a
+	 * validação de schema derrubaria o boot.</p>
+	 */
+	@Column(columnDefinition = "tinyint")
 	private Integer ativo;
 
-	@Column(name = "update_scope", nullable = false)
+	// `tinyint` na migração: o Hibernate esperaria INTEGER e a validação de schema derrubava o boot.
+	@Column(name = "update_scope", nullable = false, columnDefinition = "tinyint")
 	private int updateScope;
 
 	@Column(name = "criado_em", nullable = false)
