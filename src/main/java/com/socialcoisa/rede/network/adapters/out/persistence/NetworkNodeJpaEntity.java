@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.network.adapters.out.persistence;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 
 import com.socialcoisa.rede.network.domain.NetworkNode;
@@ -72,6 +73,13 @@ class NetworkNodeJpaEntity {
 	/** Latência média por operação de disco no último intervalo; {@code null} = não medido. */
 	@Column(name = "observed_disk_latency_ms")
 	private Double observedDiskLatencyMs;
+
+	/**
+	 * Maior temperatura entre os sensores da máquina, em graus (brief §8.2); {@code null} = a máquina
+	 * não tem sensor legível, que é "não disponível" e não uma temperatura medida.
+	 */
+	@Column(name = "observed_temperature_c", columnDefinition = "double")
+	private BigDecimal observedTemperatureC;
 
 	@Column(name = "observed_content_used_mb")
 	private Long observedContentUsedMb;
@@ -166,7 +174,8 @@ class NetworkNodeJpaEntity {
 			NetworkNode.usageFrom(observedMemoryMb, observedMemoryAvailableMb, declaredMemoryMb),
 			observedMemoryAvailableMb, observedRunningTasks, observedLatencyMs, observedDiskFreeMb,
 			observedDiskTotalMb, observedDiskIops, observedDiskLatencyMs, observedContentUsedMb,
-			observedBytesInMb, observedBytesOutMb, consecutiveFailures, quarantinedUntil, quarantineReason);
+			observedBytesInMb, observedBytesOutMb, consecutiveFailures, quarantinedUntil, quarantineReason,
+			observedTemperatureC);
 	}
 
 	String status() {
