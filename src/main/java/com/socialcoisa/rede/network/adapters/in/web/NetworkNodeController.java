@@ -106,12 +106,18 @@ class NetworkNodeController {
 	 * Control Plane deriva o uso dele (ver {@code NetworkNode.usageFrom}). Os dois nulos são "não
 	 * medido", nunca zero: zero de uso afirmaria máquina ociosa.
 	 *
+	 * <p>{@code diskIops}/{@code diskLatencyMs} são o I/O do disco medido pelo nó no intervalo entre
+	 * dois heartbeats (brief §8.2). Nulo é "não medido" — primeiro ciclo depois de subir, runtime
+	 * antigo, ou disco não identificável — e não zero: zero IOPS é uma medida ("medi e não houve
+	 * operação"), e a latência fica nula quando o intervalo não teve operação concluída.</p>
+	 *
 	 * <p>{@code bytesInMb}/{@code bytesOutMb} são o tráfego ACUMULADO nas interfaces
 	 * dele (brief §18, "consultar tráfego"); o Control Plane só recebe a contagem e não soma nada
 	 * por conta própria — quem transfere é a máquina do participante, e é ela que mede.
 	 */
 	record Observed(Double cpuPercent, Integer memoryMb, Integer memoryAvailableMb, Integer runningTasks,
-			Long diskFreeMb, Long diskTotalMb, Long usedMb, Long bytesInMb, Long bytesOutMb) {
+			Long diskFreeMb, Long diskTotalMb, Double diskIops, Double diskLatencyMs, Long usedMb, Long bytesInMb,
+			Long bytesOutMb) {
 	}
 
 	/**
@@ -222,6 +228,7 @@ class NetworkNodeController {
 			observed == null ? null : observed.memoryMb(), observed == null ? null : observed.memoryAvailableMb(),
 			observed == null ? null : observed.runningTasks(),
 			observed == null ? null : observed.diskFreeMb(), observed == null ? null : observed.diskTotalMb(),
+			observed == null ? null : observed.diskIops(), observed == null ? null : observed.diskLatencyMs(),
 			observed == null ? null : observed.usedMb(), observed == null ? null : observed.bytesInMb(),
 			observed == null ? null : observed.bytesOutMb(), request == null ? null : request.observedTerm(),
 			peerIp(forwardedFor, peerAddressFromRequest())));
@@ -242,7 +249,7 @@ class NetworkNodeController {
 			// `memoryMb` do corpo é o DISPONÍVEL, e passar o cru gravaria a máquina ociosa com 7,9 GB
 			// em uso na série histórica — o mesmo defeito que a derivação corrige em `network_nodes`.
 			observability.record(updated, observed.cpuPercent(), updated.observedMemoryMb(), observed.diskFreeMb(),
-				observed.runningTasks());
+				observed.runningTasks(), observed.diskIops(), observed.diskLatencyMs());
 		}
 		if (request != null && request.logs() != null) {
 			for (LogRequest line : request.logs()) {

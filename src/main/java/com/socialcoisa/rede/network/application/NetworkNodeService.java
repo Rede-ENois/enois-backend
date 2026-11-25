@@ -284,8 +284,8 @@ public class NetworkNodeService {
 			uso = NetworkNode.usageFrom(null, disponivel, authenticated.declaredMemoryMb());
 		}
 		nodes.touch(authenticated.id(), beat.runtimeVersion(), beat.cpuPercent(), uso, disponivel,
-			beat.runningTasks(), beat.diskFreeMb(), beat.diskTotalMb(), beat.contentUsedMb(), beat.bytesInMb(),
-			beat.bytesOutMb(), now);
+			beat.runningTasks(), beat.diskFreeMb(), beat.diskTotalMb(), beat.diskIops(), beat.diskLatencyMs(),
+			beat.contentUsedMb(), beat.bytesInMb(), beat.bytesOutMb(), now);
 		NetworkNode updated = require(authenticated.id());
 		quarantineOnTermConflict(updated, beat.observedTerm(), now);
 		return require(authenticated.id());
@@ -639,8 +639,9 @@ public class NetworkNodeService {
 	}
 
 	public record HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
-			Integer memoryAvailableMb, Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Long contentUsedMb,
-			Long bytesInMb, Long bytesOutMb, Integer observedTerm, String observedIp) {
+			Integer memoryAvailableMb, Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Double diskIops,
+			Double diskLatencyMs, Long contentUsedMb, Long bytesInMb, Long bytesOutMb, Integer observedTerm,
+			String observedIp) {
 
 		/**
 		 * Heartbeat de runtime anterior ao tráfego medido (V345): os dois contadores ficam nulos.
@@ -651,8 +652,8 @@ public class NetworkNodeService {
 		 */
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Integer observedTerm) {
-			this(runtimeVersion, cpuPercent, memoryMb, null, runningTasks, diskFreeMb, diskTotalMb, contentUsedMb,
-				null, null, observedTerm, null);
+			this(runtimeVersion, cpuPercent, memoryMb, null, runningTasks, diskFreeMb, diskTotalMb, null, null,
+				contentUsedMb, null, null, observedTerm, null);
 		}
 
 		/**
@@ -665,19 +666,21 @@ public class NetworkNodeService {
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Integer observedTerm) {
 			this(runtimeVersion, cpuPercent, memoryMb, null, runningTasks, diskFreeMb, diskTotalMb, null, null,
-				null, observedTerm, null);
+				null, null, null, observedTerm, null);
 		}
 
 		/**
-		 * Heartbeat de runtime que também não mede o uso do conteúdo (anterior à V344).
+		 * Heartbeat de runtime que também não mede o uso do conteúdo nem o I/O de disco (anterior à
+		 * V344/V379).
 		 *
 		 * <p>O uso fica desconhecido e o painel diz isso; o teto e o livre continuam valendo para
-		 * todas as decisões que já os usavam.</p>
+		 * todas as decisões que já os usavam. Sem I/O medido, IOPS e latência ficam nulos — e não
+		 * zero, que afirmaria um disco parado.</p>
 		 */
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Integer observedTerm) {
-			this(runtimeVersion, cpuPercent, memoryMb, null, runningTasks, diskFreeMb, null, null, null, null,
-				observedTerm, null);
+			this(runtimeVersion, cpuPercent, memoryMb, null, runningTasks, diskFreeMb, null, null, null,
+				null, null, null, observedTerm, null);
 		}
 	}
 }

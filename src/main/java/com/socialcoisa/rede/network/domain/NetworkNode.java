@@ -39,6 +39,10 @@ import java.util.Set;
  * @param observedDiskTotalMb tamanho do volume medido no último heartbeat; null = não reportado.
  * Com {@link #observedDiskFreeMb} é o que permite separar "espaço reservado pelo participante" do
  * "capacidade oferecida" (brief do Storage §7): a reserva é o total que não está a serviço do Énóis.
+ * @param observedDiskIops operações de disco (leitura + escrita) concluídas por segundo no último
+ * intervalo medido; null = não medido (primeiro ciclo, runtime antigo, sem disco identificável)
+ * @param observedDiskLatencyMs tempo médio por operação de disco concluída no último intervalo;
+ * null = não medido ou nenhuma operação no intervalo (não há por onde dividir)
  * @param observedContentUsedMb espaço que o ESTADO DE CONTEÚDO ocupa no nó, medido por ele; null =
  * não reportado. É o "utilizado pelo Énóis" do §7 — distinto do livre, que qualquer processo derruba.
  * @param observedLatencyMs mediana do tempo de conclusão das últimas tarefas; null = sem amostra
@@ -51,8 +55,8 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 		int declaredCpuCores, int declaredMemoryMb, int declaredDiskMb, int declaredBandwidthMbps,
 		Double observedCpuPercent, Integer observedMemoryMb, Integer observedMemoryAvailableMb,
 		Integer observedRunningTasks, Integer observedLatencyMs, Long observedDiskFreeMb, Long observedDiskTotalMb,
-		Long observedContentUsedMb, Long observedBytesInMb, Long observedBytesOutMb, int consecutiveFailures,
-		Instant quarantinedUntil, String quarantineReason) {
+		Double observedDiskIops, Double observedDiskLatencyMs, Long observedContentUsedMb, Long observedBytesInMb,
+		Long observedBytesOutMb, int consecutiveFailures, Instant quarantinedUntil, String quarantineReason) {
 
 	/**
 	 * Mesmo nó sem o tráfego medido (runtime anterior à V345): os dois contadores ficam nulos, que
@@ -68,7 +72,7 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 		this(id, displayName, ownerUserId, status, profiles, region, country, runtimeVersion, lastSeenAt,
 			declaredCpuCores, declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
 			observedMemoryMb, null, observedRunningTasks, observedLatencyMs, observedDiskFreeMb, observedDiskTotalMb,
-			observedContentUsedMb, null, null, consecutiveFailures, quarantinedUntil, quarantineReason);
+			null, null, observedContentUsedMb, null, null, consecutiveFailures, quarantinedUntil, quarantineReason);
 	}
 
 	/**
@@ -106,8 +110,8 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 			int consecutiveFailures, Instant quarantinedUntil, String quarantineReason) {
 		this(id, displayName, ownerUserId, status, profiles, region, country, runtimeVersion, lastSeenAt,
 				declaredCpuCores, declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
-				observedMemoryMb, null, observedRunningTasks, observedLatencyMs, null, null, null, null, null,
-				consecutiveFailures, quarantinedUntil, quarantineReason);
+				observedMemoryMb, null, observedRunningTasks, observedLatencyMs, null, null, null, null, null, null,
+				null, consecutiveFailures, quarantinedUntil, quarantineReason);
 	}
 
 	/**
@@ -125,7 +129,7 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 		this(id, displayName, ownerUserId, status, profiles, region, country, runtimeVersion, lastSeenAt,
 				declaredCpuCores, declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
 				observedMemoryMb, null, observedRunningTasks, observedLatencyMs, observedDiskFreeMb, null, null,
-				null, null, consecutiveFailures, quarantinedUntil, quarantineReason);
+				null, null, null, null, consecutiveFailures, quarantinedUntil, quarantineReason);
 	}
 
 	/**

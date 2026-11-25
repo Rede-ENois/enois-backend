@@ -51,7 +51,7 @@ O brief (§8.2) pede, por nó: uso de rede e throughput de entrada e saída. Hoj
 | CPU total, memória, disco livre | **entregue** (heartbeat → painel por nó) |
 | tarefas em execução, versão do runtime, último contato | **entregue** |
 | uso de rede / throughput (entrada e saída) | **não medido pelo runtime**, coluna pronta no banco |
-| swap, pressão de memória, IOPS, latência de disco, temperatura, GC, threads, p95/p99, DLQ | **swap e pressão medidos desde o ciclo 157** (§7 abaixo); o resto não existe — ver `docs/rede-distribribuida/11-global-coop-fase-0.md` §3 |
+| swap, pressão de memória, IOPS, latência de disco, temperatura, GC, threads, p95/p99, DLQ | **swap e pressão medidos desde o ciclo 157** (§7 abaixo); **IOPS e latência de disco medidos desde o ciclo 158** (§8 e §9); o resto não existe — ver `docs/rede-distribribribuida/11-global-coop-fase-0.md` §3 |
 
 ## 5. O que o mantenedor precisa conferir no deploy (não é código)
 
@@ -80,10 +80,9 @@ O elo do §3 deste documento foi fechado nos três lados:
 Provas: `NetworkParticipantTrafficTests` (2 casos novos no painel de admin — medido e nulo);
 `network-nodes-section` do DS (2 casos: medido e ausência/metade).
 
-**O que continua faltando do §8.2 do brief** (medido, não estimado): IOPS, latência de disco,
-temperatura, GC/threads do runtime (o runtime não é JVM — é shell), p95/p99 de requisição, DLQ por
-fila. Nenhum desses existe no heartbeat nem no painel. (Swap e pressão de memória entraram no ciclo
-157 — §7.)
+**O que continua faltando do §8.2 do brief** (medido, não estimado): temperatura, GC/threads do
+runtime (o runtime não é JVM — é shell), p95/p99 de requisição, DLQ por fila. (Swap e pressão de
+memória entraram no ciclo 157 — §7; IOPS e latência de disco, no ciclo 158 — §8 e §9.)
 
 ## 7. A memória em duas medidas, swap e pressão (ciclo 157)
 
@@ -149,3 +148,70 @@ Decisões:
 - Mutações: runtime mandando o disponível no lugar do uso (derruba 1 do harness); não derivar o
   runtime antigo (2); derivar disponível acima do declarado (1); zero virando uso (1); migração sem
   a coluna (9 falhas). Todas restauradas verdes.
+
+## 8. IOPS e latência de disco (ciclo 158)
+
+O §8.2 pede, por nó, IOPS e latência de disco. O Control Plane não abre conexão para dentro da
+máquina do participante (brief §17), então quem mede é o runtime — de `/proc/diskstats` — e manda no
+heartbeat que já existe. O caminho inteiro entrou neste ciclo:
+
+| lado | estado |
+|---|---|
+| rota (`Observed.diskIops`, `Observed.diskLatencyMs`) | existe |
+| banco (`V379`: `observed_disk_iops`, `observed_disk_latency_ms` em `network_nodes`; `disk_iops`, `disk_latency_ms` em `network_node_samples`) | existe |
+| quadro do nó (`series[].diskIops/diskLatencyMs`, `summary.diskIopsLatest/diskLatencyMsLatest`) | existe |
+| runtime medindo `/proc/diskstats` | existe — delta entre ciclos, §9 |
+
+### As duas medidas
+
+- **`diskIops`** — operações (leitura + escrita) concluídas por segundo no intervalo entre dois
+  heartbeats. `0.0` é uma **medida** ("medi e não houve operação no intervalo"); `null` é "não
+  medido" (primeiro ciclo, runtime antigo, disco não identificável).
+- **`diskLatencyMs`** — tempo médio por operação concluída no mesmo intervalo. Fica `null` quando o
+  intervalo não teve operação: não há por onde dividir, e `0` afirmaria latência zero.
+
+A série curta guarda as duas por minuto (o mesmo ponto do minuto é trocado, não duplicado), e o
+`summary` mostra o último valor medido.
+
+### Verificação
+
+- `NetworkHeartbeatDiskIoTests` **3**, pela rota e pelo banco: o heartbeat grava e o quadro mostra
+  as duas medidas; IOPS 0 medido sai como `0.0` e a latência sem operação sai nula; sem medida, os
+  quatro campos do quadro são nulos.
+- `scripts/tests/node-disk-io-migration-test.sh` **26 PASS / 0 FAIL** em MariaDB 11.4 real: V379
+  aplicada **duas vezes**, nó e amostra do contrato antigo preservados com `NULL`, update do nó e
+  upsert da amostra gravando as colunas, zero medido distinto de nulo, tipo `double` aceitando `NULL`.
+- Mutação: V379 sem as colunas derruba **17** asserções do harness.
+
+## 9. A medição no runtime (`/proc/diskstats`)
+
+O runtime lê o arquivo apontado por `DISKSTATS_FILE` (produção: `/proc/diskstats`, o do kernel) e
+guarda no arquivo de estado do nó (`$NODE_HOME/disk-prev`) o **instante da medida em nanossegundos** e
+os contadores somados dos discos. O próximo ciclo subtrai os dois:
+
+- **disco que entra na soma** — `sd*`, `nvme*n1`, `vd*`, `xvd*`, `hd*`. Ficam de fora partições
+  (`sda1`) e dispositivos de bloco que não são disco (loop, ram, dm, md): o I/O deles aparece no disco
+  de baixo, e somar os dois contaria em dobro.
+- **intervalo** — o relógio da medida anterior, em nanossegundos. Tempo de arquivo não serve: a
+  resolução varia com o sistema de arquivos, e 1 s de erro num intervalo de 5 s vira 20% de IOPS.
+- **retrocesso** — se qualquer contador diminuiu (disco trocado, contador de 32 bits reiniciado), esta
+  rodada não manda taxa nenhuma; o referencial passa a ser o de agora, então o nó volta a medir no
+  ciclo seguinte em vez de ficar mudo até reiniciar.
+- **primeiro ciclo / runtime antigo** — sem referencial, os campos não vão: `null` é "não medido".
+
+`diskIops` é operações (leitura + escrita) por segundo; `diskLatencyMs` é `ms / operação` no mesmo
+intervalo. Sem operação concluída, o IOPS é `0.0` (medido) e a latência não vai (não há por onde
+dividir). A soma usa as colunas **4 (leituras), 7 (ms lendo), 8 (escritas) e 11 (ms escrevendo)** do
+layout do kernel — as colunas 6 e 10 são **setores**, não tempo. A primeira versão leu 6/10 e teria
+mandado latência `0.00` sempre; o harness pegou a troca e a asserção de latência (3,00 ms com
+operações e ms fixos) passou a prender o valor exato.
+
+### Verificação
+
+- `scripts/tests/node-executor-test.sh` **234 asserções / 0 falhas**, com quatro ciclos reais sobre o
+  corpo do `node-runtime.sh`: 1º sem campos e referencial gravado; 2º com `diskIops` = 500 ops ÷
+  intervalo real (entre 99 e 100 num intervalo de 5 s) e `diskLatencyMs = 3.00` exato, partição e loop
+  fora da conta; 3º com contador retrocedendo e nenhuma taxa; 4º com `diskIops = 0.00` e latência
+  ausente. Mutação: usar as colunas 6/10 derruba a latência; emitir latência sem operação derruba o 4º
+  ciclo; remover a checagem de retrocesso derruba o 3º; incluir a partição derruba o referencial.
+- `NetworkHeartbeatDiskIoTests` **3** e a migração **26 PASS** — §8.
