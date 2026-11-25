@@ -3835,6 +3835,130 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 		return resp.getResponse().getStatus();
 	}
 
+	/**
+	 * `ListObjectVersions` aplica `max-keys`, pagina e lista a versão mais nova primeiro.
+	 *
+	 * <p><b>Antes:</b> a rota lia até 10000 linhas do banco e respondia tudo com
+	 * {@code <IsTruncated>false</IsTruncated><MaxKeys>1000</MaxKeys>} <b>fixos</b>.
+	 * {@code max-keys}, {@code key-marker} e {@code version-id-marker} eram ignorados, e a ordem era a
+	 * da consulta ({@code object_key asc, version asc}) — a versão <b>mais antiga</b> primeiro:</p>
+	 *
+	 * <pre>
+	 * GET /s3/&lt;b&gt;?versions&amp;max-keys=1   (a.txt com v1, v2, v3 e b.txt)
+	 * → 200  IsTruncated=false, MaxKeys=1000, &lt;Version&gt;a v1&lt;/Version&gt;… v2 … v3 … b
+	 * </pre>
+	 *
+	 * <p>três defeitos de uma vez. O teto não é honrado — quem pediu 1 recebe as quatro. O
+	 * {@code IsTruncated} fixo em {@code false} com o {@code <MaxKeys>} ecoando 1000 que ninguém pediu
+	 * mente duas vezes sobre a completude. E a ordem é a inversa do S3, que devolve a versão mais nova
+	 * de cada chave primeiro: quem lê só a primeira versão de cada chave (é o que faz quem procura "o que
+	 * existe hoje" no histórico) lê a <b>mais antiga</b> — no versionamento, a resposta errada. Os
+	 * marcadores não existiam, então o cliente que pagina nunca teria a próxima página.</p>
+	 *
+	 * <p><b>Agora:</b> teto de 1000 aplicado no banco ({@code limit teto + 1} para saber se há mais),
+	 * {@code <MaxKeys>} ecoando o valor aplicado, {@code <IsTruncated>} refletindo se há mais,
+	 * {@code <NextKeyMarker>} e {@code <NextVersionIdMarker>} aparecendo para continuar, e a ordem do
+	 * S3 — chave ascendente, versão <b>descendente</b>. {@code max-keys=0}, negativo ou ilegível cai no
+	 * teto, nunca corta tudo (§4.67).</p>
+	 */
+	@Test
+	void list_object_versions_honra_max_keys_pagina_e_lista_a_versao_nova_primeiro() throws Exception {
+		String b = "vr" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		MockHttpServletRequestBuilder cria = MockMvcRequestBuilders.put("/s3/" + b);
+		assinar(cria, SECRET, shaVazio());
+		assertThat(mockMvc.perform(cria).andReturn().getResponse().getStatus()).isEqualTo(200);
+		String config = "<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>";
+		MockHttpServletRequestBuilder v = MockMvcRequestBuilders.put("/s3/" + b + "?versioning")
+			.contentType(org.springframework.http.MediaType.APPLICATION_XML)
+			.content(config.getBytes(StandardCharsets.UTF_8));
+		assinar(v, SECRET, shaDe(config));
+		assertThat(mockMvc.perform(v).andReturn().getResponse().getStatus()).isEqualTo(200);
+		String[][] escritas = { { "a.txt", "v1" }, { "a.txt", "v2" }, { "a.txt", "v3" }, { "b.txt", "b1" } };
+		for (String[] e : escritas) {
+			MockHttpServletRequestBuilder p1 = put("/s3/" + b + "/" + e[0])
+				.content(e[1].getBytes(StandardCharsets.UTF_8));
+			assinar(p1, SECRET, shaDe(e[1]));
+			assertThat(mockMvc.perform(p1).andReturn().getResponse().getStatus()).as(e[0] + "=" + e[1]).isEqualTo(200);
+		}
+		assertThat(jdbc.queryForObject(
+			"select count(*) from network_storage_objects where bucket = ?", Integer.class, b)).isEqualTo(4);
+
+		// Sem parâmetro: as quatro versões, a mais nova de cada chave primeiro, e sem marcador.
+		String tudo = versoes(b, "");
+		assertThat(tudo).contains("<IsTruncated>false</IsTruncated>").contains("<MaxKeys>1000</MaxKeys>")
+			.doesNotContain("<NextKeyMarker>");
+		assertThat(chavesEVersoes(tudo)).as(tudo).containsExactly("a.txt/3", "a.txt/2", "a.txt/1", "b.txt/1");
+		assertThat(entre(tudo, "<Version><Key>a.txt</Key><VersionId>3</VersionId><IsLatest>", "</IsLatest>"))
+			.as("a versão 3 é a mais nova").isEqualTo("true");
+
+		// max-keys=1: uma versão por página, truncado com marcadores, paginando até o fim sem repetir.
+		java.util.List<String> vista = new java.util.ArrayList<>();
+		String keyMarker = null;
+		String idMarker = null;
+		for (int pagina = 0; pagina < 10; pagina++) {
+			String consulta = "&max-keys=1" + (keyMarker == null ? ""
+				: "&key-marker=" + java.net.URLEncoder.encode(keyMarker, StandardCharsets.UTF_8)
+					+ "&version-id-marker=" + java.net.URLEncoder.encode(idMarker, StandardCharsets.UTF_8));
+			String xml = versoes(b, consulta);
+			java.util.List<String> daPagina = chavesEVersoes(xml);
+			// O servidor que ignora o teto devolve as quatro de uma vez: registrar todas e falhar
+			// com a lista inteira, em vez de girar para sempre na mesma página.
+			assertThat(daPagina).as("página " + pagina + ": " + xml).hasSize(1);
+			vista.addAll(daPagina);
+			if (xml.contains("<IsTruncated>false</IsTruncated>")) {
+				break;
+			}
+			keyMarker = entre(xml, "<NextKeyMarker>", "</NextKeyMarker>");
+			idMarker = entre(xml, "<NextVersionIdMarker>", "</NextVersionIdMarker>");
+		}
+		assertThat(vista).as("a paginação viu as quatro, na ordem do S3, sem repetir")
+			.containsExactly("a.txt/3", "a.txt/2", "a.txt/1", "b.txt/1");
+
+		// max-keys=0, negativo ou ilegível: teto aplicado, nada perdido.
+		for (String valor : new String[] { "0", "-1", "abc" }) {
+			String xml = versoes(b, "&max-keys=" + valor);
+			assertThat(chavesEVersoes(xml)).as("max-keys=" + valor).hasSize(4);
+			assertThat(xml).as("max-keys=" + valor).contains("<MaxKeys>1000</MaxKeys>");
+		}
+
+		// max-keys acima do teto: o eco é o valor APLICADO (1000), não o pedido.
+		String acima = versoes(b, "&max-keys=5000");
+		assertThat(acima).as(acima).contains("<MaxKeys>1000</MaxKeys>");
+		assertThat(chavesEVersoes(acima)).as(acima).hasSize(4);
+
+		// key-marker sem version-id-marker: a listagem recomeça DEPOIS da chave inteira — as
+		// versões do próprio marcador não voltam, como no S3.
+		String depois = versoes(b, "&key-marker=a.txt");
+		assertThat(chavesEVersoes(depois)).as(depois).containsExactly("b.txt/1");
+	}
+
+	private String versoes(String b, String consulta) throws Exception {
+		MockHttpServletRequestBuilder l = get("/s3/" + b + "?versions" + consulta);
+		assinar(l, SECRET, shaVazio());
+		var rr = mockMvc.perform(l).andReturn();
+		var resp = rr.getRequest().isAsyncStarted() ? mockMvc.perform(asyncDispatch(rr)).andReturn() : rr;
+		assertThat(resp.getResponse().getStatus()).as(resp.getResponse().getContentAsString()).isEqualTo(200);
+		return resp.getResponse().getContentAsString();
+	}
+
+	private static java.util.List<String> chavesEVersoes(String xml) {
+		java.util.List<String> out = new java.util.ArrayList<>();
+		// `<Version><Key>` e não `<Key>` solto: o `<KeyCount>` das listagens novas também casa, e o
+		// recorte precisa avançar sempre — sem isso o laço repetiria a mesma posição até o heap acabar.
+		int i = 0;
+		while ((i = xml.indexOf("<Version><Key>", i)) >= 0) {
+			int fechaChave = xml.indexOf("</Key>", i);
+			int abreVersao = xml.indexOf("<VersionId>", fechaChave);
+			assertThat(abreVersao).as(xml.substring(i, Math.min(xml.length(), i + 200))).isNotNegative();
+			int fechaVersao = xml.indexOf("</VersionId>", abreVersao);
+			out.add(xml.substring(i + "<Version><Key>".length(), fechaChave) + "/"
+				+ xml.substring(abreVersao + "<VersionId>".length(), fechaVersao));
+			i = fechaVersao;
+		}
+		return out;
+	}
+
+
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */
 	@Test
 	void credencial_sem_put_nao_grava() throws Exception {

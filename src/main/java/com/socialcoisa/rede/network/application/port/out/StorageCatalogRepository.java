@@ -260,16 +260,40 @@ public interface StorageCatalogRepository {
 	/** Todas as versões da chave em ordem crescente — o histórico, incluindo a corrente. */
 	List<StorageObject> versions(String bucket, String key);
 
+	/** Uma página do histórico do bucket, e se há mais (§4.67). */
+	record PaginaDeVersoes(List<StorageObject> versoes, boolean truncada) {
+	}
+
 	/**
-	 * Todas as versões de todas as chaves do bucket — o {@code ListObjectVersions} do gateway S3.
+	 * O teto de {@code max-keys} na listagem de versões — 1000, como o {@code ListObjectsV2} e o
+	 * {@code ListParts} (§4.67).
 	 *
-	 * <p>Ordem por chave e por versão ascendente, como o histórico de uma chave: a listagem por
-	 * bucket mantém a mesma régua para que paginar por chave continue estável. {@code prefix}
-	 * {@code null} ou vazio é "todas".</p>
+	 * <p>Fica aqui para que quem <b>corta</b> a página e quem <b>eco</b> o {@code <MaxKeys>} usem o
+	 * mesmo número: pedir 5000 e receber {@code <MaxKeys>5000</MaxKeys>} com 1000 linhas na página
+	 * é a página mentindo sobre o próprio tamanho.</p>
 	 */
-	default List<StorageObject> versionsNoBucket(String bucket, String prefix) {
+	static int tetoDeVersoes(int maxKeys) {
+		return Math.max(1, Math.min(maxKeys <= 0 ? 1000 : maxKeys, 1000));
+	}
+
+	/**
+	 * Uma página de todas as versões de todas as chaves do bucket — o {@code ListObjectVersions}.
+	 *
+	 * <p><b>Antes:</b> o método devolvia o bucket inteiro (cortado em 10000 sem aviso) na ordem
+	 * {@code (chave, versão)} ascendente, e o gateway imprimia tudo com {@code IsTruncated=false}.</p>
+	 *
+	 * <p><b>Agora:</b> a ordenação é a do S3 — chave <b>ascendente</b>, versão <b>descendente</b> (a
+	 * mais nova de cada chave primeiro) —, o teto entra no banco com {@code limit teto + 1} para
+	 * saber se há próxima página sem uma segunda contagem, e o marcador anda na mesma ordem. A versão
+	 * é numérica: o {@code version-id-marker} é o {@code version} do objeto, não o id opaco.</p>
+	 *
+	 * <p>Com {@code key-marker} e <b>sem</b> {@code version-id-marker}, a listagem começa depois da
+	 * chave inteira — o S3 pula todas as versões daquele nome, não recomeça nela (§4.67).</p>
+	 */
+	default PaginaDeVersoes paginaDeVersoes(String bucket, String prefix, String keyMarker, Long versionMarker,
+			int maxKeys) {
 		throw new UnsupportedOperationException(
-			"versionsNoBucket: o catalogo em memoria nao implementa o historico por bucket");
+			"paginaDeVersoes: o catalogo em memoria nao implementa o historico por bucket");
 	}
 
 	/** Versões correntes, servíveis e vencidas até {@code now}, em ordem de vencimento. */

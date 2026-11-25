@@ -132,14 +132,18 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		order by version asc
 		""".formatted(OBJECT_COLUMNS);
 
-	/** Todas as versões do bucket, por chave e versão — o ListObjectVersions (§4.34). */
-	/** O histórico do bucket inteiro; o filtro de `prefix` entra no `where`, antes do `order by`. */
-	private static String selectAllVersions(String filtro) {
+	/**
+	 * Uma página do histórico do bucket — o ListObjectVersions (§4.67).
+	 *
+	 * <p>A ordem é a do S3: {@code object_key} ascendente e {@code version} <b>descendente</b>; o
+	 * {@code limit ?} vem do chamador com o teto + 1 para ele saber se há próxima página.</p>
+	 */
+	private static String paginaDeVersoes(String filtro) {
 		return """
 			select %s from network_storage_objects
 			where bucket = ?%s
-			order by object_key asc, version asc
-			limit 10000
+			order by object_key asc, version desc
+			limit ?
 			""".formatted(OBJECT_COLUMNS, filtro);
 	}
 
@@ -499,12 +503,37 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	}
 
 	@Override
-	public List<StorageObject> versionsNoBucket(String bucket, String prefix) {
-		if (prefix == null || prefix.isEmpty()) {
-			return jdbc.query(selectAllVersions(""), OBJECT_MAPPER, bucket);
+	public PaginaDeVersoes paginaDeVersoes(String bucket, String prefix, String keyMarker, Long versionMarker,
+			int maxKeys) {
+		int teto = StorageCatalogRepository.tetoDeVersoes(maxKeys);
+		StringBuilder where = new StringBuilder();
+		java.util.List<Object> args = new java.util.ArrayList<>();
+		args.add(bucket);
+		if (prefix != null && !prefix.isEmpty()) {
+			// `like` do SQL: `%` e `_` do nome precisam de escape.
+			where.append(" and object_key like ?");
+			args.add(prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%");
 		}
-		String escapado = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%";
-		return jdbc.query(selectAllVersions(" and object_key like ?"), OBJECT_MAPPER, bucket, escapado);
+		if (keyMarker != null && !keyMarker.isEmpty()) {
+			if (versionMarker == null) {
+				// Só a chave: o marcador pula a chave INTEIRA, todas as versões dela. Recomeçar
+				// nela reentregaria versões que o cliente já recebeu — e o S3 não faz isso.
+				where.append(" and object_key > ?");
+				args.add(keyMarker);
+			}
+			else {
+				// Ordem (chave asc, versão desc): depois do marcador vem o resto das chaves maiores e,
+				// na MESMA chave, as versões menores que a do marcador.
+				where.append(" and (object_key > ? or (object_key = ? and version < ?))");
+				args.add(keyMarker);
+				args.add(keyMarker);
+				args.add(versionMarker);
+			}
+		}
+		args.add(teto + 1);
+		List<StorageObject> achadas = jdbc.query(paginaDeVersoes(where.toString()), OBJECT_MAPPER, args.toArray());
+		boolean truncada = achadas.size() > teto;
+		return new PaginaDeVersoes(truncada ? achadas.subList(0, teto) : achadas, truncada);
 	}
 
 	@Override
