@@ -901,3 +901,49 @@ scrubber sem o bucket no cursor — **3 de 3 derrubam**.
 
 Um cursor inclusivo não quebra uma asserção de conteúdo: ele **repete** o último item e a varredura
 entra em laço. O teste de SQL tem guarda de iteração para falhar rápido em vez de estourar a memória.
+
+## 5.16 A durabilidade conta só a cópia de nó que pode servir
+
+O §5.12 tirou da conta a cópia em nó **revogado**. Ficou faltando o irmão: o nó que parou de
+operar **sem** ser revogado. A colocação e a varredura faziam perguntas diferentes sobre o mesmo nó:
+
+| situação da cópia | colocação (`storageReady`) | varredura (antes) |
+|---|---|---|
+| nó `ACTIVE` | designa | conta |
+| nó `SUSPENDED` | **não** designa | **contava** |
+| nó `QUARANTINED` | **não** designa | **contava** |
+| nó `REVOKED` | não designa | saída (§5.12) |
+| nó fora do cadastro | não designa | conta (desconhecido) |
+
+O objeto com réplica 0 + uma cópia num nó suspenso aparecia como "2 de 3" — faltava uma cópia só —,
+quando na verdade a única cópia de nó vinha de uma máquina que o placement já não usava. A lacuna
+não chegava ao healing e o objeto ficava a **uma perda do disco do Control Plane** de sumir, sem o
+painel dizer. É o §25.11 do brief: "a indisponibilidade de um nó não comprometer arquivos com
+redundância saudável" — e não se pode chamar de saudável o que a colocação já descartou.
+
+### Agora
+
+- A régua da varredura é a **mesma** da colocação: `NodeStatus.canOperate()`. Um status novo que
+  deixe de operar entra aqui de graça, sem tocar no código da varredura.
+- Nó **fora do cadastro** continua contando como durabilidade: a rede não sabe se a cópia está viva.
+  Declarar saída abriria lacuna falsa, e o healing pediria a transferência de um corpo inteiro sem
+  motivo. A diferença só aparece com o objeto tendo outra cópia — com uma só, os dois critérios dão o
+  mesmo número.
+- A cópia que sai da conta continua sendo listada em `onRevokedNode` (o campo do relatório não mudou
+  de nome; é "cópia fora da durabilidade", e o nome é histórico).
+
+**Verificação:** `StorageDurabilityTests` **+4** (`copiaEmNoSuspensoNaoContaComoDurabilidade`,
+`copiaEmNoEmQuarentenaNaoContaComoDurabilidade`,
+`noForaDoCadastroContinuaContandoComoDurabilidadeAoContrarioDoSuspenso`,
+`aReplicaZeroDoControlPlaneNaoSaiDaContaQuandoONoDelaNaoOpera`). Vermelho antes: os dois primeiros,
+com `confirmed` 2 em vez de 1. Mutações **4/4**: voltar à régua só de `REVOKED`; contar todo nó
+cadastrado; tratar ausência de cadastro como "não serve" (esta só cai com o objeto tendo duas
+cópias de nó); estender a régua à réplica 0 — esta derruba o teste de integração do healing, e foi
+o defeito da primeira versão deste ciclo: a linha da réplica 0 aponta para o nó que hospeda o
+Control Plane, que pode estar suspenso enquanto o processo serve normalmente.
+
+**Lição do ciclo:** a régua nova é mais larga que a antiga, e régua mais larga encontra linhas que
+não são do domínio dela. A réplica 0 é do Control Plane, não de nó; filtrar "só `ACTIVE`" sobre
+`copies` incluiu o CP. Antes de generalizar uma régua, perguntar **quais linhas ela alcança** — e o
+teste que só olha o caso novo (nó suspenso com cópia de nó) não pega a regressão: quem pega é o teste
+de integração que confirma a cópia e espera a lacuna fechar.
