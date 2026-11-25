@@ -175,24 +175,23 @@ class ExternalJobsTextoUtf8mb4MigrationTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.comando("docker", "rm", "-f", "--volumes", cls.container)
 
-    def coluna(self, coluna):
-        return self.sql(f"""
-            select concat(character_set_name, '|', collation_name, '|', is_nullable, '|',
-                          column_type, '|', column_default) as linha
-            from information_schema.columns
-            where table_schema = 'vagas' and table_name = '{TABELA}' and column_name = '{coluna}';
-        """)
-
     def test_colunas_de_texto_declaram_utf8mb4(self):
-        for coluna, tipo, nulidade, default in COLUNAS:
-            self.assertEqual(
-                self.coluna(coluna),
-                # Sem default, o mariadb --batch escreve o NULL desta linha (que se confunde com o
-                # NULL de "sem linha"); o caso fica no teste de nulidade das colunas escolhidas.
-                # Coluna que nem entrou na migracao volta so o NULL acima em vez da linha.
-                f"utf8mb4|utf8mb4_unicode_ci|{nulidade}|{tipo}|{default or 'NULL'}",
-                msg=f"{TABELA}.{coluna} nao ficou em utf8mb4 como esperado",
-            )
+        # Uma consulta so: a mao unica de uma linha sem default sai igual ao NULL de consulta vazia,
+        # entao o conjunto completo vem junto e a coluna que faltou aparece na comparacao.
+        esperado = "\n".join(
+            f"{coluna}|utf8mb4|utf8mb4_unicode_ci|{nulidade}|{tipo}|{default or 'NULL'}"
+            for coluna, tipo, nulidade, default in COLUNAS
+        )
+        self.assertEqual(self.sql(
+            f"""
+                select concat(column_name, '|', character_set_name, '|', collation_name, '|',
+                              is_nullable, '|', column_type, '|', column_default)
+                from information_schema.columns
+                where table_schema = 'vagas' and table_name = '{TABELA}'
+                  and column_name in ({", ".join(f"'{c[0]}'" for c in COLUNAS)})
+                order by field(column_name, {", ".join(f"'{c[0]}'" for c in COLUNAS)});
+            """
+        ), esperado)
 
     def test_nenhuma_coluna_de_texto_ficou_no_charset_legado(self):
         restantes = self.sql(f"""
