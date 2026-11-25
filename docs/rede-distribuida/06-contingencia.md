@@ -9,7 +9,7 @@ O modo é **dado do Control Plane**, não decisão de nó. Todo nó recebe o mod
 |---|---|---|---|
 | `NORMAL` | operação padrão | cálculo medido | tudo como hoje; despacho no teto da varredura |
 | `HIGH_LOAD` | fila acima da capacidade | cálculo medido | **não** bloqueia nada: distribuição ampliada |
-| `DEGRADED` | dependência crítica instável | admin, com motivo | **despacho novo parado**; trabalho em curso continua |
+| `DEGRADED` | dependência crítica instável | admin, com motivo; ou **evidência medida** (§1.1) | **despacho novo parado**; trabalho em curso continua |
 | `EMERGENCY` | infra principal indisponível | admin, com motivo | **despacho novo parado**; trabalho em curso continua |
 | `RECOVERY` | voltando ao normal | admin, com motivo | **despacho pela metade**; sai sozinho quando a fila normaliza |
 
@@ -26,6 +26,48 @@ Duas origens de transição, e a diferença é o que impede o sistema de mentir 
 `RECOVERY` é híbrido de propósito: começa por decisão humana e **termina por número**, quando a
 fila volta abaixo do limiar de saída. Recuperação que depende de alguém lembrar de desligar vira
 modo esquecido, com o despacho pela metade para sempre.
+
+### 1.1 A evidência que o Control Plane mede e que degrada a rede (ciclo 156)
+
+O texto acima dizia que a automação "não mede dependência externa" — verdade para o que ela vê, mas
+**duas causas de degradação já estavam sendo medidas** e só existiam no painel: captura de
+alterações parada e divergência de conteúdo detectada. O painel dizia "captura parada" ao lado de um
+modo dizendo "operações normais".
+
+`NetworkModeService.evaluate()` passa a gravar a transição por evidência (`NetworkMode.HealthSignal`):
+
+| evidência | de onde vem | vira `DEGRADED`? |
+|---|---|---|
+| `DATA_DIVERGENCE` | `ContentReconcileService.countDivergent() > 0` — a mesma contagem do painel | sim, e ganha do captura (é o pior dos dois) |
+| `CAPTURE_NOT_READY` | `ChangeCaptureReadinessService.check().ready() == false` **e** a instalação declarou `rede.network.change-capture.required=true` | sim |
+| `NONE` | sem divergência e com captura em dia, não exigida ou **não perguntada** (`null`) | não |
+
+Decisões que a tabela carrega:
+
+- **"Não sei" não é defeito.** `ready` nulo é "não foi possível perguntar ao banco" (H2 da suíte,
+  usuário sem permissão). Tratar nulo como não-pronto marcaria todo ambiente de teste como degradado
+  e apagaria a diferença que o operador precisa ver.
+- **Exigir captura é o que torna a ausência dela um defeito.** Sem
+  `rede.network.change-capture.required=true`, o binlog desligado é o estado atual (doc 14), não
+  incidente.
+- **A transição é gravada, não só devolvida.** `DEGRADED` não é `automatic`, então a automação não a
+  desfaz; devolvê-la sempre no retorno e não gravar faria a rede degradada no pedido que perguntou e
+  `NORMAL` no seguinte — e o nó, que lê o modo, executaria como se nada tivesse acontecido. O
+  motivo gravado é `evidencia=<SINAL>` e a auditoria registra `NETWORK_MODE_DEGRADED` com a origem.
+- **`EMERGENCY` e `RECOVERY` não são rebaixados.** `EMERGENCY` já é o pior estado (dizer `DEGRADED`
+  apagaria a razão do incidente); `RECOVERY` despacha pela metade de propósito, e degradá-lo tiraria
+  o freio do meio da volta.
+
+**A saída é explícita:** a evidência não desfaz `DEGRADED` sozinha, pela mesma razão de antes — só
+quem olhou encerra o incidente (`POST /admin/network/mode` com motivo). O que a automação faz é
+**entrar** com a razão medida, não inventar a saída.
+
+**Verificação:** `NetworkModeDegradedTests` **7** (domínio puro) e 2 em `NetworkModesTests` pela
+rota e pelo banco (a divergência plantada leva a rede a `DEGRADED`, persiste em `network_state` com
+`evidencia=DATA_DIVERGENCE`, audita, e o despacho segue barrado; sem evidência, continua `NORMAL`).
+Mutações: não persistir a transição; "não sei" como não-pronto; divergência ignorada; rebaixar
+`EMERGENCY`/`RECOVERY` — **4 de 4 derrubam** (a do "não sei" só passou a derrubar depois de o teste
+ganhar o caso `of(null, true)`).
 
 **O que exatamente muda no despacho:** `DEGRADED`/`EMERGENCY` designam zero tarefas na rodada;
 `RECOVERY` designa metade do teto. O que já está designado continua com o nó — parar o despacho adia

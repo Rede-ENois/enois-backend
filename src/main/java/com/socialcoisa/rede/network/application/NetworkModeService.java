@@ -44,12 +44,15 @@ public class NetworkModeService {
 	private final NetworkNodeRepository nodes;
 	private final NetworkRegionService regions;
 	private final AuditTrail audit;
+	private final ChangeCaptureReadinessService capture;
+	private final ContentReconcileService reconcile;
 	private final Clock clock;
 	private final double enterRatio;
 	private final double exitRatio;
 
 	NetworkModeService(NetworkStateRepository state, NetworkTaskRepository tasks, NetworkNodeRepository nodes,
-			NetworkRegionService regions, AuditTrail audit, Clock clock,
+			NetworkRegionService regions, AuditTrail audit, ChangeCaptureReadinessService capture,
+			ContentReconcileService reconcile, Clock clock,
 			@Value("${rede.network.mode.high-load-enter-ratio:1.0}") double enterRatio,
 			@Value("${rede.network.mode.high-load-exit-ratio:0.5}") double exitRatio) {
 		this.state = state;
@@ -57,6 +60,8 @@ public class NetworkModeService {
 		this.nodes = nodes;
 		this.regions = regions;
 		this.audit = audit;
+		this.capture = capture;
+		this.reconcile = reconcile;
 		this.clock = clock;
 		this.enterRatio = enterRatio;
 		this.exitRatio = exitRatio;
@@ -136,7 +141,33 @@ public class NetworkModeService {
 				"{\"pending\":" + pending + ",\"capacity\":" + capacity + "}");
 			LOG.info("Modo da rede {} -> {} ({})", current, next, reason);
 		}
-		return next;
+		// O que a rede MEDE de si mesma e que a deixa degradada. DEGRADED não é um modo que a
+		// automação desfaz (ele não é `automatic`), então a evidência que dura tem de ser GRAVADA:
+		// devolvê-la apenas no retorno deixaria a rede degradada neste pedido e NORMAL no seguinte —
+		// a transição existiria só enquanto alguém perguntasse.
+		NetworkMode.HealthSignal signal = healthSignal();
+		NetworkMode effective = next.degradedBy(signal);
+		if (next == current && effective != current) {
+			String reason = "evidencia=" + signal.name();
+			state.setMode(effective, reason, now);
+			audit.record("system", "NETWORK_MODE_" + effective.name(), "global",
+				"{\"from\":\"" + current.name() + "\",\"evidence\":\"" + signal.name() + "\"}");
+			LOG.info("Modo da rede {} -> {} ({})", current, effective, reason);
+		}
+		return effective;
+	}
+
+	/**
+	 * A evidência de degradação, do que foi medido.
+	 *
+	 * <p>A captura só conta quando a instalação <b>declarou</b> exigir
+	 * ({@code rede.network.change-capture.required}); "não sei" do banco não é defeito. A
+	 * divergência vem de {@link ContentReconcileService#countDivergent()}, a mesma contagem que o
+	 * painel mostra — duas contas para a mesma divergência seriam duas respostas ao mesmo alerta.</p>
+	 */
+	NetworkMode.HealthSignal healthSignal() {
+		Boolean captureReady = capture.required() ? capture.check().ready() : null;
+		return NetworkMode.HealthSignal.of(captureReady, capture.required(), reconcile.countDivergent() > 0);
 	}
 
 	/** Motivo entra em metadata JSON: aspas e barra do texto humano não podem quebrar o JSON. */

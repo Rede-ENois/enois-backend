@@ -73,6 +73,9 @@ class NetworkModesTests {
 		jdbc.update("delete from network_nodes");
 		// Só as linhas de modo: outras classes também auditam, e estas são as únicas com este alvo.
 		jdbc.update("delete from audit_logs where target_id = 'global' and action like 'NETWORK_MODE_%'");
+		// A divergência de conteúdo de outro teste desta classe (mesma base H2) degradaria a rede
+		// aqui: com causa comum, o relógio de vida e a capacidade não são o que está em prova.
+		jdbc.update("delete from network_content_snapshots where content_id = 'div-1'");
 	}
 
 	// ---------------------------------------------------------------- acionamento humano
@@ -95,6 +98,56 @@ class NetworkModesTests {
 			"select metadata from audit_logs where action = 'NETWORK_MODE_EMERGENCY' and target_id = 'global'",
 			String.class);
 		assertThat(metadata).contains("\"from\":\"NORMAL\"").contains("banco principal fora");
+	}
+
+	/**
+	 * Divergência de conteúdo medida deixa a rede {@code DEGRADED} pelo cálculo automático — sem o
+	 * humano declarar, sem adivinhar.
+	 *
+	 * <p><b>Antes:</b> o painel mostrava a divergência, a captura parada, e o modo continuava
+	 * {@code NORMAL}: as duas causas que o Control Plane <b>mede</b> do brief §12 não chegavam ao
+	 * modo (ciclo 156). O dado plantado é o mínimo que a contagem de divergentes lê
+	 * ({@code divergence_reason} não nulo num snapshot).</p>
+	 */
+	@Test
+	void divergenciaDeConteudoDeixaARedeDegradadaSemDecisaoHumana() {
+		jdbc.update("""
+			insert into network_content_snapshots (node_id, content_type, content_id, source_version,
+				content_hash, synced_at, checked_at, divergence_reason, divergence_at)
+			values (?, 'USER_PROFILE', 'div-1', 4, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+				'CONTENT_STALE', CURRENT_TIMESTAMP)
+			""", snapshotNodeId(), "a".repeat(64));
+
+		assertThat(modes.evaluate()).isEqualTo(NetworkMode.DEGRADED);
+		// A transição tem de DURAR: devolvê-la só no retorno deixaria a próxima leitura (o despacho,
+		// o nó, o painel) em NORMAL com a divergência ainda no banco.
+		assertThat(modes.current()).isEqualTo(NetworkMode.DEGRADED);
+		assertThat(NetworkMode.DEGRADED.dispatchAllowed()).isFalse();
+		// E o motivo gravado é a evidência medida, registrado na auditoria como as outras transições.
+		assertThat(jdbc.queryForObject("select reason from network_state", String.class))
+			.isEqualTo("evidencia=DATA_DIVERGENCE");
+		assertThat(jdbc.queryForObject(
+			"select count(*) from audit_logs where action = 'NETWORK_MODE_DEGRADED' and target_id = 'global'",
+			Long.class)).isPositive();
+	}
+
+	/**
+	 * Sem divergência e sem captura exigida, a automação não inventa degradação: o modo medido
+	 * (aqui {@code NORMAL}) continua, e a rede não fica degradada pela suíte inteira.
+	 */
+	@Test
+	void semEvidenciaARedeContinuaNoModoMedido() {
+		jdbc.update("delete from network_content_snapshots where content_id = 'div-1'");
+		assertThat(modes.evaluate()).isEqualTo(NetworkMode.NORMAL);
+		assertThat(modes.current()).isEqualTo(NetworkMode.NORMAL);
+	}
+
+	private String snapshotNodeId() {
+		jdbc.update("insert into network_nodes (id, display_name, owner_user_id, status, profiles, "
+			+ "declared_cpu_cores, declared_memory_mb, declared_disk_mb, declared_bandwidth_mbps, "
+			+ "created_at) values ('nd_divmod', 'divergente', 'owner-divmod', 'ACTIVE', 'WORKER', "
+			+ "4, 8192, 51200, 100, CURRENT_TIMESTAMP)");
+		return "nd_divmod";
 	}
 
 	@Test
