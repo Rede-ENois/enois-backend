@@ -33,6 +33,7 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 import com.socialcoisa.rede.network.application.SigV4Verifier;
 import com.socialcoisa.rede.network.application.StorageCatalogService;
 import com.socialcoisa.rede.network.application.StorageContentService;
+import com.socialcoisa.rede.network.application.StorageMultipartService;
 import com.socialcoisa.rede.network.application.port.out.S3CredentialRepository;
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
 import com.socialcoisa.rede.network.domain.ObjectMetadata;
@@ -44,6 +45,7 @@ import com.socialcoisa.rede.network.domain.StoragePlacement;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 
 /**
  * O gateway <b>API compatível com S3</b> do Énóis Storage (brief §11).
@@ -78,8 +80,10 @@ import jakarta.servlet.http.HttpServletRequest;
  * mesmo caminho do PUT simples: nada vira objeto antes de o arquivo inteiro existir. Detalhes em
  * {@code StorageMultipartService} e em {@code 18-storage-gateway-s3.md} §4.2.</p>
  *
- * <p><b>Não implementado:</b> ACL, tagging, {@code versionId}, bucket policy e {@code POST} de
- * formulário não têm suporte e não são anunciados; a doc 18 é a lista do que existe.</p>
+ * <p><b>Não implementado:</b> ACL, tagging, bucket policy e {@code POST} de formulário não têm
+ * suporte e não são anunciados. {@code GET}/{@code HEAD} com {@code ?versionId=} servem a versão
+ * pedida (§4.68); {@code DELETE ?versionId=} continua {@code 501}, porque apagar uma versão mexe no
+ * histórico. A doc 18 é a lista do que existe.</p>
  *
  * <p><b>Documento em XML:</b> o gateway serializa à mão, sem {@code ListBucketResult.class}. O motivo
  * é controle de namespace e de ordem dos elementos: um JAXB muda a ordem e o SDK não protesta, mas
@@ -140,7 +144,7 @@ class S3GatewayController {
 	 * existem. Sem a recusa, os dois serviam o corpo do arquivo — e a URL pre-assinada de
 	 * {@code ?torrent} baixava o objeto.</p>
 	 *
-	 * <p>{@code versionId} <b>saiu</b> desta lista no §4.67: desde o versionamento a versao antiga
+	 * <p>{@code versionId} <b>saiu</b> desta lista no §4.68: desde o versionamento a versao antiga
 	 * existe, esta {@code STORED} e e servivel, e o {@code GET}/{@code HEAD} a serve.</p>
 	 *
 	 * <p>{@code response-content-*} fica de fora: entra na assinatura da URL pre-assinada (§4.28),
@@ -263,10 +267,21 @@ class S3GatewayController {
 		S3Credential credential = authenticate(request, "LIST");
 		requireBucket(credential, bucket);
 		requireBucketDoDono(credential, bucket);
+		Map<String, String> consulta = query(request);
+		// Teto e marcadores como o S3 (§4.64): o valor aplicado é o que a resposta ecoa, e o
+		// `IsTruncated` reflete se há mais — não é constante.
+		int teto = StorageMultipartService.tetoDeUploads(numeroDoParametro(consulta.get("max-uploads"), 1000));
+		var pagina = multipart.paginaDeAbertos(bucket, credential.ownerUserId(), consulta.get("prefix"),
+			consulta.get("key-marker"), consulta.get("upload-id-marker"), teto);
 		S3Xml xml = new S3Xml();
 		xml.root("ListMultipartUploadsResult").element("Bucket", bucket)
-			.element("IsTruncated", "false");
-		for (var upload : multipart.abertos(bucket, credential.ownerUserId(), query(request).get("prefix"))) {
+			.element("MaxUploads", Integer.toString(teto))
+			.element("IsTruncated", pagina.truncada() ? "true" : "false");
+		if (pagina.truncada() && !pagina.uploads().isEmpty()) {
+			var ultimo = pagina.uploads().get(pagina.uploads().size() - 1);
+			xml.element("NextKeyMarker", ultimo.key()).element("NextUploadIdMarker", ultimo.uploadId());
+		}
+		for (var upload : pagina.uploads()) {
 			xml.open("Upload")
 				.element("Key", upload.key())
 				.element("UploadId", upload.uploadId())
@@ -292,11 +307,32 @@ class S3GatewayController {
 		S3Credential credential = authenticate(request, "LIST");
 		requireBucket(credential, bucket);
 		requireBucketDoDono(credential, bucket);
+		Map<String, String> consulta = query(request);
+		// Teto e marcadores como o S3 (§4.67): o `<MaxKeys>` ecoa o valor APLICADO, o `IsTruncated`
+		// reflete se há mais, e o marcador de versão é o número da versão da última linha emitida.
+		int teto = StorageCatalogRepository.tetoDeVersoes(numeroDoParametro(consulta.get("max-keys"), 1000));
+		Long versionMarker = null;
+		String versionIdMarker = consulta.get("version-id-marker");
+		if (versionIdMarker != null) {
+			try {
+				versionMarker = Long.parseLong(versionIdMarker.trim());
+			}
+			catch (NumberFormatException naoEhNumero) {
+				throw s3Error(400, "InvalidArgument",
+					"O version-id-marker do ListObjectVersions e o numero da versao.");
+			}
+		}
+		var pagina = storage.versionsNoBucket(bucket, consulta.get("prefix"), consulta.get("key-marker"),
+			versionMarker, teto);
 		S3Xml xml = new S3Xml();
 		xml.root("ListVersionsResult").element("Name", bucket)
-			.element("IsTruncated", "false")
-			.element("MaxKeys", "1000");
-		for (StorageObject objeto : storage.versionsNoBucket(bucket, query(request).get("prefix"))) {
+			.element("MaxKeys", Integer.toString(teto))
+			.element("IsTruncated", pagina.truncada() ? "true" : "false");
+		if (pagina.truncada() && !pagina.versoes().isEmpty()) {
+			var ultima = pagina.versoes().get(pagina.versoes().size() - 1);
+			xml.element("NextKeyMarker", ultima.key()).element("NextVersionIdMarker", Long.toString(ultima.version()));
+		}
+		for (StorageObject objeto : pagina.versoes()) {
 			if (!credential.ownerUserId().equals(objeto.createdBy())) {
 				continue;
 			}
@@ -1307,7 +1343,7 @@ class S3GatewayController {
 			valor = valor.substring(1);
 		}
 		if (valor.indexOf('?') >= 0) {
-			// `?versionId=` não é endereçável pelo gateway (a versão corrente é a única que ele serve).
+			// A origem de uma cópia é a corrente: copiar a partir de uma versão específica não entra por aqui.
 			throw s3Error(501, "NotImplemented",
 				"Copiar uma versao especifica (versionId) nao e suportado.");
 		}
@@ -1663,9 +1699,17 @@ class S3GatewayController {
 		requireBucket(credential, bucket);
 		var upload = uploadDaChave(credential, bucket, request);
 		java.util.List<Parte> pedidas = partesDoXml(body(request));
-		var concluido = multipart.complete(upload, pedidas.stream().map(Parte::numero).toList(),
-			pedidas.stream().collect(java.util.stream.Collectors.toMap(Parte::numero,
-				p -> p.etag() == null ? "" : p.etag(), (a, b) -> a)));
+		com.socialcoisa.rede.network.application.StorageMultipartService.Completed concluido;
+		try {
+			concluido = multipart.complete(upload, pedidas.stream().map(Parte::numero).toList(),
+				pedidas.stream().collect(java.util.stream.Collectors.toMap(Parte::numero,
+					p -> p.etag() == null ? "" : p.etag(), (a, b) -> a)));
+		}
+		catch (ApiException recusado) {
+			// As outras rotas do multipart já traduziam; esta era a única que deixava a recusa vazar
+			// como JSON do Control Plane — e é a recusa que o cliente vê depois de enviar tudo (§4.66).
+			throw noVocabularioDoS3(recusado);
+		}
 		S3Xml xml = new S3Xml();
 		xml.root("CompleteMultipartUploadResult").element("Location", bucket + "/" + concluido.key())
 			.element("Bucket", bucket).element("Key", concluido.key()).element("ETag", "\"" + concluido.etag() + "\"");
@@ -1787,7 +1831,17 @@ class S3GatewayController {
 				throw s3Error(400, "MalformedXML", "Part sem PartNumber.");
 			}
 			String etag = entre(trecho, "<ETag>", "</ETag>");
-			partes.add(new Parte(Integer.parseInt(numero.trim()),
+			int numeroDaParte;
+			try {
+				numeroDaParte = Integer.parseInt(numero.trim());
+			}
+			catch (NumberFormatException naoEhNumero) {
+				// O `PartNumber` ilegível é XML malformado, e a recusa sai no vocabulário do S3:
+				// sem esta tradução, a `NumberFormatException` subia como `IllegalArgumentException`
+				// e o cliente recebia o `ErrorResponse` JSON do Control Plane num gateway S3.
+				throw s3Error(400, "MalformedXML", "PartNumber invalido.");
+			}
+			partes.add(new Parte(numeroDaParte,
 				etag == null ? null : etag.replace("\"", "").trim()));
 			cursor = fecha + "</Part>".length();
 		}
@@ -1811,7 +1865,7 @@ class S3GatewayController {
 	}
 
 	/**
-	 * O objeto que o pedido nomeia: a versão do {@code ?versionId=}, ou a corrente (§4.67).
+	 * O objeto que o pedido nomeia: a versão do {@code ?versionId=}, ou a corrente (§4.68).
 	 *
 	 * <p><b>Antes:</b> {@code ?versionId=} respondia {@code 501 NotImplemented} — o subrecurso estava
 	 * na lista de leituras não endereçadas, por não haver como servir outra versão. Mas o gateway
@@ -1860,10 +1914,71 @@ class S3GatewayController {
 		// arquivo em 200, e o cliente lia "a ACL é o conteúdo do arquivo". Mesma lista do PUT.
 		recusarSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		recusarLeituraDeSubrecurso(request, "/" + bucket + "/" + keyOf(request));
+		// `If-Match` é a pré-condição do download condicional (§4.63), como no S3.
 		StorageObject object = objetoPedido(bucket, keyOf(request), request, "GET");
 		return comVocabularioDoS3(() -> content.respond(object, request.getHeader(HttpHeaders.RANGE),
 			request.getHeader(HttpHeaders.IF_NONE_MATCH), request.getHeader(HttpHeaders.IF_MODIFIED_SINCE),
-			request.getHeader("If-Range")));
+			request.getHeader("If-Range"), request.getHeader(HttpHeaders.IF_MATCH)));
+	}
+
+	/**
+	 * O {@code OPTIONS} do gateway: as operações que **esta** credencial e **esta** chave deixam
+	 * fazer (§4.62). Chamado pelo {@link S3OptionsFilter}, que intercepta antes do
+	 * {@code DispatcherServlet} — ele responderia {@code OPTIONS} sozinho, com o {@code Allow} dos
+	 * métodos mapeados (inclusive os que nenhuma rota atende).
+	 *
+	 * <p><b>Antes:</b> o preflight de CORS do Control Plane respondia todo {@code OPTIONS} antes de
+	 * qualquer autenticação, com o {@code Allow} do servidor
+	 * (<code>PUT,GET,HEAD,DELETE,POST,OPTIONS</code>): uma credencial só de leitura ouvia que podia
+	 * apagar, e quem não se identificou ouvia a mesma lista.</p>
+	 *
+	 * <p><b>Agora:</b> o {@code OPTIONS} passa pela SigV4 como qualquer verbo. Sem assinatura é
+	 * {@code 403} em XML; com assinatura, {@code 200} e um {@code Allow} montado das operações da
+	 * credencial. A chave precisa existir e ser do dono da credencial — o gateway não diz, nem a
+	 * quem tem credencial válida, que uma chave que não é sua está lá.</p>
+	 */
+	void responderOptions(HttpServletRequest request, HttpServletResponse response) throws IOException {
+		String caminho = request.getRequestURI().substring(request.getContextPath().length());
+		String[] partes = caminho.length() > S3GatewayController.PREFIX.length() + 1
+			? caminho.substring(S3GatewayController.PREFIX.length() + 1).split("/", 2) : new String[0];
+		if (partes.length == 0 || partes[0].isBlank()) {
+			// `/s3` e `/s3/`: a pergunta é sobre a instalação, e a assinatura já basta.
+			S3Credential credencial = authenticate(request, "GET");
+			escreverAllow(response, allowDe(credencial));
+			return;
+		}
+		String bucket = partes[0];
+		S3Credential credential = authenticate(request, "GET");
+		requireBucket(credential, bucket);
+		requireBucketDoDono(credential, bucket);
+		if (partes.length > 1) {
+			// A chave que não existe não ganha lista de métodos: `OPTIONS` de chave fantasma é o
+			// `404 NoSuchKey` do `HEAD`, não o `403` do bucket (§4.62).
+			String chave = partes[1];
+			comVocabularioDoS3(() -> storage.requireDownloadable(bucket, chave, "OPTIONS"));
+		}
+		escreverAllow(response, allowDe(credential));
+	}
+
+	/** O {@code Allow} desta credencial: exatamente o que ela pode fazer aqui, mais {@code OPTIONS}. */
+	private static String allowDe(S3Credential credential) {
+		List<String> verbos = new java.util.ArrayList<>();
+		if (credential.allows("GET")) {
+			verbos.addAll(List.of("GET", "HEAD"));
+		}
+		if (credential.allows("PUT")) {
+			verbos.add("PUT");
+		}
+		if (credential.allows("DELETE")) {
+			verbos.add("DELETE");
+		}
+		verbos.add("OPTIONS");
+		return String.join(", ", verbos);
+	}
+
+	private static void escreverAllow(HttpServletResponse response, String allow) throws IOException {
+		response.setStatus(200);
+		response.setHeader(HttpHeaders.ALLOW, allow);
 	}
 
 	/** HeadObject: mesmos cabeçalhos do GetObject, sem corpo. */
@@ -1880,7 +1995,7 @@ class S3GatewayController {
 		recusarLeituraDeSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		StorageObject object = objetoPedido(bucket, keyOf(request), request, "HEAD");
 		return comVocabularioDoS3(() -> content.head(object, request.getHeader(HttpHeaders.IF_NONE_MATCH),
-			request.getHeader(HttpHeaders.IF_MODIFIED_SINCE)));
+			request.getHeader(HttpHeaders.IF_MODIFIED_SINCE), request.getHeader(HttpHeaders.IF_MATCH)));
 	}
 
 	/** DeleteObject: lápide no catálogo. A resposta é 204 mesmo se a chave não existir (igual ao S3). */
@@ -2292,6 +2407,21 @@ class S3GatewayController {
 		// fim passaria — por isso a pergunta é feita na GRAVAÇÃO, cujo objeto entra na lista.
 		return catalog.list(bucket, null, null, 1000).stream()
 			.allMatch(o -> ownerUserId.equals(o.createdBy()));
+	}
+
+	/** O inteiro de um parâmetro de paginação; ausente, ilegível ou negativo vale o teto (§4.64). */
+	private static int numeroDoParametro(String valor, int padrao) {
+		if (valor == null || valor.isBlank()) {
+			return padrao;
+		}
+		try {
+			int n = Integer.parseInt(valor.trim());
+			// `Math.min` já está no serviço; aqui o piso: zero e negativo viram o padrão.
+			return n <= 0 ? padrao : n;
+		}
+		catch (NumberFormatException naoEhNumero) {
+			return padrao;
+		}
 	}
 
 	/** Os cabeçalhos declarados em SignedHeaders, normalizados como o cliente assinou. */
@@ -2714,7 +2844,19 @@ class S3GatewayController {
 		S3Credential credential = authenticate(request, "LIST");
 		requireBucket(credential, bucket);
 		// 404 para o que não é do dono, como o S3: o HEAD não revela a existência de bucket alheio.
-		boolean nosso = credential.ownerUserId().equals(donoDoBucketRegistrado(bucket));
+		// A régua é a DO GATEWAY (§4.65): criador registrado, objeto vivo ou lápide do dono — a mesma
+		// do `GET` do bucket, do `?location`, do `?list-type=2` e do `PUT`. Com só o criador
+		// registrado, o bucket que nasceu do primeiro upload e perdeu o último objeto respondia 404
+		// no HEAD e 200 em todo o resto, para a mesma credencial — e o cliente que usa o HeadBucket
+		// como sonda de existência concluía que o bucket sumiu.
+		boolean nosso;
+		try {
+			requireBucketDoDono(credential, bucket);
+			nosso = true;
+		}
+		catch (S3ApiException naoEhDoDono) {
+			nosso = credential.ownerUserId().equals(donoDoBucketRegistrado(bucket));
+		}
 		return nosso ? ResponseEntity.ok().build() : ResponseEntity.notFound().build();
 	}
 

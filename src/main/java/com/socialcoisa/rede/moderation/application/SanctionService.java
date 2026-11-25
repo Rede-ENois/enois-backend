@@ -45,12 +45,13 @@ public class SanctionService {
 	private final NotificationService notificationService;
 	private final BanCleanupService banCleanup;
 	private final UserProfileRepository profiles;
+	private final ProvaDaPunicao prova;
 	private final Clock clock;
 
 	public SanctionService(SanctionRepository sanctions, AppealRepository appeals, ReportRepository reports,
 			ReportedContentAuthorReader contentAuthors, ReportedContentRemover contentRemover,
 			NotificationService notificationService, BanCleanupService banCleanup, UserProfileRepository profiles,
-			Clock clock) {
+			ProvaDaPunicao prova, Clock clock) {
 		this.profiles = profiles;
 		this.sanctions = sanctions;
 		this.appeals = appeals;
@@ -59,6 +60,7 @@ public class SanctionService {
 		this.contentRemover = contentRemover;
 		this.notificationService = notificationService;
 		this.banCleanup = banCleanup;
+		this.prova = prova;
 		this.clock = clock;
 	}
 
@@ -99,6 +101,8 @@ public class SanctionService {
 		}
 		boolean human = reviewerId != null;
 		Instant now = Instant.now(clock);
+		// Lida antes da remoção: a notificação cita o trecho como prova do que foi punido.
+		String trecho = prova.trechoDe(report).orElse(null);
 		contentRemover.remove(report, human ? reviewerId : "ia-triagem", human ? "HUMAN" : "IA");
 		if (sanctions.findActiveByUser(authorId).isEmpty()) {
 			String id = "sanc_" + UUID.randomUUID().toString().replace("-", "");
@@ -112,12 +116,50 @@ public class SanctionService {
 		}
 		reports.save(report);
 		notificationService.create(authorId, "SANCAO", human ? reviewerId : "sistema", "Conta restrita",
-			(human ? "Sua conta foi restringida apos revisao de uma denuncia por uma pessoa do time: "
-				: "Sua conta foi restringida apos analise automatica de uma denuncia: ") + motive
-				+ ". Se foi um erro, voce pode recorrer e uma pessoa do time vai revisar.",
-			"/api/penalidades", "Recorrer");
+			notificacao(report, trecho,
+				(human ? "Sua conta foi restringida apos revisao de uma denuncia por uma pessoa do time: "
+					: "Sua conta foi restringida apos analise automatica de uma denuncia: ") + motive),
+			"/api/penalidades", "Recorrer", trecho);
 		return true;
 	}
+
+	/**
+	 * Corpo da notificação de punição: o que vale enquanto ela vale, a justificativa e o trecho que
+	 * motivou a decisão. O corpo vai para {@code notifications.body} (2000 caracteres), então o
+	 * trecho é cortado bem antes disso.
+	 */
+	public static String notificacao(Report report, String trecho, String abertura) {
+		StringBuilder texto = new StringBuilder(abertura);
+		texto.append(". Enquanto a restricao vale, voce nao pode publicar nem comentar").append(COMO_RECORRER);
+		texto.append(" Justificativa: ").append(justificativaDaDenuncia(report));
+		appendTrecho(texto, trecho);
+		return texto.toString();
+	}
+
+	/** Justificativa para a punição direta do painel, que não passa por denúncia. */
+	public static String notificacaoDireta(String abertura, String motivo) {
+		StringBuilder texto = new StringBuilder(abertura);
+		texto.append(". A punicao pode ser retirada por um administrador se ela tiver sido um erro");
+		texto.append(" Justificativa: ").append(motivo);
+		return texto.toString();
+	}
+
+	private static void appendTrecho(StringBuilder texto, String trecho) {
+		if (trecho != null && !trecho.isBlank()) {
+			texto.append(" Conteudo denunciado: \"").append(trecho).append('"');
+		}
+	}
+
+	private static String justificativaDaDenuncia(Report report) {
+		String motivo = ProvaDaPunicao.justificativaPublica(report.reason());
+		String descricao = report.description() == null ? "" : report.description().trim();
+		return descricao.isEmpty() ? motivo : motivo + " (" + descricao + ")";
+	}
+
+	/** O que toda punição no painel diz além da justificativa. */
+	public static final String COMO_RECORRER =
+		". Um administrador pode retirar a punição se ela tiver sido um erro; enquanto isso, use o "
+			+ "recurso em Penalidades.";
 
 	/**
 	 * Restrição DIRETA de um usuário por decisão humana (ex.: contestação de transação
