@@ -19,12 +19,13 @@ TABELA = "external_jobs"
 
 # Colunas de texto depois da migracao, na forma como a consulta do teste devolve cada linha:
 # coluna, charset, collation, nulidade, tipo e default (o conjunto de resultados do MariaDB e o
-# texto '' para default nulo; o '<sem default>' no fim e literal e distingue da consulta vazia).
+# texto '' para default nulo; o cast do '<sem default>' no fim e literal e distingue da consulta
+# vazia). Sem default, so a coluna default fica vazia; as demais nunca saem em branco.
 # Nenhuma mao unica pode acabar em NULL: o mariadb --batch escreve esse NULL igual ao de consulta
 # vazia, e o teste perde a coluna que ficou de fora.
 COLUNAS = f"""
     select column_name, character_set_name, collation_name, is_nullable, column_type,
-           '%s' as sem_default
+           cast('<sem default>' as char) as sem_default
     from information_schema.columns
     where table_schema = 'vagas' and table_name = 'external_jobs' and column_name in (
         'platform', 'external_id', 'title', 'company', 'location', 'url', 'canonical_url',
