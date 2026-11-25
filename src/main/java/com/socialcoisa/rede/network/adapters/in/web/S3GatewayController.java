@@ -136,17 +136,18 @@ class S3GatewayController {
 	/**
 	 * Subrecursos de <b>leitura</b> do objeto que este gateway nao endereca.
 	 *
-	 * <p>{@code versionId} e a versao especifica (o gateway so serve a corrente, e devolver outra
-	 * com {@code 200} e conteudo errado com cara de certo); {@code torrent} e {@code partNumber}
-	 * so fazem sentido junto de operacoes que aqui nao existem. Sem a recusa, os tres serviam o
-	 * corpo do arquivo — e a URL pre-assinada de {@code ?torrent} baixava o objeto.</p>
+	 * <p>{@code torrent} e {@code partNumber} so fazem sentido junto de operacoes que aqui nao
+	 * existem. Sem a recusa, os dois serviam o corpo do arquivo — e a URL pre-assinada de
+	 * {@code ?torrent} baixava o objeto.</p>
+	 *
+	 * <p>{@code versionId} <b>saiu</b> desta lista no §4.67: desde o versionamento a versao antiga
+	 * existe, esta {@code STORED} e e servivel, e o {@code GET}/{@code HEAD} a serve.</p>
 	 *
 	 * <p>{@code response-content-*} fica de fora: entra na assinatura da URL pre-assinada (§4.28),
 	 * entao adulterar e recusado, mas o gateway <b>nao</b> aplica o cabecalho (o
 	 * {@code Content-Disposition} e o declarado no {@code PUT}).</p>
 	 */
-	private static final List<String> SUBRECURSOS_DE_LEITURA_NAO_ENDERECADOS = List.of("versionId", "torrent",
-		"partNumber");
+	private static final List<String> SUBRECURSOS_DE_LEITURA_NAO_ENDERECADOS = List.of("torrent", "partNumber");
 
 	/**
 	 * Subrecurso de <b>bucket</b> que e politica no S3 e aqui nao existe (a unica que age e a do
@@ -1810,6 +1811,38 @@ class S3GatewayController {
 	}
 
 	/**
+	 * O objeto que o pedido nomeia: a versão do {@code ?versionId=}, ou a corrente (§4.67).
+	 *
+	 * <p><b>Antes:</b> {@code ?versionId=} respondia {@code 501 NotImplemented} — o subrecurso estava
+	 * na lista de leituras não endereçadas, por não haver como servir outra versão. Mas o gateway
+	 * <b>guarda</b> o histórico: com {@code ?versioning Enabled} a versão substituída fica
+	 * {@code STORED} e servível, e o {@code ListObjectVersions} a lista com {@code <VersionId>}.
+	 * Recusar a leitura de uma versão que está gravada é negar o dado que se tem, e o cliente que
+	 * lista o histórico não consegue usá-lo — nem para restaurar, que abre a origem.</p>
+	 *
+	 * <p><b>Agora:</b> {@code versionId} numérico resolve aquela versão; {@code NoSuchVersion} para
+	 * versão que não existe (ou cujo conteúdo foi removido), e {@code 400 InvalidArgument} para valor
+	 * que não é número — a mesma régua do marcador do {@code ListObjectVersions}. Sem
+	 * {@code versionId}, a corrente.</p>
+	 */
+	private StorageObject objetoPedido(String bucket, String chave, HttpServletRequest request, String operacao) {
+		String versionId = query(request).get("versionId");
+		if (versionId == null || versionId.isBlank()) {
+			return comVocabularioDoS3(() -> storage.requireDownloadable(bucket, chave, operacao));
+		}
+		long versao;
+		try {
+			versao = Long.parseLong(versionId.trim());
+		}
+		catch (NumberFormatException naoEhNumero) {
+			throw s3Error(400, "InvalidArgument",
+				"O versionId tem de ser o numero da versao que o ListObjectVersions emitiu.");
+		}
+		final long pedida = versao;
+		return comVocabularioDoS3(() -> storage.requireVersion(bucket, chave, pedida, operacao));
+	}
+
+	/**
 	 * GetObject: Range/206/416, 304 por If-None-Match ou If-Modified-Since, ETag = digest.
 	 *
 	 * <p><b>Ordem deliberada:</b> donagem antes da existência. O S3 responde 404 a um bucket que o
@@ -1827,7 +1860,7 @@ class S3GatewayController {
 		// arquivo em 200, e o cliente lia "a ACL é o conteúdo do arquivo". Mesma lista do PUT.
 		recusarSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		recusarLeituraDeSubrecurso(request, "/" + bucket + "/" + keyOf(request));
-		StorageObject object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, keyOf(request)));
+		StorageObject object = objetoPedido(bucket, keyOf(request), request, "GET");
 		return comVocabularioDoS3(() -> content.respond(object, request.getHeader(HttpHeaders.RANGE),
 			request.getHeader(HttpHeaders.IF_NONE_MATCH), request.getHeader(HttpHeaders.IF_MODIFIED_SINCE),
 			request.getHeader("If-Range")));
@@ -1845,7 +1878,7 @@ class S3GatewayController {
 		// do arquivo, que é a pergunta errada com cara de certa (§4.41).
 		recusarSubrecurso(request, "/" + bucket + "/" + keyOf(request));
 		recusarLeituraDeSubrecurso(request, "/" + bucket + "/" + keyOf(request));
-		StorageObject object = comVocabularioDoS3(() -> storage.requireDownloadable(bucket, keyOf(request), "HEAD"));
+		StorageObject object = objetoPedido(bucket, keyOf(request), request, "HEAD");
 		return comVocabularioDoS3(() -> content.head(object, request.getHeader(HttpHeaders.IF_NONE_MATCH),
 			request.getHeader(HttpHeaders.IF_MODIFIED_SINCE)));
 	}

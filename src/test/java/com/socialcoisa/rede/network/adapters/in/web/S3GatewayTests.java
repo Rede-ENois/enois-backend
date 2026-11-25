@@ -1893,7 +1893,7 @@ void lifecycle_do_bucket_le_e_grava_a_mesma_politica_do_varredor() throws Except
 	}
 
 	/**
-	 * "Ler uma versão" não é "baixar o arquivo": `GET ?versionId=` responde `501`, não um `200` com o
+	 * O subrecurso de leitura que o gateway não endereça responde `501`, não um `200` com o
 	 * conteúdo errado.
 	 *
 	 * <p><b>Antes:</b> o {@code GET} do objeto passava pela rota sem olhar a consulta e servia o corpo
@@ -1902,15 +1902,17 @@ void lifecycle_do_bucket_le_e_grava_a_mesma_politica_do_varredor() throws Except
 	 * — recebia <b>outra</b> cópia, com {@code 200}; o cliente lia isso como sucesso e processava o
 	 * conteúdo errado. Pior: a URL pré-assinada de {@code ?torrent} baixava o arquivo.</p>
 	 *
-	 * <p><b>Agora:</b> os três são {@code 501 NotImplemented} sem corpo, no {@code GET} e no
-	 * {@code HEAD}, e o objeto continua intacto. {@code ?response-content-disposition} continua
-	 * aceito: entra na assinatura da URL pré-assinada.</p>
+	 * <p><b>Agora:</b> {@code ?torrent} e {@code ?partNumber} são {@code 501 NotImplemented} sem
+	 * corpo, no {@code GET} e no {@code HEAD}, e o objeto continua intacto. {@code versionId} saiu
+	 * desta recusa no §4.67 — a versão existe e é servida; o que não é número é {@code 400}, e o que
+	 * não existe é {@code 404 NoSuchVersion}. {@code ?response-content-disposition} continua aceito:
+	 * entra na assinatura da URL pré-assinada.</p>
 	 */
 	@Test
 	void get_de_subrecurso_nao_serve_o_objeto() throws Exception {
 		gravar("versoes/a.txt", "corrente");
 
-		for (String sub : new String[] { "versionId=abc", "torrent", "partNumber=1" }) {
+		for (String sub : new String[] { "torrent", "partNumber=1" }) {
 			MockHttpServletRequestBuilder leitura = get("/s3/" + bucket + "/versoes/a.txt?" + sub);
 			assinar(leitura, SECRET, shaVazio());
 			var resposta = mockMvc.perform(leitura).andReturn().getResponse();
@@ -2023,8 +2025,10 @@ void lifecycle_do_bucket_le_e_grava_a_mesma_politica_do_varredor() throws Except
 	void head_recusa_os_mesmos_subrecursos_que_o_get() throws Exception {
 		gravar("head/h.txt", "abc");
 
+		// `versionId` saiu da recusa no §4.67: a versão é servida, e `versionId=abc` é `400` nos dois
+		// verbos — por isso entra numa conferência à parte, abaixo, e não na lista de `501`.
 		for (String sub : new String[] { "acl", "tagging", "retention", "legal-hold", "object-lock",
-				"versionId=1", "torrent", "partNumber=1" }) {
+				"torrent", "partNumber=1" }) {
 			// O GET é a referência: o que ele recusa, o HEAD recusa.
 			MockHttpServletRequestBuilder leitura = get("/s3/" + bucket + "/head/h.txt?" + sub);
 			assinar(leitura, SECRET, shaVazio());
@@ -2041,6 +2045,17 @@ void lifecycle_do_bucket_le_e_grava_a_mesma_politica_do_varredor() throws Except
 			assertThat(doHead.getStatus()).as("HEAD ?" + sub).isEqualTo(501);
 			// O tamanho do arquivo não vaza num 501: é o que fazia parecer "existe e tem 3 bytes".
 			assertThat(doHead.getHeader("Content-Length")).as("HEAD ?" + sub).isNotEqualTo("3");
+		}
+
+		// `versionId` que não é número: `400 InvalidArgument` no GET e no HEAD, nunca `501`.
+		for (String verbo : new String[] { "GET", "HEAD" }) {
+			MockHttpServletRequestBuilder comLixo = MockMvcRequestBuilders.request(
+				org.springframework.http.HttpMethod.valueOf(verbo), "/s3/" + bucket + "/head/h.txt?versionId=abc");
+			assinar(comLixo, SECRET, shaVazio());
+			var rl = mockMvc.perform(comLixo).andReturn();
+			var respL = rl.getRequest().isAsyncStarted()
+				? mockMvc.perform(asyncDispatch(rl)).andReturn().getResponse() : rl.getResponse();
+			assertThat(respL.getStatus()).as(verbo + " ?versionId=abc").isEqualTo(400);
 		}
 
 		// `response-content-type` entra na assinatura mas não é aplicado no GET; o `HEAD` diz o mesmo.
@@ -3360,6 +3375,121 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 				? mockMvc.perform(asyncDispatch(rd)).andReturn().getResponse() : rd.getResponse();
 			assertThat(doGet.getContentAsString()).as(k).isEqualTo("abc");
 		}
+	}
+
+	/**
+	 * `GET`/`HEAD` com `?versionId=` servem a versão pedida — não a corrente, nem `501`.
+	 *
+	 * <p><b>Antes:</b> o `versionId` estava na lista de subrecursos de leitura "não endereçados" e o
+	 * `GET`, o `HEAD` e o `DELETE` respondiam {@code 501 NotImplemented}. Mas o gateway <b>guarda</b> o
+	 * histórico desde o V352: com {@code ?versioning Enabled}, o segundo `PUT` de uma chave deixa a
+	 * primeira versão {@code STORED} e servível, o {@code ?versions} lista as duas com
+	 * {@code <VersionId>} — e o cliente que pede a versão que acabou de ver na listagem não consegue
+	 * baixá-la:</p>
+	 *
+	 * <pre>
+	 * PUT /s3/&lt;b&gt;/a.txt  "primeira"   → 200 (v1)
+	 * PUT /s3/&lt;b&gt;/a.txt  "segunda"    → 200 (v2)
+	 * GET /s3/&lt;b&gt;?versions            → 200  v1 e v2, com &lt;VersionId&gt;1 e 2
+	 * GET /s3/&lt;b&gt;/a.txt?versionId=1  → 501  ← o furo
+	 * </pre>
+	 *
+	 * <p>O histórico só tem uso se a versão antiga for recuperável: restaurar por
+	 * {@code copyTo} exige baixar a origem, e o grande motivo de manter versões — "o arquivo de ontem"
+	 * — passa pelo mesmo endereço. Dizer {@code 501} para uma versão que está gravada e conferida é
+	 * recusar o dado que se tem.</p>
+	 *
+	 * <p><b>Agora:</b> {@code versionId} numérico serve a versão pedida (estado servível, do dono),
+	 * {@code 404 NoSuchVersion} para versão que não existe e {@code 400 InvalidArgument} para valor
+	 * que não é número; sem {@code versionId}, a corrente, como antes. O {@code HEAD} responde os
+	 * mesmos cabeçalhos daquela versão (§4.67).</p>
+	 */
+	@Test
+	void get_com_version_id_serve_a_versao_pedida_e_nao_a_corrente() throws Exception {
+		String b = "vd" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		MockHttpServletRequestBuilder cria = MockMvcRequestBuilders.put("/s3/" + b);
+		assinar(cria, SECRET, shaVazio());
+		assertThat(mockMvc.perform(cria).andReturn().getResponse().getStatus()).isEqualTo(200);
+		String config = "<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>";
+		MockHttpServletRequestBuilder v = MockMvcRequestBuilders.put("/s3/" + b + "?versioning")
+			.content(config.getBytes(StandardCharsets.UTF_8));
+		assinar(v, SECRET, shaDe(config));
+		assertThat(mockMvc.perform(v).andReturn().getResponse().getStatus()).isEqualTo(200);
+		String primeira = "primeira-versao";
+		String segunda = "segunda-versao";
+		for (String conteudo : new String[] { primeira, segunda }) {
+			MockHttpServletRequestBuilder p1 = put("/s3/" + b + "/a.txt")
+				.content(conteudo.getBytes(StandardCharsets.UTF_8));
+			assinar(p1, SECRET, shaDe(conteudo));
+			assertThat(mockMvc.perform(p1).andReturn().getResponse().getStatus()).isEqualTo(200);
+		}
+
+		// Sem `versionId`: a corrente, como sempre.
+		assertThat(baixar(b, "a.txt", null)).isEqualTo(segunda);
+		// As duas versões, cada uma com o próprio conteúdo e o próprio ETag.
+		assertThat(baixar(b, "a.txt", "1")).as("a v1 é o arquivo de antes, não a corrente").isEqualTo(primeira);
+		assertThat(baixar(b, "a.txt", "2")).isEqualTo(segunda);
+		assertThat(etagDe(b, "a.txt", "1")).as("o ETag é o da versão pedida")
+			.isEqualTo("\"" + shaDe(primeira) + "\"").isNotEqualTo(etagDe(b, "a.txt", "2"));
+
+		// O `HEAD` da v1 responde o tamanho e o tipo da v1.
+		MockHttpServletRequestBuilder h = MockMvcRequestBuilders.head("/s3/" + b + "/a.txt?versionId=1");
+		assinar(h, SECRET, shaVazio());
+		var rh = mockMvc.perform(h).andReturn();
+		var head = (rh.getRequest().isAsyncStarted() ? mockMvc.perform(asyncDispatch(rh)).andReturn() : rh)
+			.getResponse();
+		assertThat(head.getStatus()).isEqualTo(200);
+		assertThat(head.getHeader("Content-Length")).isEqualTo(String.valueOf(primeira.length()));
+
+		// Versão que não existe e valor que não é número.
+		assertThat(erroDe(b, "a.txt", "9")).isEqualTo("NoSuchVersion");
+		assertThat(erroDe(b, "a.txt", "abc")).isEqualTo("InvalidArgument");
+
+		// Lápide: o DeleteObject não cria versão nova — a corrente (v2) vira <DeleteMarker> com o
+		// mesmo número de versão. O registro existe, mas o conteúdo foi removido; servi-lo pela
+		// versão seria vender bytes que não existem mais. A régua de serventia é a da corrente.
+		MockHttpServletRequestBuilder d = MockMvcRequestBuilders.delete("/s3/" + b + "/a.txt");
+		assinar(d, SECRET, shaVazio());
+		assertThat(mockMvc.perform(d).andReturn().getResponse().getStatus()).isEqualTo(204);
+		assertThat(jdbc.queryForList(
+			"select version, state from network_storage_objects where bucket = ? and object_key = 'a.txt' order by version",
+			b).toString().replace("VERSION", "version").replace("STATE", "state"))
+			.isEqualTo("[{version=1, state=STORED}, {version=2, state=DELETED}]");
+		assertThat(erroDe(b, "a.txt", "2")).isEqualTo("NoSuchVersion");
+		// E a corrente someu (lápide), como antes — mas a v1 continua servível.
+		assertThat(erroDe(b, "a.txt", null)).isEqualTo("NoSuchKey");
+		assertThat(baixar(b, "a.txt", "1")).isEqualTo(primeira);
+	}
+
+	private String baixar(String b, String chave, String versionId) throws Exception {
+		MockHttpServletRequestBuilder g = get("/s3/" + b + "/" + chave
+			+ (versionId == null ? "" : "?versionId=" + versionId));
+		assinar(g, SECRET, shaVazio());
+		var rr = mockMvc.perform(g).andReturn();
+		var resp = rr.getRequest().isAsyncStarted() ? mockMvc.perform(asyncDispatch(rr)).andReturn() : rr;
+		assertThat(resp.getResponse().getStatus()).as(resp.getResponse().getContentAsString()).isEqualTo(200);
+		return resp.getResponse().getContentAsString();
+	}
+
+	private String etagDe(String b, String chave, String versionId) throws Exception {
+		baixar(b, chave, versionId);
+		MockHttpServletRequestBuilder g = get("/s3/" + b + "/" + chave + "?versionId=" + versionId);
+		assinar(g, SECRET, shaVazio());
+		var rr = mockMvc.perform(g).andReturn();
+		return (rr.getRequest().isAsyncStarted() ? mockMvc.perform(asyncDispatch(rr)).andReturn() : rr)
+			.getResponse().getHeader("ETag");
+	}
+
+	private String erroDe(String b, String chave, String versionId) throws Exception {
+		MockHttpServletRequestBuilder g = get("/s3/" + b + "/" + chave
+			+ (versionId == null ? "" : "?versionId=" + versionId));
+		assinar(g, SECRET, shaVazio());
+		var rr = mockMvc.perform(g).andReturn();
+		var resp = (rr.getRequest().isAsyncStarted() ? mockMvc.perform(asyncDispatch(rr)).andReturn() : rr)
+			.getResponse();
+		String corpo = resp.getContentAsString();
+		int i = corpo.indexOf("<Code>");
+		return i < 0 ? "HTTP " + resp.getStatus() : corpo.substring(i + 6, corpo.indexOf("</Code>", i));
 	}
 
 	/** Credencial só de leitura não grava, mesmo com assinatura válida. */

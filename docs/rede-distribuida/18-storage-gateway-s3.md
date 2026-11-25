@@ -1835,6 +1835,50 @@ mesmo nome com `&amp;`/`&lt;` só como XML; o `GET` com a chave listada devolve 
 as linhas com `%C3%A9`, `%20` e `%3C`. Mutações **4/4**: sem decodificar; `+` virando espaço;
 decodificar duas vezes (`%25`→`%`→outra coisa); `%25` único tratado à parte.
 
+## 4.67 `GET`/`HEAD` com `?versionId=` servem a versão pedida (ciclo 153)
+
+O gateway **guarda** o histórico: com `?versioning Enabled` o segundo `PUT` de uma chave deixa a
+primeira versão `STORED` e servível, e o `?versions` lista as duas com `<VersionId>`. Mas o
+`versionId` estava na lista de leituras "não endereçadas" e a leitura respondia `501`:
+
+```
+PUT /s3/<b>/a.txt  "primeira"   → 200 (v1)
+PUT /s3/<b>/a.txt  "segunda"    → 200 (v2)
+GET /s3/<b>?versions            → 200  v1 e v2, com <VersionId>1 e <VersionId>2
+GET /s3/<b>/a.txt?versionId=1   → 501 NotImplemented   ← o furo
+```
+
+O histórico só tem uso se a versão antiga for recuperável. O grande motivo de manter versões — "o
+arquivo de ontem" — passa por esse endereço, e restaurar por `copyTo` exige abrir a origem. Dizer
+`501` para uma versão que está gravada e conferida é recusar o dado que se tem.
+
+### Agora
+
+| pedido | antes | agora |
+|---|---|---|
+| `GET /b/a.txt?versionId=1` | `501` | `200` com o corpo e o `ETag` da v1 |
+| `HEAD /b/a.txt?versionId=1` | `501` | `200` com `Content-Length`/`ETag` da v1 |
+| `GET /b/a.txt` (sem `versionId`) | `200`, corrente | corrente (igual) |
+| `?versionId=9` (não existe) | `501` | `404 NoSuchVersion` |
+| `?versionId=` da lápide | `501` | `404 NoSuchVersion` (o conteúdo foi removido) |
+| `?versionId=abc` | `501` | `400 InvalidArgument` |
+
+- A régua de serventia é a da corrente: estado servível e cópia conferida. Versão **substituída** é
+  servível de propósito — é o que o histórico existe para guardar.
+- O `DeleteObject` não cria versão nova: a corrente vira `<DeleteMarker>` com o mesmo número, e essa
+  versão deixa de ser servível.
+- O `DELETE ?versionId=` continua `501`: remover uma versão é uma decisão à parte, que mexe no
+  histórico, e não entra por esta rota.
+
+**Verificação:** `S3GatewayTests` **+1** (`get_com_version_id_serve_a_versao_pedida_e_nao_a_corrente`):
+sem `versionId` a corrente; `versionId=1` e `=2` com cada corpo; o `ETag` da v1 é o digest de v1 e
+difere do da v2; `HEAD ?versionId=1` com `Content-Length` da v1; `versionId=9` → `NoSuchVersion`;
+`versionId=abc` → `InvalidArgument`; depois do `DELETE`, o catálogo tem `v1 STORED` e
+`v2 DELETED`, `?versionId=2` → `NoSuchVersion`, a corrente → `NoSuchKey` e a v1 **continua** sendo
+servida. Vermelho antes: `501` no `versionId=1`. Mutações **4/4**: ignorar o `versionId` e servir a
+corrente (o comportamento de antes); versão inexistente virando a corrente; apagar versão sem cópia
+servível (a lápide); `versionId` não numérico virando a corrente.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:

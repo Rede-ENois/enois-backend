@@ -1253,6 +1253,44 @@ public class StorageCatalogService {
 		}
 	}
 
+	/**
+	 * A versão pedida de uma chave, para o {@code GET}/{@code HEAD} com {@code ?versionId=} (§4.66).
+	 *
+	 * <p>Vale a mesma régua da corrente: estado servível e cópia conferida. Uma versão
+	 * <b>substituída</b> é servível de propósito — é o que o histórico existe para guardar. Lápide,
+	 * versão vencida e versão inexistente respondem {@code 404} como objeto inexistente.</p>
+	 */
+	public StorageObject requireVersion(String bucket, String key, long versao, String operacao) {
+		long inicio = System.nanoTime();
+		try {
+			StorageObject object = doRequireVersao(bucket, key, versao);
+			conta(operacao, StorageOperationMetrics.Resultado.OK, inicio);
+			return object;
+		}
+		catch (RuntimeException recusado) {
+			conta(operacao, resultadoDe(recusado), inicio);
+			throw recusado;
+		}
+	}
+
+	/**
+	 * A linha da versão pedida, com a régua de serventia da corrente.
+	 *
+	 * <p>{@code catalog.versions} devolve o histórico da chave; aqui a escolha é pela versão. Não
+	 * filtra por dono: o chamador já passou pelo {@code requireBucketDoDono}, e a chave é do bucket,
+	 * que é do dono.</p>
+	 */
+	private StorageObject doRequireVersao(String bucket, String key, long versao) {
+		StorageObject object = catalog.versions(bucket, key).stream()
+			.filter(o -> o.version() == versao).findFirst()
+			.orElseThrow(() -> new ApiException(404, "NoSuchVersion",
+				"Esta chave nao tem a versao pedida."));
+		if (!object.servable() || object.expired(clock.instant())) {
+			throw new ApiException(404, "NoSuchVersion", "Esta chave nao tem a versao pedida.");
+		}
+		return object;
+	}
+
 	private StorageObject doRequireDownloadable(String bucket, String key) {
 		StorageObject object = catalog.find(bucket, key)
 			.orElseThrow(() -> new ApiException(404, "STORAGE_NOT_FOUND", "Objeto nao encontrado."));
