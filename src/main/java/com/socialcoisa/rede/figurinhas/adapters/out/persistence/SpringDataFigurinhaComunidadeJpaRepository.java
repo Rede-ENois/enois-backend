@@ -12,7 +12,7 @@ import org.springframework.data.repository.query.Param;
 interface SpringDataFigurinhaComunidadeJpaRepository extends JpaRepository<FigurinhaComunidadeJpaEntity, String> {
 
 	/** `ativo` 1 = no ar; desativada tem NULL, então este finder nunca devolve desativada. */
-	Optional<FigurinhaComunidadeJpaEntity> findByCodigoAndAtivo(String codigo, Integer ativo);
+	Optional<FigurinhaComunidadeJpaEntity> findByCodigoAndAtivo(String codigo, Byte ativo);
 
 	@Query("select e.id from FigurinhaComunidadeJpaEntity e where e.id in :ids and e.ativo = 1")
 	List<String> findAtivosEntre(@Param("ids") Collection<String> ids);

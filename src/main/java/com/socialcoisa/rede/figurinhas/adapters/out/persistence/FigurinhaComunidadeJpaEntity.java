@@ -20,7 +20,7 @@ import jakarta.persistence.Table;
 @Table(name = "figurinhas_comunidade")
 class FigurinhaComunidadeJpaEntity {
 
-	static final int ATIVA = 1;
+	static final byte ATIVA = 1;
 
 	@Id
 	private String id;
@@ -58,15 +58,17 @@ class FigurinhaComunidadeJpaEntity {
 	/**
 	 * 1 enquanto ativa; NULL depois de desativar (é a metade da chave única das ativas).
 	 *
-	 * <p>`tinyint` na migração: sem o `columnDefinition` o Hibernate esperaria INTEGER e a
-	 * validação de schema derrubaria o boot.</p>
+	 * <p>A coluna é {@code tinyint} e o tipo é {@code Byte} porque é ele que faz o Hibernate
+	 * esperar TINYINT na validação de schema. Com {@code Integer} o esperado vira INTEGER e o boot
+	 * cai onde o driver reporta TINYINT de verdade (o MariaDB da qa); {@code columnDefinition} não
+	 * muda o tipo esperado.</p>
 	 */
-	@Column(columnDefinition = "tinyint")
-	private Integer ativo;
+	@Column
+	private Byte ativo;
 
-	// `tinyint` na migração: o Hibernate esperaria INTEGER e a validação de schema derrubava o boot.
-	@Column(name = "update_scope", nullable = false, columnDefinition = "tinyint")
-	private int updateScope;
+	// Mesmo motivo do `ativo`: a coluna é `tinyint`, então o tipo é `byte`, não `int`.
+	@Column(name = "update_scope", nullable = false)
+	private byte updateScope;
 
 	@Column(name = "criado_em", nullable = false)
 	private Instant criadoEm;
