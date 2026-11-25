@@ -4,7 +4,7 @@ package com.socialcoisa.rede.feed.domain;
  * Reações do post, do comentário, do grupo, do desabafo, da colagem, do confessionário e da
  * mensagem.
  *
- * São as 76 expressões do pacote oficial É Nóis, na ordem do seletor e do {@code ENOIS_CUSTOM_EMOJIS}
+ * São as 77 expressões do pacote oficial É Nóis, na ordem do seletor e do {@code ENOIS_CUSTOM_EMOJIS}
  * do front: a reação i é o ícone i do pacote ({@link ReactionIcons}), sem repetição. Nenhuma reação
  * existe fora dele — o que é de BTTV/FrankerFaceZ é figurinha de texto, não reação.
  *
@@ -152,5 +152,10 @@ public enum ReactionType {
 	/** Sorriso malandro, "eu sei". */
 	SMIRK,
 	/** Fantasma: apagar, sumir, "bu". */
-	GHOST
+	GHOST,
+	/**
+	 * O coração roxo do pacote: o carinho da fileira de reações, ao lado do joinha. Entrou por
+	 * último porque o tipo é gravado pelo nome — a posição aqui só diz onde ele nasceu na lista.
+	 */
+	HEART_PURPLE
 }

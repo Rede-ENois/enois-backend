@@ -88,6 +88,7 @@ public final class ReactionIcons {
 		CODIGO.put(ReactionType.TONGUE, "muscle");
 		CODIGO.put(ReactionType.KISS, "starstruck");
 		CODIGO.put(ReactionType.DROOL, "tongue");
+		CODIGO.put(ReactionType.HEART_PURPLE, "heart_purple");
 		CODIGO.put(ReactionType.STARSTRUCK, "kiss");
 		CODIGO.put(ReactionType.VULCAN, "drool");
 		CODIGO.put(ReactionType.CROSSED, "insightful");
@@ -102,7 +103,7 @@ public final class ReactionIcons {
 	private ReactionIcons() {
 	}
 
-	/** Códigos do pacote, na ordem do enum — o teste ao lado confere a bijeção com as 76 reações. */
+	/** Códigos do pacote, na ordem do enum — o teste ao lado confere a bijeção com as 77 reações. */
 	public static List<String> codigos() {
 		return ReactionType.values().length == CODIGO.size()
 			? CODIGO.values().stream().toList()
