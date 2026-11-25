@@ -16,7 +16,7 @@ no commit em que foi escrito — inclusive o que **não** existe e o brief supõ
 | §6 rede como camada única | enroll, API key por nó, config assinada, heartbeat — o Storage vai usar os mesmos | direto |
 | §7 provisionamento sem IP/hostname | token de uso único; o nó só faz chamadas de saída (pull), então funciona atrás de NAT | direto |
 | §9 múltiplos domínios | região declarada por nó + estado de região fora de operação (ADR-015) + cobertura por região (ADR-016) | parcial: região existe, "domínio" com autoridade própria não |
-| §12 modos operacionais | ADR-009 | direto |
+| §12 modos operacionais | ADR-009; desde o ciclo 156 o modo `DEGRADED` também entra por **evidência medida** (captura exigida e parada, divergência de conteúdo), com a transição gravada — doc 06 §1.1 | direto |
 | §13 governança | `AuditTrail` com ator, alvo e motivo; `AdminGuard` | direto |
 | §3.7 / §4.3 divergência e reconciliação | `ContentReconcileService` / `ContentReconcileWorker`: o nó declara o que tem, o Control Plane confere contra a origem e grava `CONTENT_STALE`/`CONTENT_GONE` | direto para o **conteúdo**; não para tabelas arbitrárias |
 | §3 change feed | `network_content_changes` (V283): cada mudança de conteúdo ganha versão e hash na **mesma transação** em que o corpo muda; o nó lê por cursor (`seq`) e recebe ids + versão + hash | é o alicerce real da sincronização entre nós |

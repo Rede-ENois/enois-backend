@@ -41,6 +41,65 @@ public enum NetworkMode {
 	}
 
 	/**
+	 * Evidência medida de que a <b>rede</b> não está inteira — o que a automação pode afirmar sem
+	 * adivinhar o que o humano sabe (brief §12 e §4).
+	 *
+	 * <p>Estes dois sinais antes só existiam no documento: o banco que não serve para captura e a
+	 * divergência de dado ficavam visíveis no endpoint, mas o modo continuava {@code NORMAL} — um
+	 * painel dizendo "captura parada" ao lado de um modo dizendo "operações normais".</p>
+	 */
+	public enum HealthSignal {
+
+		/** Nada medido: as duas verificações não apontaram problema (ou não foram feitas). */
+		NONE,
+
+		/** O banco principal não serve para captura de alterações (a instalação declarou exigir). */
+		CAPTURE_NOT_READY,
+
+		/** Há evidência de divergência detectada — o caso mais grave dos dois. */
+		DATA_DIVERGENCE;
+
+		/**
+		 * O sinal a partir do que foi medido.
+		 *
+		 * <p><b>"Não sei" não é problema.</b> {@code captureReady} nulo é "não foi possível
+		 * perguntar ao banco" — H2 da suíte, usuário sem permissão —, e tratar isso como não-pronto
+		 * marcaria todo ambiente de teste como degradado e esconderia a diferença que o operador
+		 * precisa ver. {@code captureRequired} falso é "a instalação não decidiu usar captura": a
+		 * ausência dela é o estado atual, não um defeito.</p>
+		 */
+		public static HealthSignal of(Boolean captureReady, boolean captureRequired) {
+			return of(captureReady, captureRequired, false);
+		}
+
+		/** Com divergência medida, o motivo é o divergir — é o pior dos dois. */
+		public static HealthSignal of(Boolean captureReady, boolean captureRequired, boolean diverged) {
+			if (diverged) {
+				return DATA_DIVERGENCE;
+			}
+			if (captureRequired && Boolean.FALSE.equals(captureReady)) {
+				return CAPTURE_NOT_READY;
+			}
+			return NONE;
+		}
+	}
+
+	/**
+	 * O modo que a evidência exige. {@code DEGRADED} continua sendo de decisão humana para o que o
+	 * Control Plane <b>não</b> mede; esta é a transição para o que ele mede.
+	 *
+	 * <p>{@code EMERGENCY} não é rebaixado: infra principal indisponível já é o pior estado e a
+	 * degradação não diz nada além dele. {@code RECOVERY} também não: retomar com a captura parada é
+	 * repetir o incidente, e o despacho pela metade protege mais do que o despacho normal.</p>
+	 */
+	public NetworkMode degradedBy(HealthSignal signal) {
+		if (signal == HealthSignal.NONE || this == EMERGENCY || this == RECOVERY) {
+			return this;
+		}
+		return DEGRADED;
+	}
+
+	/**
 	 * Tarefa nova pode ser designada neste modo?
 	 *
 	 * <p>{@code DEGRADED} e {@code EMERGENCY} param o despacho: é o que a tabela de contingência
