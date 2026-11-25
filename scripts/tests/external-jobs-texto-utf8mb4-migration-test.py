@@ -17,50 +17,39 @@ IMAGE = os.environ.get(
 MIGRATION = ROOT / "src/main/resources/db/migration/V379__vagas_externas_texto_utf8mb4.sql"
 TABELA = "external_jobs"
 
-# Colunas de texto depois da migracao, na forma como a consulta do teste devolve cada linha:
-# coluna, charset, collation, nulidade, tipo e default. Nenhuma linha sai so com NULL: sem default
-# o coalesce escreve o termo, e coluna que ficou de fora da migracao aparece como linha faltando
-# (a guarda de tamanho no teste pega isso antes do diff).
-COLUNAS = f"""
-    select column_name, character_set_name, collation_name, is_nullable, column_type,
-           coalesce(column_default, '<sem default>')
-    from information_schema.columns
-    where table_schema = 'vagas' and table_name = 'external_jobs' and column_name in (
-        'platform', 'external_id', 'title', 'company', 'location', 'url', 'canonical_url',
-        'external_status', 'salary', 'currency', 'salary_min', 'salary_max', 'salary_period',
-        'apply_email', 'submitted_by', 'description', 'employment_type', 'level', 'work_model',
-        'city', 'state', 'country', 'salary_currency', 'salary_period_code', 'attribution_url'
-    )
-    order by column_name;
-"""
-
-ESPERADO = [
-    "apply_email|utf8mb4|utf8mb4_unicode_ci|YES|varchar(320)|<sem default>",
-    "attribution_url|utf8mb4|utf8mb4_unicode_ci|YES|varchar(1000)|<sem default>",
-    "canonical_url|utf8mb4|utf8mb4_unicode_ci|YES|varchar(1000)|<sem default>",
-    "city|utf8mb4|utf8mb4_unicode_ci|YES|varchar(120)|<sem default>",
-    "company|utf8mb4|utf8mb4_unicode_ci|YES|varchar(255)|<sem default>",
-    "country|utf8mb4|utf8mb4_unicode_ci|YES|varchar(60)|<sem default>",
-    "currency|utf8mb4|utf8mb4_unicode_ci|YES|varchar(8)|<sem default>",
-    "description|utf8mb4|utf8mb4_unicode_ci|YES|varchar(5000)|<sem default>",
-    "employment_type|utf8mb4|utf8mb4_unicode_ci|YES|varchar(40)|<sem default>",
-    "external_id|utf8mb4|utf8mb4_unicode_ci|NO|varchar(255)|<sem default>",
-    "external_status|utf8mb4|utf8mb4_unicode_ci|NO|varchar(32)|FOUND|<sem default>",
-    "level|utf8mb4|utf8mb4_unicode_ci|YES|varchar(20)|<sem default>",
-    "location|utf8mb4|utf8mb4_unicode_ci|YES|varchar(255)|<sem default>",
-    "platform|utf8mb4|utf8mb4_unicode_ci|NO|varchar(64)|<sem default>",
-    "salary|utf8mb4|utf8mb4_unicode_ci|YES|varchar(255)|<sem default>",
-    "salary_currency|utf8mb4|utf8mb4_unicode_ci|YES|varchar(8)|<sem default>",
-    "salary_max|utf8mb4|utf8mb4_unicode_ci|YES|varchar(50)|<sem default>",
-    "salary_min|utf8mb4|utf8mb4_unicode_ci|YES|varchar(50)|<sem default>",
-    "salary_period|utf8mb4|utf8mb4_unicode_ci|YES|varchar(20)|<sem default>",
-    "salary_period_code|utf8mb4|utf8mb4_unicode_ci|YES|varchar(10)|<sem default>",
-    "state|utf8mb4|utf8mb4_unicode_ci|YES|varchar(60)|<sem default>",
-    "submitted_by|utf8mb4|utf8mb4_unicode_ci|YES|varchar(255)|<sem default>",
-    "title|utf8mb4|utf8mb4_unicode_ci|NO|varchar(500)|<sem default>",
-    "url|utf8mb4|utf8mb4_unicode_ci|NO|varchar(1000)|<sem default>",
-    "work_model|utf8mb4|utf8mb4_unicode_ci|YES|varchar(20)|<sem default>",
+# As 25 colunas de texto com o que a migracao precisa deixar: charset, collation, nulidade, tipo e
+# default (o default fica aqui de registro; no teste, so external_status tem). A comparacao usa uma
+# consulta so: a mao unica de linha so com NULL sai igual ao NULL de consulta vazia, e a guarda de
+# tamanho pega coluna que ficou de fora.
+COLUNAS = [
+    ("apply_email", "varchar(320)", "YES", None),
+    ("attribution_url", "varchar(1000)", "YES", None),
+    ("canonical_url", "varchar(1000)", "YES", None),
+    ("city", "varchar(120)", "YES", None),
+    ("company", "varchar(255)", "YES", None),
+    ("country", "varchar(60)", "YES", None),
+    ("currency", "varchar(8)", "YES", None),
+    ("description", "varchar(5000)", "YES", None),
+    ("employment_type", "varchar(40)", "YES", None),
+    ("external_id", "varchar(255)", "NO", None),
+    ("external_status", "varchar(32)", "NO", "FOUND"),
+    ("level", "varchar(20)", "YES", None),
+    ("location", "varchar(255)", "YES", None),
+    ("platform", "varchar(64)", "NO", None),
+    ("salary", "varchar(255)", "YES", None),
+    ("salary_currency", "varchar(8)", "YES", None),
+    ("salary_max", "varchar(50)", "YES", None),
+    ("salary_min", "varchar(50)", "YES", None),
+    ("salary_period", "varchar(20)", "YES", None),
+    ("salary_period_code", "varchar(10)", "YES", None),
+    ("state", "varchar(60)", "YES", None),
+    ("submitted_by", "varchar(255)", "YES", None),
+    ("title", "varchar(500)", "NO", None),
+    ("url", "varchar(1000)", "NO", None),
+    ("work_model", "varchar(20)", "YES", None),
 ]
+
+NOMES = ", ".join("'" + linha[0] + "'" for linha in COLUNAS)
 
 # O que o anuncio das fontes traz: espaco fino (U+202F) antes do simbolo de moeda, que e o byte da
 # linha do log da qa, mais acento e emoji.
@@ -192,11 +181,26 @@ class ExternalJobsTextoUtf8mb4MigrationTests(unittest.TestCase):
         cls.comando("docker", "rm", "-f", "--volumes", cls.container)
 
     def test_colunas_de_texto_declaram_utf8mb4(self):
-        # Uma linha so: com coalesce, coluna sem default nao tem como voltar NULL, entao linha
-        # nenhuma se confunde com consulta vazia e o campo default nulo sai como 'NULL'.
-        linhas = ["|".join(linha.split("\t")) for linha in self.sql(COLUNAS).splitlines()]
-        self.assertEqual(len(linhas), len(ESPERADO), msg="consulta e esperado com tamanhos diferentes")
-        self.assertEqual(linhas, ESPERADO)
+        # Uma consulta so para as 25 (a mao unica de uma linha so com NULL sai igual ao de consulta
+        # vazia, e uma linha por vez esconderia coluna fora da migracao).
+        linhas = self.sql(
+            "select column_name, character_set_name, collation_name, is_nullable, column_type"
+            " from information_schema.columns"
+            " where table_schema = 'vagas' and table_name = 'external_jobs'"
+            f" and column_name in ({NOMES})"
+            f" order by field(column_name, {NOMES});"
+        ).splitlines()
+        self.assertEqual(len(linhas), len(COLUNAS), msg="coluna de texto fora da migracao")
+        for linha, (coluna, tipo, nulidade, _) in zip(linhas, COLUNAS):
+            self.assertEqual(linha, f"{coluna}\tutf8mb4\tutf8mb4_unicode_ci\t{nulidade}\t{tipo}")
+
+    def test_status_legado_continua_com_o_default(self):
+        self.assertEqual(
+            self.sql("select column_default from information_schema.columns"
+                     " where table_schema = 'vagas' and table_name = 'external_jobs'"
+                     " and column_name = 'external_status';"),
+            "FOUND",
+        )
 
     def test_nenhuma_coluna_de_texto_ficou_no_charset_legado(self):
         restantes = self.sql(f"""
