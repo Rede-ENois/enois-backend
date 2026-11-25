@@ -73,8 +73,10 @@ contra o vetor externo é o que separa "implementei" de "assinei comigo mesmo e 
 
 **Não implementado**, e o brief manda não anunciar como se existisse:
 
-- **ACL**, **tagging**, **`versionId`**, **bucket policy**, **`POST` de formulário** — sem suporte e
-  não anunciados (o `PUT` que os gravaria responde `501` e não altera o objeto — §4.21).
+- **ACL**, **tagging**, **bucket policy**, **`POST` de formulário** — sem suporte e não anunciados (o
+  `PUT` que os gravaria responde `501` e não altera o objeto — §4.21). `versionId` é exceção: o
+  `GET`/`HEAD` com `?versionId=` serve a versão pedida (§4.68); apagar uma versão (`DELETE
+  ?versionId=`) continua `501`, e copiar a partir de uma versão também.
 - **Regiões múltiplas**, **classes de armazenamento na resposta** (sempre `STANDARD`; a classe real é a
   da §8 e não é escolhida por requisição).
 
@@ -736,7 +738,8 @@ quem não caía para o caminho lento falhava no item, e quem caía gastava a ban
 - **Condições da origem:** `x-amz-copy-source-if-match` e `-if-none-match` são conferidos contra o
   ETag; divergência é `412 PreconditionFailed` e nada é gravado. As condições por data respondem `501`
   em vez de serem ignoradas — uma condição aceita e não aplicada seria uma resposta errada com cara de
-  certa. `?versionId=` também é `501`: a versão corrente é a única que o gateway endereça.
+  certa. `?versionId=` na origem também é `501`: copiar a partir de uma versão específica não entra
+  por aqui — quem serve a versão é o `GET`/`HEAD` (§4.68).
 - **Donos:** a origem tem de ser do dono da credencial (mesma regra do destino). Origem de outra conta
   é `403 AccessDenied` **sem** reservar a chave de destino; origem inexistente é `404 NoSuchKey`
   (o código do S3, não o interno `STORAGE_NOT_FOUND`).
@@ -2087,6 +2090,56 @@ pedido); `key-marker=a.txt` sem `version-id-marker` → só `b.txt/1`. Vermelho 
 teto ignorado; `IsTruncated` fixo; sem os marcadores; marcador só pela chave; `<MaxKeys>` ecoando o
 pedido. As duas conferências novas cobrem os defeitos que a revisão apontou depois: eco do `<MaxKeys>`
 acima do teto e marcador recomeçando dentro da própria chave.
+
+## 4.68 `GET`/`HEAD` com `?versionId=` servem a versão pedida (ciclo 153)
+
+O gateway **guarda** o histórico: com `?versioning Enabled` o segundo `PUT` de uma chave deixa a
+primeira versão `STORED` e servível, e o `?versions` lista as duas com `<VersionId>`. Mas o
+`versionId` estava na lista de leituras "não endereçadas" e a leitura respondia `501`:
+
+```
+PUT /s3/<b>/a.txt  "primeira"   → 200 (v1)
+PUT /s3/<b>/a.txt  "segunda"    → 200 (v2)
+GET /s3/<b>?versions            → 200  v1 e v2, com <VersionId>1 e <VersionId>2
+GET /s3/<b>/a.txt?versionId=1   → 501 NotImplemented   ← o furo
+```
+
+O histórico só tem uso se a versão antiga for recuperável. O grande motivo de manter versões — "o
+arquivo de ontem" — passa por esse endereço, e restaurar por `copyTo` exige abrir a origem. Dizer
+`501` para uma versão que está gravada e conferida é recusar o dado que se tem.
+
+### Agora
+
+| pedido | antes | agora |
+|---|---|---|
+| `GET /b/a.txt?versionId=1` | `501` | `200` com o corpo e o `ETag` da v1 |
+| `HEAD /b/a.txt?versionId=1` | `501` | `200` com `Content-Length`/`ETag` da v1 |
+| `GET /b/a.txt` (sem `versionId`) | `200`, corrente | corrente (igual) |
+| `?versionId=9` (não existe) | `501` | `404 NoSuchVersion` |
+| `?versionId=` da lápide | `501` | `404 NoSuchVersion` (o conteúdo foi removido) |
+| `?versionId=abc` | `501` | `400 InvalidArgument` |
+
+- A régua de serventia é a da corrente: estado servível e cópia conferida. Versão **substituída** é
+  servível de propósito — é o que o histórico existe para guardar.
+- O `DeleteObject` não cria versão nova: a corrente vira `<DeleteMarker>` com o mesmo número, e essa
+  versão deixa de ser servível.
+- O `DELETE ?versionId=` continua `501`: remover uma versão é uma decisão à parte, que mexe no
+  histórico, e não entra por esta rota.
+- A versão é do **dono da credencial**, como todo objeto no gateway: a linha de outra conta no mesmo
+  bucket — o estado que o `ListObjectVersions` filtra — não é servida nem pela versão nem pela
+  corrente. A resposta é `403 AccessDenied`, a mesma do `DELETE` e do `CopyObject`, e não revela que a
+  chave existe.
+
+**Verificação:** `S3GatewayTests` **+1** (`get_com_version_id_serve_a_versao_pedida_e_nao_a_corrente`):
+sem `versionId` a corrente; `versionId=1` e `=2` com cada corpo; o `ETag` da v1 é o digest de v1 e
+difere do da v2; `HEAD ?versionId=1` com `Content-Length` da v1; `versionId=9` → `NoSuchVersion`;
+`versionId=abc` → `InvalidArgument`; depois do `DELETE`, o catálogo tem `v1 STORED` e
+`v2 DELETED`, `?versionId=2` → `NoSuchVersion`, a corrente → `NoSuchKey` e a v1 **continua** sendo
+servida; e a linha de outra conta plantada no bucket → `AccessDenied` pela versão e pela corrente.
+Vermelho antes: `501` no `versionId=1`. Mutações **4/4**: ignorar o `versionId` e servir a corrente (o
+comportamento de antes); versão inexistente virando a corrente; apagar versão sem cópia servível (a
+lápide); `versionId` não numérico virando a corrente. A conferência do dono tem o próprio caso: sem
+ela, as duas asserções da linha alheia ficam vermelhas.
 
 ## 5. Erros
 
