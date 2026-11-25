@@ -351,6 +351,41 @@ class UserProfilePersistenceAdapter implements UserProfileRepository {
 	}
 
 	@Override
+	public List<com.socialcoisa.rede.profile.application.port.out.WrappedAccount> wrappedAccounts(String afterId,
+			int limit) {
+		var query = em.createNativeQuery(afterId == null
+			? "select id, reputation, created_at from users where email_verified_at is not null"
+				+ " and is_admin = false and username not like 'removed-%' and email not like 'removed+%'"
+				+ " order by id limit :limit"
+			: "select id, reputation, created_at from users where email_verified_at is not null"
+				+ " and is_admin = false and username not like 'removed-%' and email not like 'removed+%'"
+				+ " and id > :afterId order by id limit :limit")
+			.setParameter("limit", limit);
+		if (afterId != null) {
+			query.setParameter("afterId", afterId);
+		}
+		@SuppressWarnings("unchecked")
+		List<Object[]> linhas = query.getResultList();
+		List<com.socialcoisa.rede.profile.application.port.out.WrappedAccount> contas = new java.util.ArrayList<>();
+		for (Object[] linha : linhas) {
+			contas.add(new com.socialcoisa.rede.profile.application.port.out.WrappedAccount((String) linha[0],
+				((Number) linha[1]).intValue(), instante(linha[2])));
+		}
+		return contas;
+	}
+
+	/** {@code created_at} volta como {@code Timestamp} ou {@code LocalDateTime} (H2/MariaDB em modo local). */
+	private static java.time.Instant instante(Object valor) {
+		if (valor instanceof java.sql.Timestamp t) {
+			return t.toInstant();
+		}
+		if (valor instanceof java.time.LocalDateTime l) {
+			return l.atZone(com.socialcoisa.rede.wrapped.domain.WrappedAno.FUSO).toInstant();
+		}
+		throw new IllegalStateException("Data de criação em formato inesperado: " + valor.getClass());
+	}
+
+	@Override
 	public List<com.socialcoisa.rede.profile.application.port.out.ReplicaProfileKey> replicaPage(
 			java.time.Instant afterCreatedAt, String afterId, int limit) {
 		// O par (criado em, id) é a chave: com um dos dois faltando a comparação perde a ordem total

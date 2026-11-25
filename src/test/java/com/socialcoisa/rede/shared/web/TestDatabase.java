@@ -58,6 +58,14 @@ public final class TestDatabase {
 			at.atStartOfDay(java.time.ZoneId.of("America/Sao_Paulo")).toInstant()), userId);
 	}
 
+	/**
+	 * A credibilidade materializada ({@code users.reputation}) — o job do ranking a escreve em
+	 * produção; aqui o cenário a fixa para priorizar a fila do Énóis Wrapped sem depender do job.
+	 */
+	public static void updateReputation(String userId, int reputation) {
+		require().update("update users set reputation = ? where id = ?", reputation, userId);
+	}
+
 	/** Liga um segundo fator sem passar pelo fluxo, para cenarios que so precisam do estado final. */
 	public static void enableTwoFactor(String userId, Instant at) {
 		require().update("update users set totp_enabled_at = ? where id = ?", at, userId);
