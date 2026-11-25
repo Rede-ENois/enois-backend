@@ -2681,7 +2681,19 @@ class S3GatewayController {
 		S3Credential credential = authenticate(request, "LIST");
 		requireBucket(credential, bucket);
 		// 404 para o que não é do dono, como o S3: o HEAD não revela a existência de bucket alheio.
-		boolean nosso = credential.ownerUserId().equals(donoDoBucketRegistrado(bucket));
+		// A régua é a DO GATEWAY (§4.61): criador registrado, objeto vivo ou lápide do dono — a mesma
+		// do `GET` do bucket, do `?location`, do `?list-type=2` e do `PUT`. Com só o criador
+		// registrado, o bucket que nasceu do primeiro upload e perdeu o último objeto respondia 404
+		// no HEAD e 200 em todo o resto, para a mesma credencial — e o cliente que usa o HeadBucket
+		// como sonda de existência concluía que o bucket sumiu.
+		boolean nosso;
+		try {
+			requireBucketDoDono(credential, bucket);
+			nosso = true;
+		}
+		catch (S3ApiException naoEhDoDono) {
+			nosso = credential.ownerUserId().equals(donoDoBucketRegistrado(bucket));
+		}
 		return nosso ? ResponseEntity.ok().build() : ResponseEntity.notFound().build();
 	}
 

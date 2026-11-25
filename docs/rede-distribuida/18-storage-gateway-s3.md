@@ -1835,6 +1835,44 @@ mesmo nome com `&amp;`/`&lt;` só como XML; o `GET` com a chave listada devolve 
 as linhas com `%C3%A9`, `%20` e `%3C`. Mutações **4/4**: sem decodificar; `+` virando espaço;
 decodificar duas vezes (`%25`→`%`→outra coisa); `%25` único tratado à parte.
 
+## 4.60 `HeadBucket` usa a mesma régua de dono do resto do gateway (ciclo 150)
+
+O `HeadBucket` perguntava só ao **criador registrado** (`donoDoBucketRegistrado`), enquanto o `GET` do
+bucket, o `?location`, o `?list-type=2` e o `PUT` usavam a régua do dono do gateway — `bucketsOf`
+(objetos vivos) **ou** `bucketHasObjectsOf` (vivo ou lápide). No bucket que nasceu do primeiro upload
+(sem `CreateBucket`) e perdeu o último objeto, as duas respostas divergiam para a **mesma**
+credencial:
+
+```
+DELETE /s3/<b>/unico.txt   → 204   (só a lápide fica)
+HEAD    /s3/<b>              → 404   ← "esse bucket não é seu"
+GET     /s3/<b>?list-type=2  → 200
+GET     /s3/<b>?location     → 200
+```
+
+O `HeadBucket` é a sonda de existência do cliente (`aws s3 ls` e `rclone` perguntam antes de listar).
+Que ele diga "não existe" para o dono que acabou de apagar o último objeto faz o cliente recriar o
+bucket ou parar de sincronizar — a régua do gateway é uma só, e a lápide conta (§4.23).
+
+### Agora
+
+| situação | `HEAD /b` | `GET /b` |
+|---|---|---|
+| bucket do dono com objeto vivo | `200` | `200` |
+| bucket do dono com só a lápide (último objeto apagado) | `200` | `200` |
+| bucket criado por `CreateBucket`, ainda sem objeto | `200` | `200` |
+| bucket de outra conta | `404` (não revela existência) | `403` |
+
+- O `HEAD` é a única rota de bucket em que "não é seu" é `404`, de propósito: `HEAD` existe para não
+  revelar existência. As demais concordam com o `GET` em `403`.
+- A régua é a mesma função do gateway; não há uma segunda lista de donos para manter.
+
+**Verificação:** `S3GatewayTests` **+1** (`head_bucket_concorda_com_o_get_do_mesmo_bucket`): `HEAD`
+`200` com objeto vivo, `HEAD` `200` com só a lápide (conferindo `state = 'DELETED'` no catálogo)
+concordando com `?list-type=2` e `?location` em `200`, e bucket de outra conta em `404`. Vermelho
+antes: `404` no `HEAD` com a lápide. Mutações **3/3**: só o criador registrado (o bug); aceitando
+qualquer bucket (revela existência); régua sem a lápide.
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
