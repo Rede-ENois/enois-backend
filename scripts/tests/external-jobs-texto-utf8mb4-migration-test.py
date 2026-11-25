@@ -178,7 +178,7 @@ class ExternalJobsTextoUtf8mb4MigrationTests(unittest.TestCase):
     def test_colunas_de_texto_declaram_utf8mb4(self):
         # Uma consulta so: com uma linha por coluna, a mao unica de linha sem default sai igual ao
         # NULL de consulta vazia e esconde coluna que ficou de fora.
-        esperado = "\n".join("|".join(linha) for linha in COLUNAS)
+        esperado = "\n".join("|".join(c or "<sem default>" for c in linha) for linha in COLUNAS)
         self.assertEqual(self.sql(
             f"""
                 select column_name, character_set_name, collation_name, is_nullable, column_type,
