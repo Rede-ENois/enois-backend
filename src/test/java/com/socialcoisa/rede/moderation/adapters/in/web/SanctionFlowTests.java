@@ -306,7 +306,8 @@ class SanctionFlowTests {
 		String notification = jdbc.queryForObject(
 			"select body from notifications where user_id = ? and actor_id = ? and kind = 'SANCAO'",
 			String.class, author.userId(), admin.userId());
-		assertThat(notification).contains("por uma pessoa do time", "recorrer").doesNotContain("automatica");
+		assertThat(notification).contains("por uma pessoa do time", "retirar a punição", "Justificativa")
+			.doesNotContain("automatica");
 	}
 
 	@ParameterizedTest

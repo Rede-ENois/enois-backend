@@ -232,6 +232,18 @@ do `ReportView`. Registros antigos não recebem autoria retroativa inventada.
   `409 CANNOT_PENALIZE`; banimento sem autor retorna `409 NO_AUTHOR`.
 - A remoção compartilhada atua em `POST` e `COMMENT`. Outros alvos dependem dos leitores de autor
   e das capacidades já existentes dos módulos; esta integração não amplia tipos de alvo.
+- Conteúdo anônimo (`DESABAFO_POST`, `DESABAFO_COMMENT`, `CONFESSIONARIO_POST`,
+  `CONFESSIONARIO_COMMENT`) também tem autor identificável para a moderação. O anonimato é do
+  contrato publico, nao um apagamento do vinculo: `penalize` e `ban` recaem sobre a conta que
+  publicou, e a decisao de um administrador nao depende de quorum, como em qualquer outro alvo.
+
+### A notificacao de punicao carrega a prova
+
+Quem e punido recebe uma notificacao `SANCAO` com o que vale (restricao ou banimento), a
+justificativa e o trecho do conteudo denunciado em `preview`, abaixo do corpo. O conteudo sai do ar
+na mesma decisao, entao a notificacao e o registro que sobra para a pessoa entender o que quebrou
+e recorrer. O trecho e lido antes da remocao; a justificativa da denuncia vem em portugues, e a
+punicao direta do painel usa o motivo escrito pelo administrador.
 - **Concorrência: limitação preexistente, identificada por inspeção estática.** A proteção contra
   repetição sequencial não comprova execução única em paralelo. Esta integração não modifica a
   estratégia de concorrência existente e não inclui validação concorrente; essa garantia exige
