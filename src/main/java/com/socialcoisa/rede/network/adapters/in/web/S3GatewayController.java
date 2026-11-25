@@ -156,11 +156,27 @@ class S3GatewayController {
 	 * Subrecurso de <b>bucket</b> que e politica no S3 e aqui nao existe (a unica que age e a do
 	 * varredor, {@code ?lifecycle}). Recusados no {@code DELETE}, onde sem a guarda viravam
 	 * {@code DeleteBucket} — e num bucket vazio apagavam o bucket.
+	 *
+	 * <p>{@code acl} entra na lista: o {@code GET ?acl} existe (§4.32) e o {@code DELETE ?acl} caía
+	 * no {@code DeleteBucket} — "apague a ACL" num bucket vazio apagava o bucket (ciclo 155).</p>
+	 *
+	 * <p>O mesmo furo valia para todo subrecurso que a rota RECONHECE por {@code params}: medido no
+	 * head anterior, {@code DELETE /{bucket}?versioning}, {@code ?lifecycle}, {@code ?uploads},
+	 * {@code ?versions} e {@code ?location} respondiam {@code 204} e o bucket não existia mais.
+	 * {@code ?versioning} e {@code ?lifecycle} são os piores: o {@code PUT} do mesmo subrecurso
+	 * <b>age</b> de verdade (grava a política), então o cliente que "desliga" o versionamento
+	 * destruía o bucket. {@code ?uploads} e {@code ?versions} são listagens de leitura — quem
+	 * tentasse "cancelar" ou "limpar" esvaziava o bucket.</p>
+	 *
+	 * <p>A lista tem de cobrir <b>todo</b> nome que a rota de bucket aceita em {@code params} e cujo
+	 * {@code DELETE} não é uma operação própria; {@code S3GatewayTests} deriva os nomes dos
+	 * mapeamentos e falha quando um novo aparece fora dela.</p>
 	 */
 	private static final List<String> SUBRECURSOS_DE_BUCKET_NAO_IMPLEMENTADOS = List.of("cors", "tagging",
 		"policy", "website", "notification", "logging", "replication", "encryption", "accelerate",
 		"requestPayment", "publicAccessBlock", "ownershipControls", "analytics", "intelligent-tiering",
-		"metrics", "inventory", "object-lock");
+		"metrics", "inventory", "object-lock", "acl", "location", "versioning", "lifecycle", "uploads",
+		"versions");
 
 	/** O formato de instante da S3: sempre três casas decimais e sempre {@code Z}. */
 	private static final DateTimeFormatter S3_INSTANT = DateTimeFormatter
