@@ -6,6 +6,16 @@ public class ApiException extends RuntimeException {
 	private final String code;
 	private String detail;
 	private long retryAfterSeconds;
+	private String etag;
+
+	public String etag() {
+		return etag;
+	}
+
+	public ApiException withEtag(String value) {
+		this.etag = value;
+		return this;
+	}
 
 	public ApiException(int status, String code, String message) {
 		super(message);

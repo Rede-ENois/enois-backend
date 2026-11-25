@@ -25,8 +25,8 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
@@ -41,7 +41,6 @@ import com.socialcoisa.rede.network.domain.S3Credential;
 import com.socialcoisa.rede.network.domain.StorageBucketPolicy;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.network.domain.StorageObjectState;
-import com.socialcoisa.rede.network.domain.StoragePlacement;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 import jakarta.servlet.http.HttpServletRequest;
@@ -2796,10 +2795,13 @@ class S3GatewayController {
 		// `STORAGE_BUCKET_INVALID` do Énóis não é código do S3, e o SDK que procura `InvalidBucketName`
 		// para mostrar a mensagem certa não o reconhece. A mensagem (que diz qual regra violou) vai
 		// inteira.
-		if ("STORAGE_BUCKET_INVALID".equals(recusado.code())) {
-			return s3Error(recusado.status(), "InvalidBucketName", recusado.getMessage());
+		ApiException traduzida = "STORAGE_BUCKET_INVALID".equals(recusado.code())
+			? s3Error(recusado.status(), "InvalidBucketName", recusado.getMessage())
+			: s3Error(recusado.status(), recusado.code(), recusado.getMessage());
+		if (recusado.etag() != null && !recusado.etag().isBlank()) {
+			traduzida.withEtag(recusado.etag());
 		}
-		return s3Error(recusado.status(), recusado.code(), recusado.getMessage());
+		return traduzida;
 	}
 
 	private static ApiException s3Error(int status, String code, String message) {

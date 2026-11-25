@@ -16,15 +16,12 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
-import java.util.List;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
-
-import jakarta.servlet.ServletInputStream;
-import jakarta.servlet.http.HttpServletRequest;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
@@ -38,12 +35,14 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
-import com.socialcoisa.rede.network.domain.StorageObject;
-import com.socialcoisa.rede.network.domain.StorageObjectState;
-import com.socialcoisa.rede.shared.web.TestAuthHelper;
 
 import com.socialcoisa.rede.network.application.SigV4Verifier;
+import com.socialcoisa.rede.network.domain.StorageObject;
+import com.socialcoisa.rede.network.domain.StorageObjectState;
 import com.socialcoisa.rede.shared.security.SecretCipher;
+import com.socialcoisa.rede.shared.web.TestAuthHelper;
+
+import jakarta.servlet.ServletInputStream;
 
 /**
  * O gateway S3 (brief §11) de ponta a ponta: as requisições são <b>assinadas como um SDK assinaria</b>
@@ -3157,13 +3156,18 @@ void delete_objects_sem_objetos_e_malformed_xml() throws Exception {
 					? mockMvc.perform(asyncDispatch(rr)).andReturn().getResponse() : rr.getResponse();
 				String rotulo = "GET If-Match=" + ifMatch + (faixa == null ? "" : " Range=" + faixa);
 				assertThat(resp.getStatus()).as(rotulo + ": " + resp.getContentAsString()).isEqualTo(412);
-				assertThat(resp.getContentAsByteArray()).as(rotulo).isEmpty();
 				assertThat(resp.getHeader("ETag")).as(rotulo).isEqualTo(etag);
+				assertThat(resp.getContentType()).as(rotulo).contains("application/xml");
+				assertThat(resp.getContentAsString(StandardCharsets.UTF_8)).as(rotulo)
+					.contains("<Code>PreconditionFailed</Code>");
 			}
 			MockHttpServletRequestBuilder hh = MockMvcRequestBuilders.head("/s3/" + b + "/x.txt")
 				.header("If-Match", ifMatch);
 			assinar(hh, SECRET, shaVazio());
-			assertThat(mockMvc.perform(hh).andReturn().getResponse().getStatus()).as("HEAD " + ifMatch).isEqualTo(412);
+			var hresp = mockMvc.perform(hh).andReturn().getResponse();
+			assertThat(hresp.getStatus()).as("HEAD " + ifMatch).isEqualTo(412);
+			assertThat(hresp.getHeader("ETag")).as("HEAD " + ifMatch).isEqualTo(etag);
+			assertThat(hresp.getContentType()).as("HEAD " + ifMatch).contains("application/xml");
 		}
 
 		// Casando: o fluxo normal continua — inteiro, faixa, e o 304 do If-None-Match continua valendo.

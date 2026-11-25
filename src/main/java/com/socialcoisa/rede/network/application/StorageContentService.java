@@ -13,11 +13,12 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
-import com.socialcoisa.rede.network.domain.ByteRange;
 import com.socialcoisa.rede.network.domain.CachePolicy;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
+import com.socialcoisa.rede.network.domain.ByteRange;
 import com.socialcoisa.rede.shared.web.ApiException;
+
 
 /**
  * A resposta HTTP de um objeto do catálogo, com {@code ETag}, {@code Last-Modified}, {@code
@@ -129,8 +130,10 @@ public class StorageContentService {
 		// `If-Match` antes de abrir a cópia (§4.63): a pergunta é sobre a versão do catálogo, e o
 		// 412 não precisa do corpo. O ETag é o mesmo que a resposta devolve.
 		if (ifMatch != null && !ifMatch.isBlank() && !matchesForte(etag(object), ifMatch)) {
-			return resposta(412).header(HttpHeaders.ETAG, etag(object)).build();
+			throw new ApiException(412, "PreconditionFailed",
+				"A pre-condicao If-Match nao confere com o ETag atual.").withEtag(etag(object));
 		}
+
 		List<StoragePlacement> location = storage.location(object.id());
 		if (location.isEmpty()) {
 			throw new ApiException(409, "STORAGE_PLACEMENT_MISSING",
@@ -201,13 +204,16 @@ public class StorageContentService {
 	public ResponseEntity<StreamingResponseBody> head(StorageObject object, String ifNoneMatch, String ifModifiedSince,
 			String ifMatch) {
 		if (ifMatch != null && !ifMatch.isBlank() && !matchesForte(etag(object), ifMatch)) {
-			return resposta(412).header(HttpHeaders.ETAG, etag(object)).build();
-		}
+			throw new ApiException(412, "PreconditionFailed",
+				"A pre-condicao If-Match nao confere com o ETag atual.").withEtag(etag(object));
+			}
+
 		List<StoragePlacement> location = storage.location(object.id());
 		if (location.isEmpty()) {
 			throw new ApiException(409, "STORAGE_PLACEMENT_MISSING",
 				"O catalogo diz que o objeto existe, mas nao ha copia registrada em no nenhum.");
 		}
+
 		// Mesma garantia do GET: o `HEAD` só responde 200 se a cópia pode ser aberta. Sem isto, o
 		// cliente que perguntou "existe?" recebia 200 e o `GET` seguinte vinha truncado.
 		fechar(comVocabularioDeRecusa(storage.readBody(object.id())));
