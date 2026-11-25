@@ -3,6 +3,7 @@ package com.socialcoisa.rede.network.adapters.in.web;
 import java.io.IOException;
 import java.util.List;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpMethod;
@@ -40,11 +41,19 @@ class S3OptionsFilter extends OncePerRequestFilter {
 	/** O que alguma rota do gateway atende — o {@code Allow} da rota, não o do servidor inteiro. */
 	private static final String ALLOW_DA_ROTA = "GET, HEAD, PUT, DELETE, POST, OPTIONS";
 
-	private final S3GatewayController gateway;
+	/**
+	 * O controller entra por {@link ObjectProvider}: um filtro de servlet nasce quando o Tomcat sobe,
+	 * antes do contexto completar. Puxar o {@link S3GatewayController} no construtor arrastava a
+	 * cadeia do gateway até o {@code EntityManager} — que nesse instante ainda não existe — e o
+	 * container morria no boot, sem uma requisição sequer (a armadilha já vista neste repositório
+	 * com o {@link com.socialcoisa.rede.shared.web.AdminAccessBaselineFilter}). O controller é
+	 * resolvido na hora da requisição, quando a cadeia pode ser montada.
+	 */
+	private final ObjectProvider<S3GatewayController> gateway;
 
 	private final UrlPathHelper paths = new UrlPathHelper();
 
-	S3OptionsFilter(S3GatewayController gateway) {
+	S3OptionsFilter(ObjectProvider<S3GatewayController> gateway) {
 		this.gateway = gateway;
 	}
 
@@ -64,8 +73,14 @@ class S3OptionsFilter extends OncePerRequestFilter {
 		}
 		String metodo = request.getMethod();
 		if (HttpMethod.OPTIONS.matches(metodo)) {
+			S3GatewayController controller = gateway.getIfAvailable();
+			if (controller == null) {
+				// Sem o controller não há rota de gateway: deixa a resposta para quem atende.
+				chain.doFilter(request, response);
+				return;
+			}
 			try {
-				gateway.responderOptions(request, response);
+				controller.responderOptions(request, response);
 			}
 			catch (S3ApiException recusado) {
 				// Fora do controller, o `@ControllerAdvice` não alcança: o XML do S3 sai daqui.
