@@ -95,6 +95,25 @@ class NetworkHeartbeatMemoryTests {
 		assertThat(exhausted(node)).as("292 de 8192 não é teto").isFalse();
 	}
 
+	/**
+	 * A série histórica do gráfico sofre do mesmo significado invertido: o runtime antigo manda o
+	 * disponível em {@code memoryMb}, e a amostra recebia o campo cru. Um nó ocioso de 8 GB aparecia
+	 * no gráfico com 7,9 GB em uso — exatamente o sintoma que a V380 corrige no nó, sobrevivendo na
+	 * série, que é o que o painel desenha.
+	 */
+	@Test
+	void a_serie_historica_registra_o_uso_derivado_e_nao_o_disponivel_cru() throws Exception {
+		Node node = node("mem-serie", 8192);
+
+		heartbeat(node, Map.of("memoryMb", 7900));
+
+		// Mesmo minuto, mesmo ponto: o heartbeat troca o valor em vez de abrir um segundo.
+		Long amostra = jdbc.queryForObject(
+			"select memory_mb from network_node_samples where node_id = ? order by sampled_at desc limit 1",
+			Long.class, node.id());
+		assertThat(amostra).as("série do gráfico com o uso, não o disponível").isEqualTo(292);
+	}
+
 	@Test
 	void runtime_antigo_com_disponivel_zero_nao_deriva_tudo_em_uso() throws Exception {
 		// `/proc/meminfo` ilegível no runtime antigo mandava 0. Derivar diria "8192 de 8192 em uso" —

@@ -13,10 +13,21 @@
 --
 -- Leitores do formato antigo não quebram: nulo continua "não medido", e o Control Plane deriva o uso
 -- de `declared - disponível` quando o runtime só manda o disponível (runtime anterior a este
--- contrato). Nó já registrado fica com o disponível nulo até o próximo heartbeat — "não medido" é a
--- resposta honesta para o que ninguém mediu ainda.
+-- contrato).
+--
+-- O DADO JÁ GRAVADO É REINTERPRETADO NA MESMA TRANSAÇÃO: todo valor não nulo de `observed_memory_mb`
+-- anterior a esta migração veio do runtime antigo, que mandava o DISPONÍVEL. Sem o update abaixo o
+-- nó já registrado seguiria lido como "teto atingido" até o próximo heartbeat (`usageFrom` só deriva
+-- no ramo "só disponível"), que é justamente o defeito que esta migração corrige. Depois do update o
+-- uso fica nulo e o disponível preenchido: `usageFrom` deriva `declarado - disponível`, e fica nulo
+-- ("não medido") quando o disponível passa do declarado — nunca uso negativo nem "cheio".
 --
 -- Aditiva e idempotente, como as demais deste módulo.
 
 alter table network_nodes
   add column if not exists observed_memory_available_mb int null after observed_memory_mb;
+
+update network_nodes
+   set observed_memory_available_mb = observed_memory_mb,
+       observed_memory_mb = null
+ where observed_memory_mb is not null;

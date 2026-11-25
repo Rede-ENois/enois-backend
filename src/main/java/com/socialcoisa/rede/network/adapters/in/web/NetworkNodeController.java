@@ -102,7 +102,7 @@ class NetworkNodeController {
 
 	/**
 	 * O que o nó mediu. {@code memoryMb} é memória <b>em uso</b> e {@code memoryAvailableMb} a
-	 * <b>disponível</b> — o runtime anterior à V378 mandava o disponível em {@code memoryMb}, e o
+	 * <b>disponível</b> — o runtime anterior à V380 mandava o disponível em {@code memoryMb}, e o
 	 * Control Plane deriva o uso dele (ver {@code NetworkNode.usageFrom}). Os dois nulos são "não
 	 * medido", nunca zero: zero de uso afirmaria máquina ociosa.
 	 *
@@ -238,7 +238,10 @@ class NetworkNodeController {
 		// quem participa. Nada disto bloqueia a resposta do heartbeat: uma amostra que falhe não
 		// pode impedir um nó de receber permissão de operar.
 		if (observed != null) {
-			observability.record(updated, observed.cpuPercent(), observed.memoryMb(), observed.diskFreeMb(),
+			// O uso vem do nó JÁ derivado (`updated`), não do campo cru: para o runtime antigo o
+			// `memoryMb` do corpo é o DISPONÍVEL, e passar o cru gravaria a máquina ociosa com 7,9 GB
+			// em uso na série histórica — o mesmo defeito que a derivação corrige em `network_nodes`.
+			observability.record(updated, observed.cpuPercent(), updated.observedMemoryMb(), observed.diskFreeMb(),
 				observed.runningTasks());
 		}
 		if (request != null && request.logs() != null) {

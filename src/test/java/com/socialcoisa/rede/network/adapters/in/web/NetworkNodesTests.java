@@ -640,7 +640,7 @@ class NetworkNodesTests {
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("runtimeVersion", "0.1.0", "observed",
 					Map.of("cpuPercent", cpu, "memoryMb", memoryMb,
-						// Contrato da V378: uso e disponível são medidas distintas. O uso é o parâmetro
+						// Contrato da V380: uso e disponível são medidas distintas. O uso é o parâmetro
 						// (é o que os testes afirmam), e o disponível completa o teto declarado de 8192.
 						"memoryAvailableMb", Math.max(0, 8192 - memoryMb), "runningTasks", tasks)))))
 			.andExpect(status().isOk());

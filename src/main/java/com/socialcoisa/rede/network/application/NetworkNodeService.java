@@ -267,7 +267,7 @@ public class NetworkNodeService {
 		if (beat.observedIp() != null && !beat.observedIp().isBlank()) {
 			nodes.observeIp(authenticated.id(), beat.observedIp(), now);
 		}
-		// A memória tem duas medidas e uma coluna de uso. `memoryMb` é uso desde a V378; runtime anterior
+		// A memória tem duas medidas e uma coluna de uso. `memoryMb` é uso desde a V380; runtime anterior
 		// manda só o disponível e o uso é derivado do teto cedido, aqui — antes de gravar, para que o
 		// banco nunca guarde "disponível" na coluna de "uso" (era o que fazia: 7900 MB livres viravam
 		// "7900 em uso" e o nó saía do balanceamento com a máquina ociosa). A mesma derivação vive em

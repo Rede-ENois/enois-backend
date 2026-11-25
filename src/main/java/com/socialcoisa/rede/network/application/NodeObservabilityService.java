@@ -64,6 +64,10 @@ public class NodeObservabilityService {
 	 *
 	 * <p>Valores ausentes continuam ausentes: um nó que não reportou CPU não vira "0% usado" no
 	 * gráfico — nulo e zero são coisas diferentes, como no disco livre.</p>
+	 *
+	 * <p>{@code memoryMb} é o <b>uso</b>, já derivado pelo serviço do nó (runtime antigo manda o
+	 * disponível em {@code memoryMb}, e a amostra sem a derivação registraria a máquina ociosa com
+	 * "7,9 GB em uso").</p>
 	 */
 	@Transactional
 	public void record(NetworkNode node, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
