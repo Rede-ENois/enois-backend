@@ -176,16 +176,13 @@ class ExternalJobsTextoUtf8mb4MigrationTests(unittest.TestCase):
         cls.comando("docker", "rm", "-f", "--volumes", cls.container)
 
     def test_colunas_de_texto_declaram_utf8mb4(self):
-        # Uma consulta so: a mao unica de uma linha sem default sai igual ao NULL de consulta vazia,
-        # entao o conjunto completo vem junto e a coluna que faltou aparece na comparacao.
-        esperado = "\n".join(
-            f"{coluna}|utf8mb4|utf8mb4_unicode_ci|{nulidade}|{tipo}|{default or 'NULL'}"
-            for coluna, tipo, nulidade, default in COLUNAS
-        )
+        # Uma consulta so: com uma linha por coluna, a mao unica de linha sem default sai igual ao
+        # NULL de consulta vazia e esconde coluna que ficou de fora.
+        esperado = "\n".join("|".join(linha) for linha in COLUNAS)
         self.assertEqual(self.sql(
             f"""
-                select concat(column_name, '|', character_set_name, '|', collation_name, '|',
-                              is_nullable, '|', column_type, '|', column_default)
+                select column_name, character_set_name, collation_name, is_nullable, column_type,
+                       coalesce(column_default, '<sem default>')
                 from information_schema.columns
                 where table_schema = 'vagas' and table_name = '{TABELA}'
                   and column_name in ({", ".join(f"'{c[0]}'" for c in COLUNAS)})
