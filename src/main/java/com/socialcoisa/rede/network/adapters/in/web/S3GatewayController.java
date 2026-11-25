@@ -1675,9 +1675,17 @@ class S3GatewayController {
 		requireBucket(credential, bucket);
 		var upload = uploadDaChave(credential, bucket, request);
 		java.util.List<Parte> pedidas = partesDoXml(body(request));
-		var concluido = multipart.complete(upload, pedidas.stream().map(Parte::numero).toList(),
-			pedidas.stream().collect(java.util.stream.Collectors.toMap(Parte::numero,
-				p -> p.etag() == null ? "" : p.etag(), (a, b) -> a)));
+		com.socialcoisa.rede.network.application.StorageMultipartService.Completed concluido;
+		try {
+			concluido = multipart.complete(upload, pedidas.stream().map(Parte::numero).toList(),
+				pedidas.stream().collect(java.util.stream.Collectors.toMap(Parte::numero,
+					p -> p.etag() == null ? "" : p.etag(), (a, b) -> a)));
+		}
+		catch (ApiException recusado) {
+			// As outras rotas do multipart já traduziam; esta era a única que deixava a recusa vazar
+			// como JSON do Control Plane — e é a recusa que o cliente vê depois de enviar tudo (§4.66).
+			throw noVocabularioDoS3(recusado);
+		}
 		S3Xml xml = new S3Xml();
 		xml.root("CompleteMultipartUploadResult").element("Location", bucket + "/" + concluido.key())
 			.element("Bucket", bucket).element("Key", concluido.key()).element("ETag", "\"" + concluido.etag() + "\"");
@@ -1799,7 +1807,17 @@ class S3GatewayController {
 				throw s3Error(400, "MalformedXML", "Part sem PartNumber.");
 			}
 			String etag = entre(trecho, "<ETag>", "</ETag>");
-			partes.add(new Parte(Integer.parseInt(numero.trim()),
+			int numeroDaParte;
+			try {
+				numeroDaParte = Integer.parseInt(numero.trim());
+			}
+			catch (NumberFormatException naoEhNumero) {
+				// O `PartNumber` ilegível é XML malformado, e a recusa sai no vocabulário do S3:
+				// sem esta tradução, a `NumberFormatException` subia como `IllegalArgumentException`
+				// e o cliente recebia o `ErrorResponse` JSON do Control Plane num gateway S3.
+				throw s3Error(400, "MalformedXML", "PartNumber invalido.");
+			}
+			partes.add(new Parte(numeroDaParte,
 				etag == null ? null : etag.replace("\"", "").trim()));
 			cursor = fecha + "</Part>".length();
 		}

@@ -1998,6 +1998,47 @@ concordando com `?list-type=2` e `?location` em `200`, e bucket de outra conta e
 antes: `404` no `HEAD` com a lápide. Mutações **3/3**: só o criador registrado (o bug); aceitando
 qualquer bucket (revela existência); régua sem a lápide.
 
+## 4.66 Recusa do `CompleteMultipartUpload` também é XML (ciclo 148)
+
+O `CompleteMultipartUpload` era a única rota do multipart que chamava o serviço sem traduzir a recusa:
+
+```
+POST /s3/<b>/mp.bin?uploadId=...   (parte 1 com 5 bytes, parte 2 com 5 bytes)
+→ 400 {"code":"EntityTooSmall","message":"A parte 1 tem menos de 5 MiB; ..."}   ← JSON do Control Plane
+```
+
+`CreateMultipartUpload`, `UploadPart`, `UploadPartCopy`, `Abort` e `ListParts` já saíam em XML. O
+`Complete` é a recusa que o cliente vê **depois de ter enviado todos os bytes** — e a mais comum dele é
+o `EntityTooSmall`, que o SDK reconhece no `<Code>` para dizer "reescreva as partes". Em JSON ele trata
+como corpo que não sabe ler, e o cliente refaz o upload inteiro.
+
+### Agora
+
+| recusa do `Complete` | antes | agora |
+|---|---|---|
+| `EntityTooSmall` (parte < 5 MiB que não é a última) | `400` JSON | `400` XML `<Code>EntityTooSmall</Code>` |
+| `InvalidPart` (ETag que não é de nenhuma parte) | XML (do próprio serviço) | XML, `Code` preservado |
+| `NoSuchUpload` (uploadId inexistente) | XML | XML |
+| `MalformedXML` (corpo que não é o XML) | XML | XML |
+| `MalformedXML` (`PartNumber` que não é número) | `400` JSON | `400` XML `<Code>MalformedXML</Code>` |
+
+- A tradução é o mesmo `noVocabularioDoS3` das outras rotas; o `Code` do S3 é preservado. Todos os
+  `4xx` do fluxo agora têm `Content-Type` de XML e `<RequestId>`.
+- O `PartNumber` ilegível é XML malformado, e a recusa sai no vocabulário do S3 também: o parser
+  traduz o `NumberFormatException` para `MalformedXML` — sem isso, o handler global devolveria o
+  `ErrorResponse` JSON do Control Plane num gateway S3 (§4.66).
+
+**Verificação:** `S3GatewayTests` **+1** (`complete_multipart_recusa_em_xml_e_nao_em_json`):
+`EntityTooSmall`, `InvalidPart`, `NoSuchUpload` e `MalformedXML` (corpo que não é o XML **e**
+`PartNumber` que não é número), cada um conferindo `Content-Type` de XML, começo `<?xml`, `<Code>` e a
+**ausência** de `"code"` JSON. Vermelho antes: `Content-Type: application/json` no `EntityTooSmall` e
+no `PartNumber` não numérico. Mutações **4/4**: sem a tradução; traduzindo só o `EntityTooSmall` (as
+outras vazam); traduzindo para o código errado (`InternalError`); sem a tradução do parser.
+
+
+
+
+
 ## 5. Erros
 
 O corpo é XML no formato do S3, com o `Code` que o SDK lê:
