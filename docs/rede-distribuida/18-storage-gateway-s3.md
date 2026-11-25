@@ -1898,15 +1898,15 @@ para evitar, por outra porta.
 | pedido | antes | agora |
 |---|---|---|
 | `If-Match` com o ETag atual | `200` | `200` (fluxo normal) |
-| `If-Match` com `"velho"`, `W/"velho"` ou lista sem o atual | `200` / `206` | `412 PreconditionFailed`, sem corpo, com `ETag` |
+| `If-Match` com `"velho"`, `W/"velho"` ou lista sem o atual | `200` / `206` | `412 PreconditionFailed`, XML (`<Code>PreconditionFailed</Code>`), com `ETag` |
 | `If-Match` com `W/<etag atual>` (validador fraco) | `200` / `206` | `412 PreconditionFailed` (comparação forte) |
 | `If-Match: *` | `200` | `200` (o objeto existe) |
 | `If-Match` com lista que **contém** o atual | `200` | `200` |
 | `If-Match` atual + `If-None-Match` atual | `200` | `304` (o `If-Match` não engole o 304) |
 | `HEAD` com `If-Match` divergente | `200` | `412` |
 
-- A ordem é a do HTTP: `If-Match` antes de `If-None-Match`, e antes de abrir a cópia — o `412` não
-  precisa do corpo, e um objeto sem cópia registrada responde `412` antes de `409`.
+- A ordem é a do HTTP: `If-Match` antes de `If-None-Match`, e antes de abrir a cópia — o `412` leva
+  só o XML do erro, sem abrir a cópia, e um objeto sem cópia registrada responde `412` antes de `409`.
 - Vale no `GET` e no `HEAD`. A comparação do `If-Match` é a **forte** (RFC 9110 §13.1.1), em
   `StorageContentService.matchesForte`: o `W/<etag atual>` não casa — validador fraco não é o da
   representação — e a lista separada por vírgula casa quando qualquer item casa. O `If-None-Match`
@@ -1914,7 +1914,7 @@ para evitar, por outra porta.
 - `If-Range` continua com a semântica dele (§4.47): sem casar, o corpo inteiro sai com `200`.
 
 **Verificação:** `S3GatewayTests` **+1** (`get_e_head_com_if_match_divergente_sao_412`): cinco
-divergentes × com e sem `Range`, no `GET` e no `HEAD` → `412` com o `ETag` e sem corpo — o quinto é o
+divergentes × com e sem `Range`, no `GET` e no `HEAD` → `412` com o `ETag` e XML (`<Code>PreconditionFailed</Code>`) — o quinto é o
 `W/<etag atual>`, que a comparação forte recusa; três formas que casam (ETag, `*`, lista com o atual)
 → `200` com o corpo; `If-Match` + `Range` válido → `206`; `If-Match` atual + `If-None-Match` atual →
 `304`. Vermelho antes: `200` em `"velho"`. Mutações **6/6**: `GET` sem a condição; `HEAD` sem a

@@ -13,11 +13,12 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
-import com.socialcoisa.rede.network.domain.ByteRange;
 import com.socialcoisa.rede.network.domain.CachePolicy;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
+import com.socialcoisa.rede.network.domain.ByteRange;
 import com.socialcoisa.rede.shared.web.ApiException;
+
 
 /**
  * A resposta HTTP de um objeto do catálogo, com {@code ETag}, {@code Last-Modified}, {@code
@@ -121,16 +122,19 @@ public class StorageContentService {
 	 * {@code If-Match} ao {@code GET} e ao {@code HEAD}.</p>
 	 *
 	 * <p><b>Agora:</b> na ordem do HTTP, {@code If-Match} vem antes de {@code If-None-Match}: o que
-	 * não casa é {@code 412} com o ETag e sem corpo; o que casa deixa o resto do fluxo igual (§4.63).
+	 * não casa é {@code 412} com o ETag e o XML {@code <Code>PreconditionFailed</Code>}; o que casa deixa
+	 * o resto do fluxo igual (§4.63).
 	 * {@code paraGet=false} é o {@code HEAD}, que não abre a cópia só para o 412.</p>
 	 */
 	private ResponseEntity<StreamingResponseBody> respond(StorageObject object, String rangeHeader, String ifNoneMatch,
 			String ifModifiedSince, String ifRange, String ifMatch, boolean abrirCopia) {
 		// `If-Match` antes de abrir a cópia (§4.63): a pergunta é sobre a versão do catálogo, e o
-		// 412 não precisa do corpo. O ETag é o mesmo que a resposta devolve.
+		// 412 com o XML do erro, no formato que o SDK lê. O ETag é o mesmo que a resposta devolve.
 		if (ifMatch != null && !ifMatch.isBlank() && !matchesForte(etag(object), ifMatch)) {
-			return resposta(412).header(HttpHeaders.ETAG, etag(object)).build();
+			throw new ApiException(412, "PreconditionFailed",
+				"A pre-condicao If-Match nao confere com o ETag atual.").withEtag(etag(object));
 		}
+
 		List<StoragePlacement> location = storage.location(object.id());
 		if (location.isEmpty()) {
 			throw new ApiException(409, "STORAGE_PLACEMENT_MISSING",
@@ -197,17 +201,20 @@ public class StorageContentService {
 		return head(object, ifNoneMatch, ifModifiedSince, null);
 	}
 
-	/** O {@code HEAD} com {@code If-Match} (§4.63): a mesma pergunta do {@code GET}, sem corpo. */
+	/** O {@code HEAD} com {@code If-Match} (§4.63): a mesma pergunta do {@code GET}, sem corpo na resposta. */
 	public ResponseEntity<StreamingResponseBody> head(StorageObject object, String ifNoneMatch, String ifModifiedSince,
 			String ifMatch) {
 		if (ifMatch != null && !ifMatch.isBlank() && !matchesForte(etag(object), ifMatch)) {
-			return resposta(412).header(HttpHeaders.ETAG, etag(object)).build();
+			throw new ApiException(412, "PreconditionFailed",
+				"A pre-condicao If-Match nao confere com o ETag atual.").withEtag(etag(object));
 		}
+
 		List<StoragePlacement> location = storage.location(object.id());
 		if (location.isEmpty()) {
 			throw new ApiException(409, "STORAGE_PLACEMENT_MISSING",
 				"O catalogo diz que o objeto existe, mas nao ha copia registrada em no nenhum.");
 		}
+
 		// Mesma garantia do GET: o `HEAD` só responde 200 se a cópia pode ser aberta. Sem isto, o
 		// cliente que perguntou "existe?" recebia 200 e o `GET` seguinte vinha truncado.
 		fechar(comVocabularioDeRecusa(storage.readBody(object.id())));

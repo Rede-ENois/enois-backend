@@ -6,18 +6,41 @@ public class ApiException extends RuntimeException {
 	private final String code;
 	private String detail;
 	private long retryAfterSeconds;
+	private final String etag;
 
-	public ApiException(int status, String code, String message) {
-		super(message);
-		this.status = status;
-		this.code = code;
-	}
-
-	/** Mesma resposta, com a causa original anexada: o log e o monitoramento 5xx mostram a exceção real. */
-	public ApiException(int status, String code, String message, Throwable cause) {
+	private ApiException(int status, String code, String message, Throwable cause, String detail,
+			long retryAfterSeconds, String etag) {
 		super(message, cause);
 		this.status = status;
 		this.code = code;
+		this.detail = detail;
+		this.retryAfterSeconds = retryAfterSeconds;
+		this.etag = etag;
+	}
+
+	public ApiException(int status, String code, String message) {
+		this(status, code, message, null, null, 0L, null);
+	}
+
+	/**
+	 * Mesma resposta, com a causa original anexada: o log e o monitoramento 5xx
+	 * mostram a exceção real.
+	 */
+	public ApiException(int status, String code, String message, Throwable cause) {
+		this(status, code, message, cause, null, 0L, null);
+	}
+
+	protected ApiException(int status, String code, String message, String etag) {
+		this(status, code, message, null, null, 0L, etag);
+	}
+
+	public String etag() {
+		return etag;
+	}
+
+	public ApiException withEtag(String value) {
+		return new ApiException(this.status, this.code, this.getMessage(), this.getCause(), this.detail,
+				this.retryAfterSeconds, value);
 	}
 
 	public int status() {
@@ -28,7 +51,10 @@ public class ApiException extends RuntimeException {
 		return code;
 	}
 
-	/** Explicação adicional que o cliente usa para escolher a mensagem, nunca dado sensível. */
+	/**
+	 * Explicação adicional que o cliente usa para escolher a mensagem, nunca dado
+	 * sensível.
+	 */
 	public String detail() {
 		return detail;
 	}
