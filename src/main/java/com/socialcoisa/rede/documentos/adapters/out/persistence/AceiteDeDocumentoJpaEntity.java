@@ -45,9 +45,10 @@ class AceiteDeDocumentoJpaEntity {
 	@Column(name = "user_agent")
 	private String userAgent;
 
-	// `tinyint` na migração: o Hibernate esperaria INTEGER e a validação de schema derrubava o boot.
-	@Column(name = "update_scope", nullable = false, columnDefinition = "tinyint")
-	private int updateScope;
+	// A coluna é `tinyint`: o tipo `byte` é o que faz o Hibernate esperar TINYINT na validação de
+	// schema. Com `int` o esperado vira INTEGER e o boot cai onde o driver reporta TINYINT.
+	@Column(name = "update_scope", nullable = false)
+	private byte updateScope;
 
 	protected AceiteDeDocumentoJpaEntity() {
 	}
