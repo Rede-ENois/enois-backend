@@ -14,9 +14,10 @@ experiência curta — nunca uma retrospectiva inventada.
 
 ## Intervalo do ano
 
-`WrappedAno`: histórico de **01/01 00:00 a 25/12 23:59:59.999**, em `America/Sao_Paulo` (o fuso
+`WrappedAno`: histórico de **01/01 00:00 a 25/12 23:59:59.999**, em **`America/Sao_Paulo`**, o
+fuso oficial da aplicação (decisão dos mantenedores: o horário oficial é o de São Paulo, o mesmo
 das demais rotinas de calendário). A janela de exibição vai de **26/12 00:00 a 01/01 00:00** do ano
-seguinte.
+seguinte, também nesse fuso.
 
 ## Fontes de dados (só o histórico real, sem métrica inventada)
 
