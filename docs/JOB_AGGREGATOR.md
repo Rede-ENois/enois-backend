@@ -19,6 +19,12 @@ O módulo `jobs` já tem a espinha dorsal do agregador (arquitetura hexagonal, p
 | Listagem com selo de origem + busca | `JobContractController` (`GET /jobs`, `source=EXTERNAL`, `platform=`, `/platforms`) | ✅ pronta (externas sem paginação: teto `external-listing-limit`) |
 | Salvos, candidatura interna, submissão manual da comunidade | `JobService`, `ExternalJobSubmissionService` | ✅ prontas |
 
+Toda coluna de texto de `external_jobs` é `utf8mb4`. A tabela nasceu (V40) sem charset e herdou o
+default do banco, e o importador grava o anúncio como a fonte publica — o espaço fino (U+202F) de
+`12 000 €`, moeda e emoji derrubavam o lote inteiro na primeira carga de um banco legado. A V379
+declara o charset em cada coluna, sem mexer em ids nem em índices; `scripts/tests/external-jobs-texto-utf8mb4-migration-test.py`
+monta a tabela em Latin-1 num MariaDB isolado e prova a conversão (roda no `schema-check`).
+
 **O que falta** (o escopo desta evolução):
 
 1. **Metadados de provedor** — atribuição obrigatória + URL da fonte + política de atualização não
