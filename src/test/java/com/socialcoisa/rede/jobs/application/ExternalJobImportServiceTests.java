@@ -124,7 +124,9 @@ class ExternalJobImportServiceTests {
 		importService.refresh();
 
 		var job = repository.findBySource("StubSource", "ext-6").orElseThrow();
-		assertThat(job.title()).isEqualTo("Entwickler In (m/w/d)");
+		// O espaço entre as duas palavras é o ESPAÇO DURO (U+00A0) que a fonte publica — o mesmo
+		// trabalho de não deixar o texto perder o caractere que veio da origem.
+		assertThat(job.title()).isEqualTo("Entwickler\u00A0In (m/w/d)");
 		assertThat(job.company()).isEqualTo("Caf\u00E9 GmbH");
 		assertThat(job.location()).isEqualTo("M\u00FCnchen");
 		assertThat(job.description()).isEqualTo("12\u202F000 \u20AC pro Jahr \u2014 ab sofort.");
