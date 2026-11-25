@@ -17,7 +17,7 @@ public interface NodeObservabilityRepository {
 			Integer runningTasks, Integer queueDepth, String mode, String activity, Double diskIops,
 			Double diskLatencyMs) {
 
-		/** Amostra de runtime anterior à V379: sem o I/O de disco medido. */
+		/** Amostra de runtime anterior à V380: sem o I/O de disco medido. */
 		public Sample(String nodeId, Instant sampledAt, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
 				Integer runningTasks, Integer queueDepth, String mode, String activity) {
 			this(nodeId, sampledAt, cpuPercent, memoryMb, diskFreeMb, runningTasks, queueDepth, mode, activity, null,

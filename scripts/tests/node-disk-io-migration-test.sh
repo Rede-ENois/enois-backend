@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Migração V379 (IOPS e latência de disco por nó) contra um MariaDB real, aplicada DUAS vezes.
+# Migração V380 (IOPS e latência de disco por nó) contra um MariaDB real, aplicada DUAS vezes.
 #
 # O que esta migração promete e o que aqui se mede:
 #   1. as duas colunas nascem em `network_nodes` (o último valor) e em `network_node_samples` (a
@@ -25,7 +25,7 @@ fail() { printf '[FAIL] %s\n' "$1" >&2; FAIL=$((FAIL + 1)); }
 
 IO_MIGRATIONS=(V305__network_nodes.sql V325__network_node_observability.sql
   V321__network_node_observed_disk.sql V341__network_node_observed_disk_total.sql
-  V343__network_node_observed_disk_total.sql V379__network_node_disk_io.sql)
+  V343__network_node_observed_disk_total.sql V380__network_node_disk_io.sql)
 for migration in "${IO_MIGRATIONS[@]}"; do
   [[ -f "$MIGRATIONS/$migration" ]] || { fail "migração ausente: $migration"; exit 1; }
 done
@@ -109,7 +109,7 @@ for migration in V305__network_nodes.sql V325__network_node_observability.sql \
   fi
 done
 
-# Nó e amostra do contrato ANTES da V379: só as colunas que já existiam.
+# Nó e amostra do contrato ANTES da V380: só as colunas que já existiam.
 db >/dev/null 2>&1 <<'SQL'
 insert into network_nodes (id, display_name, owner_user_id, status, profiles, declared_cpu_cores,
   declared_memory_mb, declared_disk_mb, declared_bandwidth_mbps, region, country,
@@ -128,11 +128,11 @@ else
   exit 1
 fi
 
-if apply V379__network_node_disk_io.sql >/dev/null 2>&1; then
-  pass "V379 aplica sobre as tabelas existentes"
+if apply V380__network_node_disk_io.sql >/dev/null 2>&1; then
+  pass "V380 aplica sobre as tabelas existentes"
 else
-  fail "V379 falhou na 1ª aplicação"
-  db < "$MIGRATIONS/V379__network_node_disk_io.sql" 2>&1 | head -3 >&2
+  fail "V380 falhou na 1ª aplicação"
+  db < "$MIGRATIONS/V380__network_node_disk_io.sql" 2>&1 | head -3 >&2
 fi
 
 for dupla in "network_nodes observed_disk_iops" "network_nodes observed_disk_latency_ms" \
@@ -159,7 +159,7 @@ sample=$(db -N -e "select concat_ws('|', cpu_percent, disk_free_mb,
   || fail "amostra mudou na migração (achei '$sample')"
 
 # O UPDATE do nó e o UPSERT da amostra, na forma que o adapter usa: uma instrução cada, com todas
-# as colunas do heartbeat V379. A amostra do MESMO minuto é trocada, não duplicada.
+# as colunas do heartbeat V380. A amostra do MESMO minuto é trocada, não duplicada.
 if db -e "update network_nodes set observed_disk_iops = 100.00, observed_disk_latency_ms = 3.00
   where id = 'nd_io_mig001'" 2>/dev/null; then
   pass "update do nó grava IOPS e latência"
@@ -200,10 +200,10 @@ zero=$(db -N -e "select concat_ws('|', cast(disk_iops as char), ifnull(cast(disk
   || fail "zero e NULL se confundiram (achei '$zero')"
 
 # ---------------------------------------------------------------- 2ª aplicação
-if apply V379__network_node_disk_io.sql >/dev/null 2>&1; then
-  pass "V379 reaplica sem erro (idempotente)"
+if apply V380__network_node_disk_io.sql >/dev/null 2>&1; then
+  pass "V380 reaplica sem erro (idempotente)"
 else
-  fail "V379 falhou na 2ª aplicação"
+  fail "V380 falhou na 2ª aplicação"
 fi
 column_exists network_nodes observed_disk_iops \
   && pass "colunas continuam existindo depois da 2ª rodada" \

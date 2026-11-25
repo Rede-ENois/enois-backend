@@ -158,7 +158,7 @@ heartbeat que já existe. O caminho inteiro entrou neste ciclo:
 | lado | estado |
 |---|---|
 | rota (`Observed.diskIops`, `Observed.diskLatencyMs`) | existe |
-| banco (`V379`: `observed_disk_iops`, `observed_disk_latency_ms` em `network_nodes`; `disk_iops`, `disk_latency_ms` em `network_node_samples`) | existe |
+| banco (`V381`: `observed_disk_iops`, `observed_disk_latency_ms` em `network_nodes`; `disk_iops`, `disk_latency_ms` em `network_node_samples`) | existe |
 | quadro do nó (`series[].diskIops/diskLatencyMs`, `summary.diskIopsLatest/diskLatencyMsLatest`) | existe |
 | runtime medindo `/proc/diskstats` | existe — delta entre ciclos, §9 |
 
@@ -178,10 +178,10 @@ A série curta guarda as duas por minuto (o mesmo ponto do minuto é trocado, n�
 - `NetworkHeartbeatDiskIoTests` **3**, pela rota e pelo banco: o heartbeat grava e o quadro mostra
   as duas medidas; IOPS 0 medido sai como `0.0` e a latência sem operação sai nula; sem medida, os
   quatro campos do quadro são nulos.
-- `scripts/tests/node-disk-io-migration-test.sh` **26 PASS / 0 FAIL** em MariaDB 11.4 real: V379
+- `scripts/tests/node-disk-io-migration-test.sh` **26 PASS / 0 FAIL** em MariaDB 11.4 real: V381
   aplicada **duas vezes**, nó e amostra do contrato antigo preservados com `NULL`, update do nó e
   upsert da amostra gravando as colunas, zero medido distinto de nulo, tipo `double` aceitando `NULL`.
-- Mutação: V379 sem as colunas derruba **17** asserções do harness.
+- Mutação: V381 sem as colunas derruba **17** asserções do harness.
 
 ## 9. A medição no runtime (`/proc/diskstats`)
 
