@@ -77,10 +77,14 @@ class NetworkNodeObservabilityTests {
 		String admin = adminToken();
 		Node node = activeNode(admin, "painel");
 
-		// O que o runtime manda: a amostra do ciclo e as linhas que escreveria no log dele.
+		// O que o runtime manda: a amostra do ciclo e as linhas que escreveria no log dele. As duas
+		// medidas de memória vão explícitas desde a V381: `memoryMb` é o USO e `memoryAvailableMb` o
+		// disponível, e mandar só o uso já não significa "só se sabe o uso" — `usageFrom` deriva o
+		// uso de quem manda apenas o disponível, e o cenário que aqui se prova é o runtime novo.
 		Map<String, Object> body = new HashMap<>();
 		body.put("runtimeVersion", "0.1.0");
-		body.put("observed", Map.of("cpuPercent", 12.5, "memoryMb", 2048, "runningTasks", 1, "diskFreeMb", 9000L));
+		body.put("observed", Map.of("cpuPercent", 12.5, "memoryMb", 2048, "memoryAvailableMb", 6144,
+			"runningTasks", 1, "diskFreeMb", 9000L));
 		body.put("logs", List.of(Map.of("level", "INFO", "message", "tarefa tk_1 concluida",
 			"at", "2026-11-12T12:00:00Z")));
 		mockMvc
