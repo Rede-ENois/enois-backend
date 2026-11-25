@@ -178,7 +178,7 @@ class ExternalJobsTextoUtf8mb4MigrationTests(unittest.TestCase):
     def coluna(self, coluna):
         return self.sql(f"""
             select concat(character_set_name, '|', collation_name, '|', is_nullable, '|',
-                          column_type, '|', column_default)
+                          column_type, '|', column_default) as linha
             from information_schema.columns
             where table_schema = 'vagas' and table_name = '{TABELA}' and column_name = '{coluna}';
         """)
@@ -187,7 +187,9 @@ class ExternalJobsTextoUtf8mb4MigrationTests(unittest.TestCase):
         for coluna, tipo, nulidade, default in COLUNAS:
             self.assertEqual(
                 self.coluna(coluna),
-                # Sem default, o mariadb --batch escreve o proprio NULL desta linha.
+                # Sem default, o mariadb --batch escreve o NULL desta linha (que se confunde com o
+                # NULL de "sem linha"); o caso fica no teste de nulidade das colunas escolhidas.
+                # Coluna que nem entrou na migracao volta so o NULL acima em vez da linha.
                 f"utf8mb4|utf8mb4_unicode_ci|{nulidade}|{tipo}|{default or 'NULL'}",
                 msg=f"{TABELA}.{coluna} nao ficou em utf8mb4 como esperado",
             )
@@ -212,6 +214,18 @@ class ExternalJobsTextoUtf8mb4MigrationTests(unittest.TestCase):
                 where table_schema = 'vagas' and table_name = '{TABELA}' and column_name = 'id';
             """),
             "latin1|latin1_swedish_ci",
+        )
+
+    def test_colunas_sem_default_continuam_obrigatorias(self):
+        self.assertEqual(
+            self.sql(f"""
+                select concat(column_name, '|', is_nullable)
+                from information_schema.columns
+                where table_schema = 'vagas' and table_name = '{TABELA}'
+                  and column_name in ('platform', 'external_id', 'title', 'url', 'salary', 'description')
+                order by column_name;
+            """).splitlines(),
+            ["description|YES", "external_id|NO", "platform|NO", "salary|YES", "title|NO", "url|NO"],
         )
 
     def test_conteudo_legado_continua_igual(self):
