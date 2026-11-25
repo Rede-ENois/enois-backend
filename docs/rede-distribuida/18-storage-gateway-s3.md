@@ -2038,6 +2038,48 @@ outras vazam); traduzindo para o código errado (`InternalError`); sem a traduç
 
 
 
+## 4.67 `ListObjectVersions` honra `max-keys`, pagina e lista a versão nova primeiro (ciclo 152)
+
+A rota lia até 10000 linhas do banco e **sempre** respondia `IsTruncated=false` com
+`MaxKeys=1000`; `max-keys`, `key-marker` e `version-id-marker` eram ignorados, e a ordem era a da
+consulta (`object_key asc, version asc`) — a versão **mais antiga** primeiro:
+
+```
+GET /s3/<b>?versions&max-keys=1     (a.txt com v1, v2, v3 e b.txt)
+→ 200  IsTruncated=false, MaxKeys=1000
+       <Version>a.txt v1</Version> … v2 … v3 … b.txt
+```
+
+Três defeitos de uma vez. O teto não era honrado — quem pediu 1 recebe as quatro. O `IsTruncated`
+fixo em `false` com o `MaxKeys` ecoando 1000 que ninguém pediu mente duas vezes sobre a completude.
+E a ordem é a inversa do S3, que devolve a versão mais nova de cada chave primeiro: quem lê só a
+primeira versão de cada chave — é o que faz quem procura "o que existe hoje" no histórico — lê a
+**mais antiga**, que no versionamento é a resposta errada. Os marcadores não existiam, então quem
+pagina nunca teria a próxima página.
+
+### Agora
+
+| situação | antes | agora |
+|---|---|---|
+| `max-keys=1` (4 versões) | as quatro, `IsTruncated=false` | uma, `IsTruncated=true`, `NextKeyMarker`/`NextVersionIdMarker` |
+| ordem | `a v1, v2, v3, b` | `a v3, v2, v1, b` (chave asc, versão desc) |
+| `max-keys=0`, `-1`, `abc` | as quatro | as quatro (teto 1000), `<MaxKeys>1000</MaxKeys>` |
+| `key-marker` + `version-id-marker` | ignorados | posição na ordem `(chave, versão desc)` |
+| `version-id-marker` não numérico | ignorado | `400 InvalidArgument` |
+| `prefix` | filtrava | filtra (igual) |
+
+- Teto de 1000 como o `ListObjectsV2` e o `ListParts`, aplicado no banco com `limit teto + 1`.
+- O `<MaxKeys>` ecoa o **valor aplicado**, a mesma regra do `<MaxParts>` (§4.59) e do `<MaxUploads>` (§4.64).
+- O marcador de versão é o número da versão (`VersionId`), que é o que a própria resposta emite.
+
+**Verificação:** `S3GatewayTests` **+1** (`list_object_versions_honra_max_keys_pagina_e_lista_a_versao_nova_primeiro`):
+sem parâmetro → as quatro na ordem `a/3, a/2, a/1, b/1`, `IsTruncated=false`, `<MaxKeys>1000</MaxKeys>`
+e `IsLatest=true` na v3; `max-keys=1` paginando até o fim → uma por página, `IsTruncated=true` com
+marcadores, as quatro na ordem do S3 sem repetir; `max-keys=0/-1/abc` → as quatro e
+`<MaxKeys>1000</MaxKeys>`. Vermelho antes: `["a.txt/1","a.txt/2","a.txt/3","b.txt/1"]` contra
+`["a.txt/3","a.txt/2","a.txt/1","b.txt/1"]`. Mutações **6/6**: versão ascendente (o bug da ordem);
+teto ignorado; `IsTruncated` fixo; sem os marcadores; marcador só pela chave; `<MaxKeys>` ecoando o
+pedido.
 
 ## 5. Erros
 

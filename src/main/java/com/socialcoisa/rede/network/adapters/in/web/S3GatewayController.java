@@ -304,11 +304,32 @@ class S3GatewayController {
 		S3Credential credential = authenticate(request, "LIST");
 		requireBucket(credential, bucket);
 		requireBucketDoDono(credential, bucket);
+		Map<String, String> consulta = query(request);
+		// Teto e marcadores como o S3 (§4.66): o `<MaxKeys>` ecoa o valor APLICADO, o `IsTruncated`
+		// reflete se há mais, e o marcador de versão é o número da versão da última linha emitida.
+		int teto = numeroDoParametro(consulta.get("max-keys"), 1000);
+		Long versionMarker = null;
+		String versionIdMarker = consulta.get("version-id-marker");
+		if (versionIdMarker != null) {
+			try {
+				versionMarker = Long.parseLong(versionIdMarker.trim());
+			}
+			catch (NumberFormatException naoEhNumero) {
+				throw s3Error(400, "InvalidArgument",
+					"O version-id-marker do ListObjectVersions e o numero da versao.");
+			}
+		}
+		var pagina = storage.versionsNoBucket(bucket, consulta.get("prefix"), consulta.get("key-marker"),
+			versionMarker, teto);
 		S3Xml xml = new S3Xml();
 		xml.root("ListVersionsResult").element("Name", bucket)
-			.element("IsTruncated", "false")
-			.element("MaxKeys", "1000");
-		for (StorageObject objeto : storage.versionsNoBucket(bucket, query(request).get("prefix"))) {
+			.element("MaxKeys", Integer.toString(teto))
+			.element("IsTruncated", pagina.truncada() ? "true" : "false");
+		if (pagina.truncada() && !pagina.versoes().isEmpty()) {
+			var ultima = pagina.versoes().get(pagina.versoes().size() - 1);
+			xml.element("NextKeyMarker", ultima.key()).element("NextVersionIdMarker", Long.toString(ultima.version()));
+		}
+		for (StorageObject objeto : pagina.versoes()) {
 			if (!credential.ownerUserId().equals(objeto.createdBy())) {
 				continue;
 			}
