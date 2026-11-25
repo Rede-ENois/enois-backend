@@ -92,15 +92,15 @@ class WrappedFlowTests {
 	void isolamentoCadaContaVeSoOProprioHistorico() throws Exception {
 		var ana = autenticar();
 		var bia = autenticar();
-		publicarEm(ana, "programação em java", Instant.parse("2026-03-10T15:00:00Z"));
+		publicarEm(ana, "programacao de java", Instant.parse("2026-03-10T15:00:00Z"));
 		publicarEm(bia, "jardinagem no quintal", Instant.parse("2026-04-10T15:00:00Z"));
 		processar(ana.userId(), bia.userId());
 
 		String jsonAna = retrospectiva(ana);
 		String jsonBia = retrospectiva(bia);
 
-		assertThat(jsonAna).contains("java").doesNotContain("jardinagem");
-		assertThat(jsonBia).contains("jardinagem").doesNotContain("java");
+		assertThat(jsonAna).contains("programacao de java").doesNotContain("jardinagem");
+		assertThat(jsonBia).contains("jardinagem no quintal").doesNotContain("programacao");
 	}
 
 	@Test
@@ -117,13 +117,13 @@ class WrappedFlowTests {
 	@Test
 	void conteudoRemovidoNaoEntraNaRetrospectiva() throws Exception {
 		var sessao = autenticar();
-		publicarEm(sessao, "rust em produção", Instant.parse("2026-05-01T12:00:00Z"));
+		publicarEm(sessao, "rust na producao", Instant.parse("2026-05-01T12:00:00Z"));
 		String removido = publicarEm(sessao, "conteudo denunciado", Instant.parse("2026-05-02T12:00:00Z"));
 		jdbc.update("update posts set status = 'DELETED' where id = ?", removido);
 		processar(sessao.userId());
 
 		String json = retrospectiva(sessao);
-		assertThat(json).contains("rust").doesNotContain("denunciado");
+		assertThat(json).contains("rust na producao").doesNotContain("denunciado");
 	}
 
 	@Test

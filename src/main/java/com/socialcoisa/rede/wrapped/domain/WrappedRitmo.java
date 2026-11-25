@@ -19,5 +19,6 @@ public record WrappedRitmo(
 		Integer mesMaisAtivo,
 		List<Integer> porMes,
 		List<Integer> porDiaSemana,
-		List<Integer> porHora) {
+		List<Integer> porHora,
+		WrappedComportamento comportamento) {
 }

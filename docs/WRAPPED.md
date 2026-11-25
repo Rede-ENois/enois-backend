@@ -25,9 +25,11 @@ seguinte, também nesse fuso.
 |---|---|---|
 | Publicação própria | `posts` | `author_id`, `status = ACTIVE`, `deleted_at is null` |
 | Comentário / resposta | `comments` | `author_id`, `status = ACTIVE` |
-| Reação/repost/compartilhamento/salvo | `reactions`, `post_reposts`, `post_shares`, `saved_posts` | `user_id`, `created_at` |
-| Voto em enquete | `poll_votes` | `user_id` |
+| Reação/repost/compartilhamento | `reactions`, `post_reposts`, `post_shares` | `user_id`, `created_at` |
+| Salvo | `saved_posts` | conta como interação feita (`salvos`) |
+| Voto em enquete | `poll_votes` | conta como interação feita (`votosFeitos`) |
 | Interações RECEBIDAS | as mesmas, pelo autor da publicação | `posts.author_id = conta` |
+| Reação recebida em comentário | `comment_reactions` | conta comentários distintos com reação (`comentariosComReacao`) |
 | Comunidades | `community_members`, `posts.community_id` | membro no ano e/ou publicou no ano |
 | Credibilidade | `users.reputation` | coluna materializada pelo job do ranking |
 
@@ -41,7 +43,11 @@ Conteúdo removido/quarentenado não entra: o SQL filtra `status = ACTIVE` (e `d
   participações, ordenando por número de comentários e duração. Sem rótulo moral.
 - **Perfil:** regras objetivas (debatedor, especialista, observador, criador, comunitário), cada
   uma com o número que a sustenta. Mais de um é possível.
-- **Ritmo:** pico por mês, dia da semana e hora, mais a série completa para a view desenhar.
+- **Ritmo:** pico por mês, dia da semana e hora, mais a série completa para a view desenhar. A
+  seção também compara a primeira e a segunda metade do ano (`WrappedComportamento`): cresceu,
+  desacelerou ou estável — só volume, nunca julgamento.
+- **Assuntos:** o mesmo extrator do Papo Reto, na regra de contexto (só expressão de 2+ palavras
+  vira assunto; palavra solta não aparece).
 - A credibilidade **não** entra na análise; é usada só para priorizar a fila e como contexto no
   impacto.
 

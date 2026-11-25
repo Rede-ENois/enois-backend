@@ -194,6 +194,70 @@ class WrappedAgregadorTests {
 		return filtrados.subList(inicio, Math.min(filtrados.size(), inicio + limite));
 	}
 
+
+	@Test
+	void salvosEVotosContamComoInteracao() {
+		Instant base = Instant.parse("2026-08-01T12:00:00Z");
+		WrappedRetrospectiva r = agregar(List.of(
+				new WrappedEvento("s1", base, Tipo.SALVO_FEITO, "p1", null, "user_a", "user_a", "A", null),
+				new WrappedEvento("v1", base.plusSeconds(10), Tipo.VOTO_FEITO, "p2", null, "user_b", "user_b", "B",
+						null)));
+
+		assertThat(r.metricas().salvos()).isEqualTo(1);
+		assertThat(r.metricas().votosFeitos()).isEqualTo(1);
+		assertThat(r.metricas().interacoesFeitas()).isEqualTo(2);
+	}
+
+	@Test
+	void comentarioComReacaoEntraNoImpacto() {
+		Instant base = Instant.parse("2026-06-15T12:00:00Z");
+		WrappedRetrospectiva r = agregar(List.of(
+				new WrappedEvento("rc1", base, Tipo.REACAO_RECEBIDA_COMENTARIO, "comment_1", null, "user_x",
+						"user_x", "X", null),
+				new WrappedEvento("rc2", base.plusSeconds(5), Tipo.REACAO_RECEBIDA_COMENTARIO, "comment_1", null,
+						"user_y", "user_y", "Y", null),
+				new WrappedEvento("rc3", base.plusSeconds(9), Tipo.REACAO_RECEBIDA_COMENTARIO, "comment_2", null,
+						"user_z", "user_z", "Z", null)));
+
+		// dois comentários distintos receberam reação (comment_1 e comment_2), mesmo com 3 reações.
+		assertThat(r.impacto().comentariosComReacao()).isEqualTo(2);
+	}
+
+	@Test
+	void mesMaisAtivoEEpicoDoAno() {
+		Instant base = Instant.parse("2026-07-20T12:00:00Z");
+		WrappedRetrospectiva r = agregar(List.of(
+				publicacao("p1", base, "a"),
+				publicacao("p2", base.plusSeconds(60), "b"),
+				publicacao("p3", Instant.parse("2026-02-01T12:00:00Z"), "c")));
+
+		assertThat(r.metricas().mesMaisAtivo()).isEqualTo(7);
+	}
+
+	@Test
+	void comportamentoIndicaCrescimentoQuandoSegundaMetadeDobra() {
+		Instant q1 = Instant.parse("2026-02-01T12:00:00Z");
+		Instant q4 = Instant.parse("2026-11-01T12:00:00Z");
+		List<WrappedEvento> eventos = new ArrayList<>(List.of(publicacao("p0", q1, "a")));
+		eventos.add(publicacao("p1", q4, "b"));
+		eventos.add(publicacao("p2", q4.plusSeconds(60), "c"));
+		WrappedRetrospectiva r = agregar(eventos);
+
+		assertThat(r.ritmo().comportamento().sentido()).isEqualTo(
+				com.socialcoisa.rede.wrapped.domain.WrappedComportamento.Sentido.CRESCEU);
+	}
+
+	@Test
+	void interacaoIncluiComentariosFeitos() {
+		Instant base = Instant.parse("2026-03-01T12:00:00Z");
+		WrappedRetrospectiva r = agregar(List.of(comentario("p-x", "user_disc", base)));
+
+		assertThat(r.interacoes()).anySatisfy(i -> {
+			assertThat(i.username()).isEqualTo("user_disc");
+			assertThat(i.tipo()).isEqualTo(com.socialcoisa.rede.wrapped.domain.WrappedInteracao.Tipo.INTERAGI);
+		});
+	}
+
 	private static WrappedEvento publicacao(String postId, Instant momento, String texto) {
 		return new WrappedEvento(postId, momento, Tipo.PUBLICACAO, postId, texto, EU, "eu", "Eu", null);
 	}

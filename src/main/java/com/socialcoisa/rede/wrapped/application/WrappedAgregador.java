@@ -17,6 +17,7 @@ import com.socialcoisa.rede.wrapped.application.port.out.WrappedEvento;
 import com.socialcoisa.rede.wrapped.application.port.out.WrappedEvento.Tipo;
 import com.socialcoisa.rede.wrapped.domain.WrappedAno;
 import com.socialcoisa.rede.wrapped.domain.WrappedAssunto;
+import com.socialcoisa.rede.wrapped.domain.WrappedComportamento;
 import com.socialcoisa.rede.wrapped.domain.WrappedComunidade;
 import com.socialcoisa.rede.wrapped.domain.WrappedEncerramento;
 import com.socialcoisa.rede.wrapped.domain.WrappedImpacto;
@@ -88,8 +89,8 @@ public final class WrappedAgregador {
 
 		return new WrappedRetrospectiva(ano.ano(), VERSAO_ALGORITMO, metricas.semAtividade(), metricas,
 				publicados, comentados, publicacoesMarcantes(escopos), tretas(escopos),
-				interacoes(escopos, userId), ritmo(eventos), perfil, impacto, comunidadesDaConta,
-				encerramento);
+				interacoes(escopos, userId), ritmo(eventos), perfil, impacto,
+				limitar(new ArrayList<>(comunidadesDaConta), LIMITE_COMUNIDADES), encerramento);
 	}
 
 	/** A retrospectiva com a credibilidade real (lida à parte, da coluna materializada). */
@@ -98,8 +99,8 @@ public final class WrappedAgregador {
 		return new WrappedRetrospectiva(base.ano(), base.versaoAlgoritmo(), base.dadosInsuficientes(),
 				base.metricas(), base.assuntosPublicados(), base.assuntosComentados(),
 				base.publicacoesMarcantes(), base.tretas(), base.interacoes(), base.ritmo(), base.perfil(),
-				new WrappedImpacto(i.publicacoesComConversa(), i.interacoesRecebidas(), i.comunidades(),
-						credibilidade == null ? 0 : credibilidade),
+				new WrappedImpacto(i.publicacoesComConversa(), i.comentariosComReacao(),
+						i.interacoesRecebidas(), i.comunidades(), credibilidade == null ? 0 : credibilidade),
 				base.comunidades(), base.encerramento());
 	}
 
@@ -140,8 +141,10 @@ public final class WrappedAgregador {
 
 	private static WrappedMetricas metricas(List<WrappedEvento> eventos, List<WrappedComunidade> comunidades) {
 		Set<String> dias = new HashSet<>();
+		int[] porMes = new int[12];
 		for (WrappedEvento e : eventos) {
 			dias.add(e.diaLocal().toString());
+			porMes[e.momentoLocal().getMonthValue() - 1]++;
 		}
 		return new WrappedMetricas(
 				contar(eventos, Tipo.PUBLICACAO),
@@ -154,9 +157,13 @@ public final class WrappedAgregador {
 				contar(eventos, Tipo.COMENTARIO_FEITO),
 				contar(eventos, Tipo.COMPARTILHAMENTO_FEITO),
 				contar(eventos, Tipo.REPOST_FEITO),
-				0,
+				contar(eventos, Tipo.VOTO_FEITO),
+				contar(eventos, Tipo.SALVO_FEITO),
+				// TODAS as comunidades do ano (não a lista limitada exibida na seção): a métrica é honesta.
 				comunidades.size(),
-				dias.size());
+				dias.size(),
+				// mesMaisAtivo é 1..12 (ou null sem atividade), como o resto do app lê o mês.
+				pico(porMes) == null ? null : pico(porMes) + 1);
 	}
 
 	/** Os textos de uma fonte, na ordem em que os eventos chegaram (determinístico). */
@@ -260,14 +267,17 @@ public final class WrappedAgregador {
 
 	private static List<WrappedInteracao> interacoes(Map<String, WrappedEscopo> escopos, String userId) {
 		Map<String, MapaContato> interagi = new LinkedHashMap<>();
-		for (Tipo tipo : List.of(Tipo.REACAO_FEITA, Tipo.COMPARTILHAMENTO_FEITO, Tipo.REPOST_FEITO)) {
+		// O que a conta fez no conteúdo de terceiros: reação, comentário, compartilhamento, repost e
+		// voto. O comentário entra porque é o cruzamento mais forte de todos e estava de fora.
+		for (Tipo tipo : List.of(Tipo.REACAO_FEITA, Tipo.COMENTARIO_FEITO, Tipo.COMPARTILHAMENTO_FEITO,
+				Tipo.REPOST_FEITO, Tipo.VOTO_FEITO)) {
 			for (WrappedEvento e : lista(escopos, tipo)) {
 				contabilizar(interagi, e, userId);
 			}
 		}
 		Map<String, MapaContato> interagiram = new LinkedHashMap<>();
-		for (Tipo tipo : List.of(Tipo.REACAO_RECEBIDA, Tipo.COMENTARIO_RECEBIDO,
-				Tipo.COMPARTILHAMENTO_RECEBIDO, Tipo.REPOST_RECEBIDO)) {
+		for (Tipo tipo : List.of(Tipo.REACAO_RECEBIDA, Tipo.REACAO_RECEBIDA_COMENTARIO,
+				Tipo.COMENTARIO_RECEBIDO, Tipo.COMPARTILHAMENTO_RECEBIDO, Tipo.REPOST_RECEBIDO)) {
 			for (WrappedEvento e : lista(escopos, tipo)) {
 				contabilizar(interagiram, e, userId);
 			}
@@ -309,8 +319,13 @@ public final class WrappedAgregador {
 			porDia[local.getDayOfWeek().getValue() % 7]++;
 			porHora[local.getHour()]++;
 		}
-		return new WrappedRitmo(pico(porDia), pico(porHora), pico(porMes), lista(porMes), lista(porDia),
-				lista(porHora));
+		List<Integer> meses = lista(porMes);
+		List<Integer> trimestres = List.of(meses.get(0) + meses.get(1) + meses.get(2),
+				meses.get(3) + meses.get(4) + meses.get(5),
+				meses.get(6) + meses.get(7) + meses.get(8),
+				meses.get(9) + meses.get(10) + meses.get(11));
+		return new WrappedRitmo(pico(porDia), pico(porHora), pico(porMes), meses, lista(porDia), lista(porHora),
+				new WrappedComportamento(trimestres, WrappedComportamento.sentido(trimestres)));
 	}
 
 	private static Integer pico(int[] valores) {
@@ -369,6 +384,14 @@ public final class WrappedAgregador {
 
 	private static WrappedImpacto impacto(List<WrappedEvento> eventos, WrappedMetricas m,
 			List<WrappedComunidade> comunidades) {
+		// comentários da conta que receberam pelo menos uma reação de outra pessoa.
+		Set<String> comentariosComReacao = new HashSet<>();
+		for (WrappedEvento e : eventos) {
+			if (e.tipo() == Tipo.REACAO_RECEBIDA_COMENTARIO) {
+				// postId carrega o comment_id neste evento.
+				comentariosComReacao.add(e.postId());
+			}
+		}
 		// publicações que geraram conversa: próprias com algum comentário recebido
 		Set<String> comComentario = new HashSet<>();
 		for (WrappedEvento e : eventos) {
@@ -382,7 +405,8 @@ public final class WrappedAgregador {
 				publicacoesComConversa++;
 			}
 		}
-		return new WrappedImpacto(publicacoesComConversa, m.interacoesRecebidas(), comunidades.size(), 0);
+		return new WrappedImpacto(publicacoesComConversa, comentariosComReacao.size(),
+				m.interacoesRecebidas(), comunidades.size(), 0);
 	}
 
 	private static List<WrappedComunidade> comunidadesPlenas(WrappedComunidadesRepository repo, String userId,
@@ -393,7 +417,7 @@ public final class WrappedAgregador {
 		}
 		comunidades.sort(Comparator.comparingInt(WrappedComunidade::publicacoes).reversed()
 				.thenComparing(WrappedComunidade::communityId));
-		return limitar(comunidades, LIMITE_COMUNIDADES);
+		return comunidades;
 	}
 
 	// --- encerramento --------------------------------------------------------------------------

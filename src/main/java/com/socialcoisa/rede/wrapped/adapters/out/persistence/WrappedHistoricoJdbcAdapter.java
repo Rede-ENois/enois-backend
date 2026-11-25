@@ -76,7 +76,7 @@ class WrappedHistoricoJdbcAdapter implements WrappedHistoricoRepository {
 			from poll_votes pv left join users u on u.id = pv.user_id
 			where pv.user_id = :user and pv.created_at >= :de and pv.created_at < :ate
 			union all
-			select 'reacted', cr.id, c.post_id, cr.created_at, null, c.author_id, u.username, u.name, null
+			select 'reacted', cr.id, c.id, cr.created_at, null, c.author_id, u.username, u.name, null
 			from comment_reactions cr join comments c on c.id = cr.comment_id
 			left join users u on u.id = c.author_id
 			where c.author_id = :user and cr.user_id <> :user and cr.created_at >= :de and cr.created_at < :ate
@@ -132,10 +132,13 @@ class WrappedHistoricoJdbcAdapter implements WrappedHistoricoRepository {
 		return switch (fonte) {
 			case "posts" -> Tipo.PUBLICACAO;
 			case "comments" -> Tipo.COMENTARIO_PROPRIO;
-			case "reactions", "poll_votes" -> Tipo.REACAO_FEITA;
+			case "reactions" -> Tipo.REACAO_FEITA;
+			case "poll_votes" -> Tipo.VOTO_FEITO;
 			case "reposts" -> Tipo.REPOST_FEITO;
-			case "shares", "saves" -> Tipo.COMPARTILHAMENTO_FEITO;
-			case "reacted" -> Tipo.REACAO_RECEBIDA;
+			case "shares" -> Tipo.COMPARTILHAMENTO_FEITO;
+			case "saves" -> Tipo.SALVO_FEITO;
+			// Reação de outra pessoa em um COMENTÁRIO da conta: "comentários que receberam reação".
+			case "reacted" -> Tipo.REACAO_RECEBIDA_COMENTARIO;
 			case "commented" -> Tipo.COMENTARIO_RECEBIDO;
 			case "shared" -> Tipo.COMPARTILHAMENTO_RECEBIDO;
 			case "reposted" -> Tipo.REPOST_RECEBIDO;

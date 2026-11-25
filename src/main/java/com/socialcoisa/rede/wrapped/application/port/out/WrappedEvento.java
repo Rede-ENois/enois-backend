@@ -39,10 +39,16 @@ public record WrappedEvento(
 		COMENTARIO_FEITO,
 		COMPARTILHAMENTO_FEITO,
 		REPOST_FEITO,
+		/** Voto em enquete: uma manifestação feita, como a reação. */
+		VOTO_FEITO,
+		/** Publicação salva pela conta: abrir depois é interação, não engajamento no autor. */
+		SALVO_FEITO,
 		REACAO_RECEBIDA,
 		COMENTARIO_RECEBIDO,
 		COMPARTILHAMENTO_RECEBIDO,
-		REPOST_RECEBIDO
+		REPOST_RECEBIDO,
+		/** Reação recebida em um COMENTÁRIO da conta (não no post): alimenta "comentários com reação". */
+		REACAO_RECEBIDA_COMENTARIO
 	}
 
 	/** A hora local e a data local do fato (o mesmo fuso de {@link WrappedAno}) — o que agrupa o ritmo. */
