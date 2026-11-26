@@ -1263,7 +1263,14 @@ jobs:
             esac
           }
 
-          for i in $(seq 1 15); do
+          # A janela é de 5 min, igual à da QA. Com 75s (15x5) o deploy de 2026-11-26 07:54 marcou
+          # fail com o serviço SUBINDO CERTO: "Started RedeApplication in 77.213 seconds" — 2s além
+          # da janela. O boot ficou deterministicamente mais longo quando os repositórios passaram a
+          # nascer no refresh (bootstrap-mode=default, que tirou o travamento do boot): antes eles
+          # eram criados preguiçosamente e o "start" acontecia antes de existirem. Reprovar aqui não
+          # protege nada — o rollback do Portainer já trocou o container — e só troca um deploy bom
+          # por um alarme falso. Quem mede a saúde de verdade é o /health e a sonda do gateway.
+          for i in $(seq 1 60); do
             if curl -sf --max-time 10 https://api.enois.ia.br/health; then
               echo "OK na tentativa $i"
               confere_config
@@ -1272,7 +1279,7 @@ jobs:
             echo "tentativa $i falhou, aguardando..."
             sleep 5
           done
-          echo "health check nao respondeu apos 75s"
+          echo "health check nao respondeu apos 300s"
           exit 1
 
       # =======================================================================
