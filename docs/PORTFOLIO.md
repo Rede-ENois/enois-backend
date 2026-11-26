@@ -31,6 +31,7 @@ peças; o editor e o render público da página no front são fases seguintes.
 | Método | Rota | O que faz |
 | --- | --- | --- |
 | `GET /portfolio/{username}` | leitura pública: última publicação (versão, HTML, peças) |
+| `GET /portfolio` | lista pública das vitrines no ar (`limit`, `cursor`; sem HTML nem peças) |
 | `GET /me/portfolio` | o que o dono edita: rascunho, peças e versão publicada |
 | `PUT /me/portfolio/draft` | `{ html }` — grava o rascunho da página (sanitizado) |
 | `POST /me/portfolio/blocks` | cria uma peça no rascunho → 201 |
@@ -84,9 +85,24 @@ imagens ANTES de ir ao bucket e só depois gravada como `media_assets` com a cha
 - A varredura de segurança roda em duas fases: recolhe o render parado e, em seguida, entrega a
   análise às páginas — render antes de analisar, sempre.
 
+## Lista pública das vitrines (`GET /portfolio`)
+
+A seção de vitrines do Explorar lista quem **está no ar** — aberta a quem visita, como a leitura por
+username. Só entra página publicada (versão 1 em diante): rascunho nunca aparece, e vitrine de conta
+banida ou removida sai da lista. A resposta traz o que a lista precisa (nome, foto, @, versão, data e
+o título da página — o primeiro `h1`, ou o primeiro `h2`) e **não** o HTML nem as peças.
+
+Paginação por cursor `(published_at, user_id)` — não por posição: um offset pularia ou repetiria
+linhas quando alguém publicasse entre duas páginas. `limit` vai de 1 a 50 (padrão 20); `nextCursor` é
+`null` quando a lista terminou. Cursor fora do formato: `400 INVALID_CURSOR`.
+
 ## Fases seguintes (não implementadas aqui)
 
 1. Render público da página no front (`patterns/html-frame`, quadro isolado) e editor
    (`patterns/editor`), como views do design system.
 2. Seção no Explorar e card no feed.
-3. Exportação em PDF (processo isolado, sem rede, com timeout — o HTML é do autor).
+3. Exportação em PDF — **decidida em 2026-11-26: feita no navegador de quem abre a vitrine**
+   (imprimir/salvar como PDF), sem render no servidor. O HTML do autor já é exibido em quadro
+   isolado sem scripts; gerar o arquivo no cliente não acrescenta processo novo no backend nem
+   coloca conteúdo de terceiro em renderizador no servidor. A imagem do backend continua sem
+   navegador, e não precisa dele.
