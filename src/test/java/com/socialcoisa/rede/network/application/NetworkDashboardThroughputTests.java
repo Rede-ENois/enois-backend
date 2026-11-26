@@ -60,6 +60,9 @@ class NetworkDashboardThroughputTests {
 		when(tasks.countDoneByNode(org.mockito.ArgumentMatchers.anyCollection())).thenReturn(java.util.Map.of());
 		when(tasks.countFailedByNode(org.mockito.ArgumentMatchers.anyCollection())).thenReturn(java.util.Map.of());
 		when(tasks.countByStatus(TaskStatus.DONE)).thenReturn(0L);
+		// Sem pendente por tipo: estes casos estudam a distribuição/throughput/saúde, não a fila. O
+		// alerta de "trabalho sem alvo" tem teste próprio.
+		when(tasks.countPendingByType(anyString())).thenReturn(0L);
 		when(tasks.countByStatus(TaskStatus.FAILED)).thenReturn(0L);
 		NetworkRegionService regions = mock(NetworkRegionService.class);
 		when(regions.outOfService()).thenReturn(List.of());

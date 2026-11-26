@@ -4,7 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
@@ -54,6 +57,7 @@ class NetworkDashboardHealthTests {
 
 	private List<NetworkNode> nos;
 	private ContentVersionRepository versions;
+	private NetworkTaskRepository tasks;
 	private NetworkDashboardService service;
 
 	@BeforeEach
@@ -61,11 +65,15 @@ class NetworkDashboardHealthTests {
 		nos = new java.util.ArrayList<>();
 		NetworkNodeRepository nodes = mock(NetworkNodeRepository.class);
 		when(nodes.list(anyInt())).thenAnswer(call -> List.copyOf(nos));
-		NetworkTaskRepository tasks = mock(NetworkTaskRepository.class);
+		tasks = mock(NetworkTaskRepository.class);
 		when(tasks.countDoneByNode(org.mockito.ArgumentMatchers.anyCollection())).thenReturn(Map.of());
 		when(tasks.countFailedByNode(org.mockito.ArgumentMatchers.anyCollection())).thenReturn(Map.of());
 		when(tasks.countByStatus(TaskStatus.DONE)).thenReturn(0L);
 		when(tasks.countByStatus(TaskStatus.FAILED)).thenReturn(0L);
+		// Fila pendente zerada: estes casos medem a saúde dos nós. O alerta de "trabalho sem alvo" tem
+		// teste próprio (NetworkModesTests, pela rota, e o de rede abaixo).
+		when(tasks.countByStatus(TaskStatus.PENDING)).thenReturn(0L);
+		when(tasks.countPendingByType(anyString())).thenReturn(0L);
 		NetworkRegionService regions = mock(NetworkRegionService.class);
 		when(regions.outOfService()).thenReturn(List.of());
 		NodeObservabilityRepository samples = mock(NodeObservabilityRepository.class);
@@ -251,6 +259,87 @@ class NetworkDashboardHealthTests {
 			NetworkDashboardService.severidade("NODE_SATURATED"));
 		// Código novo sem classificação não fura a ordem: cai no fim.
 		assertThat(NetworkDashboardService.severidade("CODIGO_NOVO")).isEqualTo(4);
+	}
+
+	@Test
+	void trabalho_sem_quem_faca_vira_um_alerta_de_rede_nomeando_o_tipo() {
+		// O painel já dizia "ASYNC_JOB: 0 capazes" na cobertura; agora o operador recebe o alerta
+		// com o NÚMERO da fila e sem confundi-lo com problema de um nó (nodeId nulo).
+		nos.add(com("nd_media", NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_MEDIA), NOW, 0, 0, 5.0));
+		when(tasks.countByStatus(TaskStatus.PENDING)).thenReturn(2L);
+		when(tasks.countPendingByType("ASYNC_JOB")).thenReturn(2L);
+
+		HealthGroup g = health();
+
+		assertThat(g.alerts()).extracting(HealthAlert::code).containsExactly("WORK_NO_TARGET");
+		assertThat(g.alerts().get(0).nodeId()).isNull();
+		assertThat(g.alerts().get(0).reason()).contains("ASYNC_JOB").contains("2 tarefa");
+		// Tipo que ALGUÉM pode fazer não alerta, mesmo com fila dele: haveria alerta para toda fila.
+		nos.add(com("nd_worker", NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_WORKER, NodeProfile.NODE_EDGE), NOW, 0, 0,
+			5.0));
+		when(tasks.countPendingByType("ASYNC_JOB")).thenReturn(0L);
+		when(tasks.countPendingByType("EDGE_CACHE")).thenReturn(4L);
+		assertThat(health().alerts()).isEmpty();
+		// De volta ao estado do caso: sem o worker capaz e com a fila de ASYNC_JOB.
+		when(tasks.countPendingByType("EDGE_CACHE")).thenReturn(0L);
+		when(tasks.countPendingByType("ASYNC_JOB")).thenReturn(2L);
+		nos.remove(nos.size() - 1);
+
+		// A ordem é estável e o alerta de rede convive com o do nó, só depois dos mais graves.
+		nos.add(com("nd_mudo", NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_MEDIA), NOW.minusSeconds(600), 0, 0, 5.0));
+		// Dois problemas de rede no mesmo quadro — e aqui o que importa é que os DOIS alertas de rede
+		// (um por tipo sem quem faça) podem coexistir sem estourar. O nó novo só pode MEDIA: não
+		// muda o silêncio nem a cobertura de ASYNC_JOB/EDGE_CACHE, que é o que este trecho mede.
+		nos.add(com("nd_media2", NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_MEDIA), NOW, 0, 0, 5.0));
+		when(tasks.countPendingByType("MEDIA_TRANSCODE")).thenReturn(1L);
+		// A fila "na rede" é a soma: com o mock zerado, o alerta diria que ASYNC_JOB não tem pendente.
+		when(tasks.countByStatus(TaskStatus.PENDING)).thenReturn(3L);
+		// A contagem da rede é consultada SÓ quando há fila do tipo: com tipos vazios pelo caminho,
+		// toda chamada ao painel viraria uma soma da tabela inteira sem que nada fosse alertado.
+		clearInvocations(tasks);
+		// MEDIA_TRANSCODE agora tem nó, então só ASYNC_JOB continua sem quem faça: um alerta de rede,
+		// e o par (nó sem heartbeat, rede) não estoura na ordenação.
+		assertThat(health().alerts()).extracting(HealthAlert::code)
+			.containsExactly("NODE_SILENT", "WORK_NO_TARGET");
+		when(tasks.countPendingByType("MEDIA_TRANSCODE")).thenReturn(0L);
+
+		// A ordem estável do alerta SEM nó: com dois tipos sem quem faça, o desempate é o código
+		// (e o comparador não pode receber nulo direto). Os dois aparecem depois do alerta do nó.
+		var semWorker = new java.util.ArrayList<>(nos);
+		nos.clear();
+		// Nenhum perfil: o nó não pode executar tipo NENHUM — o caso que produz dois alertas de rede.
+		nos.add(com("nd_mudo2", NodeStatus.ACTIVE, Set.of(), NOW, 0, 0, 5.0));
+		when(tasks.countPendingByType("ASYNC_JOB")).thenReturn(2L);
+		when(tasks.countPendingByType("MEDIA_TRANSCODE")).thenReturn(1L);
+		clearInvocations(tasks);
+		var quadro = health();
+		var codigos = quadro.alerts().stream().map(HealthAlert::code).toList();
+		// O nó sem perfil também alerta (NODE_NO_WORK, mais grave); o que este trecho mede é que os
+		// DOIS alertas de rede existem e não estouram a ordenação.
+		assertThat(codigos).containsExactly("NODE_NO_WORK", "WORK_NO_TARGET", "WORK_NO_TARGET");
+		assertThat(quadro.alerts()).extracting(HealthAlert::reason)
+			.anySatisfy(r -> assertThat(r).contains("ASYNC_JOB"))
+			.anySatisfy(r -> assertThat(r).contains("MEDIA_TRANSCODE"));
+		// A consulta é POR TIPO (é ela que decide), e a soma da rede só onde há fila: nove dos nove
+		// tipos foram perguntados, e a tabela inteira foi somada para nenhum dos seis vazios.
+		verify(tasks, times(1)).countPendingByType("READ_QUERY");
+		verify(tasks, times(1)).countPendingByType("OBJECT_GET");
+		// Dois: um por tipo que tem fila e nenhum nó capaz — `MEDIA_TRANSCODE` e `OBJECT_GET`, que
+		// também tem nó sem perfil aqui. Dois, não nove: a tabela inteira não é somada para o tipo
+		// cuja fila está vazia.
+		verify(tasks, times(2)).countByStatus(TaskStatus.PENDING);
+		nos.addAll(semWorker);
+		when(tasks.countPendingByType("MEDIA_TRANSCODE")).thenReturn(0L);
+	}
+
+	@Test
+	void tipo_sem_quem_faca_e_sem_fila_nao_e_alerta() {
+		// Nenhum nó pode executar MEDIA_TRANSCODE, e isso não é incidente enquanto não há trabalho:
+		// um tipo desligado na rede inteira é configuração, não falta de gente para uma fila.
+		nos.add(com("nd_worker", NodeStatus.ACTIVE, Set.of(NodeProfile.NODE_WORKER), NOW, 0, 0, 5.0));
+		when(tasks.countByStatus(TaskStatus.PENDING)).thenReturn(0L);
+
+		assertThat(health().alerts()).isEmpty();
 	}
 
 	@Test

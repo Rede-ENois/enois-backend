@@ -180,3 +180,11 @@ O que continua bloqueado, e por quê, não mudou: a captura (§4) depende de dec
 (`log_bin`, `binlog_format=ROW`, usuário com `REPLICATION SLAVE`), e o §2.1 (nó→nó com circuit
 breakers, latência de encaminhamento) não é reuso, é um segundo caminho de entrada — o Control
 Plane não inicia conexão ao nó.
+
+### O §2.2 ganhou o alerta: trabalho que o Master absorve sem ninguém para pegar
+
+O `health` do painel (doc 20 §14.1) passou a emitir `WORK_NO_TARGET` quando um tipo de trabalho tem
+fila **e** nenhum nó capaz. É o diagnóstico do §2.2 dado como alerta, e não só como número na
+cobertura. "Master sobrecarregado enquanto há réplicas ociosas" (§8.8) continua sem medida: hoje o
+Control Plane não mede a própria carga por serviço (§8.2, "Aplicação"), e medir isso é o passo
+anterior ao alerta — não dá para afirmar "o Master está sobrecarregado" sem a medida.

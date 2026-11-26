@@ -530,6 +530,32 @@ Decisões:
 - **Um alerta por nó**, o mais grave: o suspenso que também está saturado não conta duas vezes. O
   quadro, esse sim, conta todos os fatos — o alerta é o resumo, a tabela é a medida.
 
+### 14.1 O trabalho que o Master absorve porque ninguém pode pegá-lo (ciclo 171)
+
+O §2.2 do brief é explícito — "o Master não deve atuar como executor obrigatório de todas as
+tarefas" — e o §8.8 pede o alerta "Master sobrecarregado enquanto existem réplicas ociosas". O quadro
+de cobertura (`workTypes`) já dizia *quantos* nós podem executar cada tipo; o que faltava era o
+alerta dizer *que existe fila* dele e *que ela não anda*.
+
+`health.alerts` ganha `WORK_NO_TARGET` (dimensão `APPLICATION`): um por tipo de trabalho que tem
+`capable = 0` **e** pendente na fila — `"2 tarefa(s) ASYNC_JOB pendentes e nenhum nó capaz de
+executá-las (3 pendentes na rede)"`. O primeiro número é do tipo, o segundo é a fila inteira (só
+aparece quando difere). Um alerta de tipo sem fila **não** existe: nenhum nó executar
+`MEDIA_TRANSCODE` é uma rede sem encoder, configuração — não falta de gente para uma fila.
+
+O alerta é da **rede**, não de um nó: `nodeId`/`nodeName` são nulos. Por isso a ordenação dos alertas
+trata o nó nulo (`nullsFirst`) — sem isso, o primeiro alerta de rede ao lado de um alerta de nó
+estourava em NPE na ordenação (defeito encontrado e corrigido no mesmo ciclo, com teste).
+
+A cobertura é calculada **uma vez** por painel e servida nos dois lugares (`workTypes` e o alerta):
+duas contas seriam duas respostas para o mesmo quadro.
+
+Provas: `NetworkModesTests.trabalhoSemQuemFacaViraAlertaDoPainelEOOperadorSabeQueEleFicouNoMaster`
+(pela rota real: nó só de mídia, 2 tarefas `ASYNC_JOB` enfileiradas → alerta; nó de worker chega →
+alerta some), `NetworkDashboardHealthTests` (2 casos novos, mais a ordenação com dois alertas de
+rede e o NPE). Mutações: alerta sem exigir fila, alerta para tipo que alguém faz, tipo fora da
+mensagem, contagem da rede no lugar da do tipo e comparador sem nulo — **todas derrubam**.
+
 **O que este bloco não faz, e por quê.** O §8.8 lista quinze alertas; aqui entram os que derivam de
 dado que o Control Plane **já mede** num ciclo, sem estado novo: silêncio, suspensão/revogação,
 quarentena, sem perfil, falhas seguidas, atraso, saturação, memória no teto e sem vaga. O brief pede

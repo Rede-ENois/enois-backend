@@ -137,11 +137,14 @@ public class NetworkDashboardService {
 			.sorted(Map.Entry.<String, Integer>comparingByValue(Comparator.reverseOrder()))
 			.forEach(entry -> topRuntimes.put(entry.getKey(), entry.getValue()));
 
+		// A cobertura é calculada uma vez: ela é o bloco `workTypes` da tela E o que decide o alerta
+		// "trabalho que ninguém pode fazer". Duas contas seriam duas respostas para o mesmo quadro.
+		List<WorkCoverage> cobertura = workTypes(all, evacuated, now);
 		return new Dashboard(total, active, unavailable, quarantined, alive, degraded, declaredCores,
 			declaredMemoryMb, freeSlots, cpuSamples == 0 ? null : cpuSum / cpuSamples,
 			cpuSamples, memorySamples == 0 ? null : memorySumMb / memorySamples, memorySamples,
-			byRegion, byProfile, topRuntimes, evacuated, load(all), workTypes(all, evacuated, now),
-			throughput(all, now), health(all, now));
+			byRegion, byProfile, topRuntimes, evacuated, load(all), cobertura,
+			throughput(all, now), health(all, now, cobertura));
 	}
 
 	/**
@@ -295,7 +298,7 @@ public class NetworkDashboardService {
 	 * recorte exibido não depender da ordem em que a listagem veio do banco. {@code alertsTotal}
 	 * é quantos existem, mesmo quando a lista vem cortada.</p>
 	 */
-	private HealthGroup health(List<NetworkNode> all, Instant now) {
+	private HealthGroup health(List<NetworkNode> all, Instant now, List<WorkCoverage> cobertura) {
 		Map<String, Integer> ok = new LinkedHashMap<>();
 		Map<String, Integer> degraded = new LinkedHashMap<>();
 		Map<String, Integer> failing = new LinkedHashMap<>();
@@ -337,8 +340,27 @@ public class NetworkDashboardService {
 					alerta.reason()));
 			}
 		}
+		// O trabalho que o Control Plane enfileira sem que nó nenhum possa executar (§2.2/§8.8): a fila
+		// é o número; o alerta diz QUAL tipo e POR QUE ele fica no Master. Só vale com pendente — sem
+		// trabalho, "ninguém pode fazer" não é incidente, é um tipo desligado.
+		for (WorkCoverage tipo : cobertura) {
+			if (tipo.capable() != 0) {
+				continue;
+			}
+			long pendentesTipo = tasks.countPendingByType(tipo.type());
+			if (pendentesTipo == 0) {
+				continue;
+			}
+			long pendentes = tasks.countByStatus(TaskStatus.PENDING);
+			alertas.add(new HealthAlert(null, null, NodeHealth.Dimension.APPLICATION, "WORK_NO_TARGET",
+				pendentesTipo + " tarefa(s) " + tipo.type() + " pendentes e nenhum nó capaz de executá-las"
+					+ (pendentes > pendentesTipo ? " (" + pendentes + " pendentes na rede)" : "")));
+		}
+		// O alerta da rede não tem nó: um comparador com `HealthAlert::nodeId` estoura em NPE no
+		// primeiro alerta de rede que aparece ao lado de um de nó. O nulo ordena antes, e o desempate
+		// final é o código — dois alertas de rede podem existir (um por tipo sem quem faça).
 		alertas.sort(Comparator.comparingInt((HealthAlert a) -> severidade(a.code()))
-			.thenComparing(HealthAlert::nodeId)
+			.thenComparing(HealthAlert::nodeId, Comparator.nullsFirst(Comparator.naturalOrder()))
 			.thenComparing(HealthAlert::code));
 		return new HealthGroup(contados, byStatus, ok, degraded, failing, medidos == contados,
 			List.copyOf(alertas.subList(0, Math.min(alertas.size(), MAX_HEALTH_ALERTS))), alertas.size());
@@ -368,7 +390,7 @@ public class NetworkDashboardService {
 		return switch (code) {
 			case "NODE_REVOKED", "NODE_SUSPENDED", "NODE_SILENT" -> 0;
 			case "NODE_QUARANTINED", "NODE_NO_WORK" -> 1;
-			case "NODE_FAILING", "NODE_BEHIND" -> 2;
+			case "NODE_FAILING", "NODE_BEHIND", "WORK_NO_TARGET" -> 2;
 			case "NODE_SATURATED", "NODE_MEMORY_FULL", "NODE_FULL" -> 3;
 			default -> 4;
 		};
@@ -397,8 +419,9 @@ public class NetworkDashboardService {
 	}
 
 	/**
-	 * @param nodeId    o nó do alerta
-	 * @param nodeName  o nome que o operador vê
+	 * @param nodeId    o nó do alerta; {@code null} quando o alerta é da <b>rede</b>, não de um nó
+	 *                  (ex.: {@code WORK_NO_TARGET} — ninguém pode executar o que foi enfileirado)
+	 * @param nodeName  o nome que o operador vê; idem, nulo no alerta de rede
 	 * @param dimension dimensão da saúde onde o fato aparece
 	 * @param code      código estável ({@code NODE_SILENT}, {@code NODE_SATURATED}, …)
 	 * @param reason    a frase com o número e o porquê

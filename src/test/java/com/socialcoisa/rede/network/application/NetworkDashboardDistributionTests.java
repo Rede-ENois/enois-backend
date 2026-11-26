@@ -80,6 +80,9 @@ class NetworkDashboardDistributionTests {
 		when(tasks.countByStatus(TaskStatus.DONE)).thenAnswer(
 			call -> totalDone != 0 ? totalDone : done.values().stream().mapToLong(Long::longValue).sum());
 		when(tasks.countByStatus(TaskStatus.FAILED)).thenReturn(0L);
+		// Sem pendente por tipo: estes casos estudam a distribuição de trabalho, não a fila. O alerta
+		// de "trabalho sem alvo" tem teste próprio.
+		when(tasks.countPendingByType(org.mockito.ArgumentMatchers.anyString())).thenReturn(0L);
 
 		NetworkRegionService regions = mock(NetworkRegionService.class);
 		when(regions.outOfService()).thenReturn(List.of());

@@ -55,6 +55,10 @@ class NetworkNodesTests {
 	@BeforeEach
 	void setUp() {
 		auth = new TestAuthHelper(mockMvc, objectMapper);
+		// A fila é estado de OUTRA classe de teste no mesmo contexto: sem limpar, uma tarefa pendente
+		// deixada por ela entra no quadro de saúde desta como `WORK_NO_TARGET`, e o painel que este
+		// teste mede passa a depender da ordem em que a suíte rodou.
+		jdbc.update("delete from network_tasks");
 		jdbc.update("delete from network_node_keys");
 		jdbc.update("delete from network_provision_tokens");
 		jdbc.update("delete from network_nodes");

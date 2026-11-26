@@ -131,6 +131,9 @@ interface SpringDataNetworkTaskJpaRepository extends JpaRepository<NetworkTaskJp
 			+ "from NetworkTaskJpaEntity t group by t.taskType, t.status")
 	List<QueueCountRow> countGroupedByQueueAndStatus();
 
+	/** Pendentes de UM tipo: o alerta de "trabalho que ninguém pode fazer" é por tipo, não agregado. */
+	long countByTaskTypeAndStatus(String taskType, String status);
+
 	/** Projeção da consulta acima; os nomes dos acessores são os aliases do `select`. */
 	interface QueueCountRow {
 		String getTaskType();

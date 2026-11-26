@@ -162,6 +162,11 @@ class NetworkTaskPersistenceAdapter implements NetworkTaskRepository {
 	}
 
 	@Override
+	public long countPendingByType(String type) {
+		return repository.countByTaskTypeAndStatus(type, TaskStatus.PENDING.name());
+	}
+
+	@Override
 	public long countRetried() {
 		return repository.countRetried();
 	}

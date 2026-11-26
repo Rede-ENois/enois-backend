@@ -393,7 +393,62 @@ class NetworkModesTests {
 			.andExpect(jsonPath("$.acceptTasks").value(false));
 	}
 
+	// ---------------------------------------------------------------- dispersão quando não há quem faça
+
+	/**
+	 * §2.2 / §8.8 do brief: "o Master não deve absorver o que a réplica poderia fazer". Quando nenhum
+	 * nó pode receber um tipo de trabalho e o Control Plane enfileira dele, o fato não pode existir
+	 * só na contabilidade: vira alerta nomeado no painel, com o operador sabendo que a causa é
+	 * uma, não duas.
+	 *
+	 * <p>Mede o estado <b>depois</b> do enfileiramento: com a fila vazia e nenhum nó, nada a alertar.
+	 */
+	@Test
+	void trabalhoSemQuemFacaViraAlertaDoPainelEOOperadorSabeQueEleFicouNoMaster() throws Exception {
+		var admin = adminSession();
+		activeNode(admin.token(), "no-so-media", List.of("NODE_MEDIA"));
+
+		assertThat(tasks.dispatchPending()).isZero();
+
+		var antes = dashboard(admin.token());
+		assertThat(antes.get("health").get("alertsTotal").asInt()).isZero();
+
+		enqueue("sem-quem", 2);
+		assertThat(tasks.dispatchPending()).isZero();
+
+		var depois = dashboard(admin.token());
+		var alertas = depois.get("health").get("alerts");
+		assertThat(alertas.size()).isEqualTo(1);
+		assertThat(alertas.get(0).get("code").asString()).isEqualTo("WORK_NO_TARGET");
+		assertThat(alertas.get(0).get("reason").asString()).contains("ASYNC_JOB").contains("2");
+		// O alerta não é do nó: ele descreve a rede. O campo que liga o alerta a alguém fica nulo.
+		assertThat(alertas.get(0).get("nodeId").isNull()).isTrue();
+
+		// Um nó capaz chega: a fila é absorvida e o alerta desaparece (não é estado congelado).
+		Node worker = activeNode(admin.token(), "no-worker", List.of("NODE_WORKER"));
+		heartbeat(worker);
+		assertThat(tasks.dispatchPending()).isEqualTo(2);
+		assertThat(dashboard(admin.token()).get("health").get("alertsTotal").asInt()).isZero();
+	}
+
 	// ---------------------------------------------------------------- helpers
+
+	private tools.jackson.databind.JsonNode dashboard(String token) throws Exception {
+		return objectMapper.readTree(mockMvc.perform(get("/admin/network/nodes/dashboard").header("X-Session-Token", token))
+			.andExpect(status().isOk())
+			.andReturn()
+			.getResponse()
+			.getContentAsString());
+	}
+
+	private void heartbeat(Node node) throws Exception {
+		mockMvc
+			.perform(post("/network/nodes/heartbeat").header("X-Node-Id", node.id()).header("X-Node-Key", node.key())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("runtimeVersion", "0.1.0", "observed",
+					Map.of("cpuPercent", 5.0, "runningTasks", 0)))))
+			.andExpect(status().isOk());
+	}
 
 	private record Node(String id, String key) {
 	}

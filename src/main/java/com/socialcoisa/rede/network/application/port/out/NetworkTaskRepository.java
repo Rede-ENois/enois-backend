@@ -131,6 +131,13 @@ public interface NetworkTaskRepository {
 	long countByStatus(TaskStatus status);
 
 	/**
+	 * Quantas tarefas de um tipo estão pendentes. O agregado ({@link #countByStatus}) diz que há fila;
+	 * esta pergunta diz de que tipo ela é — e é o que permite ao painel nomear o trabalho que ninguém
+	 * consegue pegar ("3 tarefas ASYNC_JOB e nenhum nó capaz").
+	 */
+	long countPendingByType(String type);
+
+	/**
 	 * Quantas tarefas de cada tipo estão em cada estado (brief §8.2, "DLQ por fila").
 	 *
 	 * <p>Uma consulta agrupada, não uma contagem por tipo: o painel pede o quadro inteiro de uma vez, e
