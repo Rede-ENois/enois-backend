@@ -210,8 +210,22 @@ class MediaMigrationServiceTests {
 		}
 
 		@Override
+		public Optional<MediaAsset> findByObjectKey(String objectKey) {
+			return byId.values().stream().filter(asset -> objectKey.equals(asset.objectKey())).findFirst();
+		}
+
+		@Override
 		public List<MediaAsset> findByIds(Collection<String> ids) {
 			return ids.stream().map(byId::get).filter(java.util.Objects::nonNull).toList();
+		}
+
+		@Override
+		public List<MediaAsset> findVisibleByOwnerSince(String ownerId, Instant since, int limit) {
+			return byId.values().stream()
+				.filter(asset -> asset.ownerId().value().equals(ownerId) && asset.isVisible()
+					&& !asset.createdAt().isBefore(since))
+				.limit(Math.max(1, limit))
+				.toList();
 		}
 
 		@Override

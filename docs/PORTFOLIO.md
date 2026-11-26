@@ -2,8 +2,8 @@
 
 Vitrine de trabalho que cada pessoa monta no próprio perfil: uma **página com aparência própria**
 (HTML do autor, no mesmo formato de página do resto do enois) e uma lista ordenada de **peças**
-(projeto, texto, mídia, PDF, link). Esta fase entrega o modelo, a API e as regras; o editor, o
-render público da página no front e a moderação de PDF são fases seguintes.
+(projeto, texto, mídia, PDF, link). Esta fase entrega o modelo, a API, as regras e a mídia/PDF das
+peças; o editor e o render público da página no front são fases seguintes.
 
 ## Regras do espaço
 
@@ -67,12 +67,26 @@ Erros: `400 PORTFOLIO_BLOCK_TYPE_REQUIRED`, `400 PORTFOLIO_BLOCK_TITLE_TOO_LONG`
 - `portfolio_blocks`: `id`, `user_id`, `position`, `block_type`, `title`, `text`, `project_id`,
   `media_id`, `link_url`, `published_version` (null = nunca publicado), `created_at`, `updated_at`.
 
+## Mídia e PDF da peça (V390)
+
+A imagem da peça é a própria mídia. O PDF é o conjunto das páginas renderizadas no servidor:
+o classificador não lê PDF, então cada folha é desenhada (PDFBox), conferida pelo verificador das
+imagens ANTES de ir ao bucket e só depois gravada como `media_assets` com a chave
+`paginas/<lote>/pagina-<n>.png`.
+
+- `media_render_jobs` (uma linha por PDF): o pedido é o registro do trabalho — `PENDING` é render a
+  fazer ou que parou com página gravada, `RENDERED` concluído, `FAILED` recusado (não é refeito).
+- O check de segurança é da PÁGINA, no mesmo ledger `media_safety_checks`. Folha barrada contamina o
+  documento: a peça sai do portfólio, a publicação é recusada e o PDF e as páginas recebem pedido de
+  remoção.
+- Enquanto alguma página não tem veredito `SAFE`, a mídia não é liberada (bloco de mídia,
+  publicação e leitura pública do arquivo); o dono continua vendo o próprio arquivo.
+- A varredura de segurança roda em duas fases: recolhe o render parado e, em seguida, entrega a
+  análise às páginas — render antes de analisar, sempre.
+
 ## Fases seguintes (não implementadas aqui)
 
-1. Envio de mídia/PDF no bloco, com página de PDF renderizada no servidor (PDFBox) e cada página
-   passando pelo classificador NSFW pelo mesmo ledger `media_safety_checks` — o portfólio não pode
-   ser uma porta lateral para conteúdo que a moderação de imagem barra.
-2. Render público da página no front (`patterns/html-frame`, quadro isolado) e editor
+1. Render público da página no front (`patterns/html-frame`, quadro isolado) e editor
    (`patterns/editor`), como views do design system.
-3. Seção no Explorar e card no feed.
-4. Exportação em PDF (processo isolado, sem rede, com timeout — o HTML é do autor).
+2. Seção no Explorar e card no feed.
+3. Exportação em PDF (processo isolado, sem rede, com timeout — o HTML é do autor).

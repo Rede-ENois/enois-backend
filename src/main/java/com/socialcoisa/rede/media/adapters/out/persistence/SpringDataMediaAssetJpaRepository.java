@@ -3,6 +3,7 @@ package com.socialcoisa.rede.media.adapters.out.persistence;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -16,7 +17,15 @@ interface SpringDataMediaAssetJpaRepository extends JpaRepository<MediaAssetJpaE
 
 	List<MediaAssetJpaEntity> findByIdIn(Collection<String> ids);
 
+	Optional<MediaAssetJpaEntity> findFirstByObjectKey(String objectKey);
+
 	boolean existsByIdInAndPurpose(Collection<String> ids, String purpose);
+
+	/** Entrada da varredura de segurança: o que o dono enviou na janela e continua no ar. */
+	@Query("select e from MediaAssetJpaEntity e where e.ownerId = :ownerId and e.createdAt >= :since "
+		+ "and e.deleteStatus = :deleteStatus order by e.createdAt asc")
+	List<MediaAssetJpaEntity> findVisibleByOwnerSince(@Param("ownerId") String ownerId,
+		@Param("since") Instant since, @Param("deleteStatus") MediaDeleteStatus deleteStatus, Pageable pageable);
 
 	/** Lote da copia: ainda no ImageKit, upload antigo o bastante, nao apagado e sem estourar tentativas. */
 	@Query("select e from MediaAssetJpaEntity e where e.storageProvider = :provider and e.s3MigratedAt is null "
