@@ -35,6 +35,12 @@ public abstract class CatalogoEmMemoria implements StorageCatalogRepository {
 	}
 
 	@Override
+	public boolean storageNodeExists(String nodeId) {
+		// Os testes deste pacote não montam rede de nós: nenhum id é de nó.
+		return false;
+	}
+
+	@Override
 	public Optional<StorageObject> findById(String id) {
 		// Todas as linhas, não só a corrente da chave: o aposentado tem de continuar achável por id.
 		return Optional.ofNullable(porId.get(id));

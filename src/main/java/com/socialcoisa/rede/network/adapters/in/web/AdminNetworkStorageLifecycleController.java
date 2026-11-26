@@ -43,19 +43,23 @@ class AdminNetworkStorageLifecycleController {
 	private final StorageReplicaAdoption replicaAdoption;
 	private final StoragePendingRelease pendingRelease;
 	private final StorageMultipartSweeper multipartSweeper;
+	private final com.socialcoisa.rede.network.application.StorageOrphanCollector orphanCollector;
 	private final CurrentUserResolver currentUserResolver;
 	private final AdminGuard adminGuard;
 	private final AuditTrail audit;
 
 	AdminNetworkStorageLifecycleController(StorageCatalogService storage, StorageLifecycle lifecycle,
 			StorageReplicaAdoption replicaAdoption, StoragePendingRelease pendingRelease,
-			StorageMultipartSweeper multipartSweeper, CurrentUserResolver currentUserResolver,
+			StorageMultipartSweeper multipartSweeper,
+			com.socialcoisa.rede.network.application.StorageOrphanCollector orphanCollector,
+			CurrentUserResolver currentUserResolver,
 			AdminGuard adminGuard, AuditTrail audit) {
 		this.storage = storage;
 		this.lifecycle = lifecycle;
 		this.replicaAdoption = replicaAdoption;
 		this.pendingRelease = pendingRelease;
 		this.multipartSweeper = multipartSweeper;
+		this.orphanCollector = orphanCollector;
 		this.currentUserResolver = currentUserResolver;
 		this.adminGuard = adminGuard;
 		this.audit = audit;
@@ -91,6 +95,36 @@ class AdminNetworkStorageLifecycleController {
 			audit.record(admin.id().value(), "STORAGE_MULTIPART_SWEEP_RUN", "storage",
 				"{\"removed\":" + relatorio.removed().size() + ",\"orphans\":" + relatorio.orphansRemoved().size()
 					+ "}");
+		}
+		return relatorio;
+	}
+
+	/**
+	 * Os corpos do Control Plane que o catálogo não descreve (resíduo de gravação interrompida).
+	 *
+	 * <p>Leitura com {@code dryRun} — que é o padrão — e coleta só com {@code dryRun=false}. Nada com
+	 * id de nó é apagado: o arquivo aparece em {@code keptNodeBodies} para o operador decidir, porque
+	 * o nó é a fonte da verdade do que guarda. Um arquivo mais novo que a janela de seguro
+	 * ({@code skippedRecent}) pode ser o upload de agora.</p>
+	 */
+	@GetMapping("/bodies/orphans")
+	com.socialcoisa.rede.network.application.StorageOrphanCollector.Report orphanBodies(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
+		admin(sessionToken);
+		return orphanCollector.collect(true);
+	}
+
+	@PostMapping("/bodies/orphans/collect")
+	com.socialcoisa.rede.network.application.StorageOrphanCollector.Report collectOrphanBodies(
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@RequestParam(name = "dryRun", defaultValue = "true") boolean dryRun) {
+		CurrentUser admin = admin(sessionToken);
+		com.socialcoisa.rede.network.application.StorageOrphanCollector.Report relatorio = orphanCollector
+			.collect(dryRun);
+		if (!dryRun && !relatorio.removed().isEmpty()) {
+			audit.record(admin.id().value(), "STORAGE_ORPHAN_COLLECT_RUN", "storage",
+				"{\"removed\":" + relatorio.removed().size() + ",\"keptNodeBodies\":"
+					+ relatorio.keptNodeBodies().size() + "}");
 		}
 		return relatorio;
 	}

@@ -296,6 +296,12 @@ class StorageScrubberReadBackTests {
 		}
 
 		@Override
+		public boolean storageNodeExists(String nodeId) {
+			return false;
+		}
+
+		@Override
+
 		public Optional<StorageObject> findById(String id) {
 			return objects.stream().filter(o -> o.id().equals(id)).findFirst();
 		}

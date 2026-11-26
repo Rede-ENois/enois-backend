@@ -986,3 +986,39 @@ no teste: o objeto continua sendo lido, e a recuperação só conclui com o nó 
 
 Provas: `storage-acceptance` **15 PASS / 0 FAIL em 5 rodadas seguidas** (antes: ~4 falhas em 11
 rodadas).
+
+## 5.17 O corpo sem dono no catálogo é coletado — e o de nó não é apagado (ciclo 167)
+
+**O que estava errado.** `StorageCatalogService.store` grava o corpo em `rede.storage.root` e
+**depois** marca o objeto. A ordem é a certa — registrar "tem cópia" antes de o arquivo existir daria
+objeto servível sem bytes — e o preço é a queda no meio: o processo morto entre os dois passos deixa
+um `.bin` cujo id o catálogo não descreve. Como o nome do arquivo é o id e a próxima gravação usa
+outro id, o resíduo ficaria no disco do Control Plane para sempre. Os caminhos de exceção restauram
+pelo backup; `Error` e morte do processo não passam por eles.
+
+### Agora
+
+| rota | o que faz |
+|---|---|
+| `GET /admin/network/storage/bodies/orphans` | lista, sem apagar: `orphansToRemove`, `keptNodeBodies`, `skippedRecent`, `failed` |
+| `POST /admin/network/storage/bodies/orphans/collect?dryRun=false` | apaga o que a leitura listou como apagável |
+
+Decisões:
+
+- **Id de nó nunca é apagado.** `catalog.storageNodeExists` (nó `ACTIVE` com perfil de storage)
+  separa os dois casos: com nó de mesmo id, o arquivo pode ser a cópia de uma colocação que o banco
+  perdeu, e o nó é a fonte da verdade do que guarda — ele entra em `keptNodeBodies` e fica. Sem nó, o
+  id é do Control Plane (`so_`) e o arquivo é resíduo de gravação.
+- **Janela de seguro de uma hora** (`skippedRecent`): entre criar o arquivo e gravar a linha existe
+  uma janela, e apagar dentro dela mataria o upload que o usuário está enviando agora.
+- **Só `.bin` é corpo.** O temporário do upload (`createTempFile` gera `.upload-<id>.<rand>.part`)
+  fica: apagá-lo esconderia o upload em andamento. Nome que sobra sem id (`.bin`) não vira pedido.
+- **Sem raiz, `installed: false`** — nunca "nenhum órfão" sobre um disco que ninguém leu. Diretório
+  ilegível devolve `RAIZ_ILEGIVEL` em `failed`.
+- **Não roda sozinha:** é o operador que chama, como a coleta de lápides e a varredura de multipart.
+  Cada passada grava `STORAGE_ORPHAN_COLLECT_RUN` na auditoria com as contagens.
+
+**Verificação:** `StorageOrphanCollectorTests` **7** (resíduo velho sai e o corpo com colocação fica;
+id de nó fica listado; arquivo novo não sai; a leitura não apaga; temporário de upload fica; nome
+sobrando não vira pedido; sem raiz = `installed: false`). Mutações: não isentar id de nó (1), ignorar
+a idade (1), apagar no `dryRun` (1), sem a guarda do nome vazio (1), sem a checagem de raiz (1).
