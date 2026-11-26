@@ -40,6 +40,8 @@ import com.socialcoisa.rede.shared.web.StatusResponse;
  * <li>{@code GET /figurinhas/index?codigos=a,b} — mapa código → imagem das ATIVAS (o texto usa);</li>
  * <li>{@code POST /figurinhas/envios} → {@code POST /figurinhas/envios/{mediaId}} →
  *   {@code POST /figurinhas} — cadastro em três passos: declarar, enviar a imagem, publicar;</li>
+ * <li>{@code GET /figurinhas/envios/pode} — se a conta pode enviar (identidade verificada e
+ *   reputação mínima), com os números para a tela mostrar o que falta;</li>
  * <li>{@code DELETE /figurinhas/{id}} — o autor tira a própria figurinha;</li>
  * <li>{@code POST /moderation/figurinhas/{id}/desativar} — moderação/admin tiram do ar;</li>
  * <li>{@code GET /figurinhas/{id}/historico} — histórico, para moderação e para o autor.</li>
@@ -104,6 +106,23 @@ class FigurinhaComunidadeController {
 		return ResponseEntity.ok()
 			.cacheControl(CacheControl.noCache())
 			.body(figurinhas.indice(codigos == null ? List.of() : List.of(codigos.split(","))));
+	}
+
+	/**
+	 * Se a conta pode enviar figurinha (identidade verificada + reputação mínima), com os números:
+	 * a tela usa isto para mostrar o que falta antes do primeiro passo.
+	 */
+	@GetMapping("/figurinhas/envios/pode")
+	Object podeEnviar(@RequestHeader(value = "X-Session-Token", required = false) String token) {
+		CurrentUser user = exigirSessao(token);
+		var decisao = figurinhas.decisaoDeEnvio(user.id().value());
+		Map<String, Object> resposta = new LinkedHashMap<>();
+		resposta.put("pode", decisao.pode());
+		resposta.put("reputacao", decisao.reputacao());
+		resposta.put("reputacaoMinima", decisao.reputacaoMinima());
+		resposta.put("identidadeVerificada", decisao.identidadeVerificada());
+		resposta.put("motivo", decisao.motivo());
+		return resposta;
 	}
 
 	/** Passo 1: declarar o envio. Responde onde escrever a imagem. */

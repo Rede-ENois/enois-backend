@@ -133,3 +133,35 @@ código? Muda no script também, e o teste `EmoteSourcesTest` guarda o formato.
 - O catálogo vive na memória do pod: cada réplica monta o seu. Como a montagem é de 3 em 3 horas e
   cai no retrato embarcado quando falha, réplicas podem diferir por uma rodada — não é problema de
   leitura, só de minúscula diferença de catálogo entre pods.
+## Figurinhas da Comunidade: envio e formatos
+
+As figurinhas que as pessoas enviam (`/figurinhas`) são um catálogo separado do pacote oficial
+"Figurinhas do Énóis", e passam por três passos: declarar (`POST /figurinhas/envios`), enviar os
+bytes (`POST /figurinhas/envios/{mediaId}`) e publicar (`POST /figurinhas`).
+
+**Quem pode enviar:** conta com e-mail confirmado, **identidade verificada** e **pelo menos 100 de
+reputação** (`FigurinhaEnvioPolicy`). A verificação de identidade não é um requisito à parte: o
+cálculo da reputação só conta para quem verificou, então ela vem junto. Para a tela dizer o que
+falta antes do envio, `GET /figurinhas/envios/pode` responde:
+
+| Campo | O que diz |
+|---|---|
+| `pode` | se o envio está liberado agora |
+| `reputacao` / `reputacaoMinima` | o valor de quem está logado e o piso (100) |
+| `identidadeVerificada` | se a conta passou pela verificação |
+| `motivo` | `IDENTITY_REQUIRED`, `LOW_REPUTATION` ou nulo |
+
+Na recusa, o passo 1 e o passo 3 respondem 403 com `REPUTACAO_INDISPONIVEL` (identidade não
+verificada) ou `LOW_REPUTATION` (verificada, abaixo do piso). O piso é contado SEMPRE no momento do
+envio: quem tinha 100 e perdeu reputação não publica o que já tinha subido.
+
+**Formatos aceitos:** PNG, JPG, GIF animado e SVG, até 400x400 e 512KB (SVG pelo `viewBox` ou
+`width`/`height`). O que chega ao storage é o arquivo conferido:
+
+- a assinatura tem de bater com o tipo declarado (o GIF pelo cabeçalho `GIF87a`/`GIF89a`);
+- nenhum formato ativo (HTML, XML, PDF, ZIP, ELF, `<script`) pode aparecer em lugar algum do arquivo;
+- o PNG/JPG inteiro é decodificado, e um PNG com bytes depois do `IEND` é reescrito a partir da
+  imagem (vira um arquivo novo, sem sobra);
+- o GIF vai como veio — os quadros são o conteúdo — e o primeiro quadro dá as medidas;
+- o SVG passa pelo sanitizador (`SafeHtml.sanitizeSvg`): script, evento, `foreignObject` e
+  referência externa saem, e o vetor limpo é servido como `image/svg+xml`.
