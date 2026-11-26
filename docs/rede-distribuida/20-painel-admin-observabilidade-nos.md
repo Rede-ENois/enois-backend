@@ -28,18 +28,20 @@ enxerga na tela: o runtime manda `cpuPercent`, `memoryMb`, `runningTasks`, `disk
 `diskTotalMb`, `usedMb` — **e nada de rede**. Por isso o quadro não tem tráfego de entrada/saída, e a
 dúvida "o nó está transferindo?" não é respondível pela tela.
 
-## 3. O que o backend JÁ aceita e o runtime nunca manda
+## 3. O elo que faltava: o runtime e o tráfego (fechado no ciclo 161)
 
-`NetworkNodeController.Observed` já tem `bytesInMb` e `bytesOutMb`, e o banco já os guarda
-(`V345__network_node_traffic.sql`: `observed_bytes_in_mb` / `observed_bytes_out_mb`). O **runtime nunca mede nem envia**:
+`NetworkNodeController.Observed` já tinha `bytesInMb` e `bytesOutMb`, e o banco já os guardava
+(`V345__network_node_traffic.sql`: `observed_bytes_in_mb` / `observed_bytes_out_mb`). **O runtime
+nunca os lia** — o heartbeat ia com `cpuPercent`, `memoryMb`, `runningTasks` e `disk*`, sem nenhuma
+leitura de `/proc/net/dev`. Era o caso de "campo gravado e nunca populado", e a correção foi o
+runtime medir o acumulado das interfaces externas e mandá-lo no heartbeat que já existe (doc 16).
 
-```
-deploy/node-runtime/node-runtime.sh  # heartbeat: cpuPercent, memoryMb, runningTasks, disk*
-                                     # nenhuma leitura de /proc/net/dev
-```
-
-É o caso de "campo gravado e nunca populado" — o mesmo padrão do teto de banda do rebalanceamento
-(ciclo 54). A correção certa não é inventar uma tela nova: é o runtime medir o tráfego acumulado das
+No caminho, o próprio corpo do heartbeat estava quebrado: os fragmentos opcionais (`mem_part`,
+`temp_part`, `disk_io_part`) não carregavam a vírgula e o separador depois de `runningTasks`
+faltava, então **todo heartbeat com memória, temperatura ou I/O medidos** ia malformado
+(`0"memoryMb"`) — o Control Plane respondia 400, o nó registrava "heartbeat falhou" a cada ciclo e
+saía do balanceamento por `last_seen_at` velho. Corrigido no mesmo ciclo; `node-traffic-test.sh` lê
+o corpo como JSON de verdade, então um separador faltando derruba o harness. A correção certa não é inventar uma tela nova: é o runtime medir o tráfego acumulado das
 interfaces e mandar no heartbeat que já existe, para o campo que já existe.
 
 ## 4. Lacuna do §8.2 do brief que decorre disso
@@ -50,7 +52,7 @@ O brief (§8.2) pede, por nó: uso de rede e throughput de entrada e saída. Hoj
 |---|---|
 | CPU total, memória, disco livre | **entregue** (heartbeat → painel por nó) |
 | tarefas em execução, versão do runtime, último contato | **entregue** |
-| uso de rede / throughput (entrada e saída) | **não medido pelo runtime**, coluna pronta no banco |
+| uso de rede / throughput (entrada e saída) | **medido desde o ciclo 161** — o runtime soma o acumulado de `/proc/net/dev` (interfaces externas) no heartbeat; o painel mostra o total e a fatia de saída |
 | swap, pressão de memória, IOPS, latência de disco, temperatura, GC, threads, p95/p99 de tarefa, DLQ por fila | **swap e pressão desde o ciclo 157** (§7); **IOPS e latência de disco desde o 158** (§8 e §9); **temperatura desde o 159** (§10); **p95/p99 do tempo de execução das tarefas desde o 160** (§11); **DLQ por fila desde o 161** (`deadByQueue`, doc 03). GC/threads (o runtime é shell, não JVM) e p95/p99 de requisição HTTP não existem — ver `docs/rede-distribuida/11-global-coop-fase-0.md` §3 |
 
 ## 5. O que o mantenedor precisa conferir no deploy (não é código)
@@ -73,7 +75,7 @@ O elo do §3 deste documento foi fechado nos três lados:
 
 | lado | o que passa a existir |
 |---|---|
-| runtime | mede `/proc/net/dev` (fora loopback) e manda `bytesInMb`/`bytesOutMb` no heartbeat |
+| runtime | mede `/proc/net/dev` (só interfaces externas: `eth*`, `en*`, `wl*`, `ww*`) e manda `bytesInMb`/`bytesOutMb` no heartbeat |
 | backend | `GET /admin/network/nodes` devolve `trafficInMb`/`trafficOutMb` (antes: campo `NetworkNode` já populado, nunca exposto no `NodeView`) |
 | design system | linha do nó mostra "Tráfego" (`↓ 2.0 GiB · ↑ 512 MiB`); nulo ou metade medida é "Sem medição" |
 
@@ -293,3 +295,12 @@ essas tarefas não aparece; o quadro vem vazio quando não há nada terminal.
 Provas: `NetworkTaskQueueTests` (3 casos: duas filas mortas não se misturam e tarefa viva não entra;
 falhada e cancelada separadas da morta; quadro vazio sem terminal). Mutações conferidas: tudo numa
 fila só derruba 1; estado ignorado (tudo `DEAD`) derruba 3; todos os estados no quadro derruba 1.
+
+### Correção do ciclo 161
+
+O runtime passou a medir de fato; o `awk` que separa campos por `[: ]+` foi trocado por um que
+remonta os tokens depois de `:` — com o espaço depois de `:` a segunda coluna fica vazia e todo
+índice anda. Ponte (`br-*`), `docker0` e `veth*` não entram: o pacote de um container aparece nele
+e na ponte, e somar as duas contaria o mesmo tráfego duas vezes. Provas: `node-traffic-test.sh`
+(8 casos, roda o `cycle` real com `/proc/net/dev` forjado); mutações conferidas — separador
+ausente (1 falha), ponte/docker somados (3), posições fixas (3), ausente virando zero (1).
