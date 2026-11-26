@@ -79,6 +79,7 @@ public class FigurinhasComunidadeService {
 	private final AuditTrail audit;
 	private final org.springframework.transaction.support.TransactionTemplate transactions;
 	private final UserRateLimiter rateLimiter;
+	private final FigurinhaEnvioPolicy envioPolicy;
 	private final Clock clock;
 
 	public FigurinhasComunidadeService(FigurinhasComunidadeRepository figurinhas, MediaService mediaService,
@@ -86,7 +87,7 @@ public class FigurinhasComunidadeService {
 			MediaImageModerationService imageModeration, MediaDimensionsService dimensions,
 			UserProfileRepository profiles, CacheInvalidator caches, AuditTrail audit,
 			org.springframework.transaction.support.TransactionTemplate transactions, UserRateLimiter rateLimiter,
-			Clock clock) {
+			FigurinhaEnvioPolicy envioPolicy, Clock clock) {
 		this.figurinhas = figurinhas;
 		this.mediaService = mediaService;
 		this.assets = assets;
@@ -98,6 +99,7 @@ public class FigurinhasComunidadeService {
 		this.audit = audit;
 		this.transactions = transactions;
 		this.rateLimiter = rateLimiter;
+		this.envioPolicy = envioPolicy;
 		this.clock = clock;
 	}
 
@@ -107,12 +109,12 @@ public class FigurinhasComunidadeService {
 	public Envio criarUpload(String autorId, String mimeType, long tamanho) {
 		String mime = FigurinhaImagem.exigirDeclaracaoValida(mimeType, tamanho);
 		// O teto de criação é contado ao PUBLICAR (é ali que a figurinha passa a existir); aqui só
-		// a conta verificada e o espaço no catálogo.
+		// a conta verificada, a reputação e o espaço no catálogo.
 		exigirNomeConfirmado(autorId);
+		exigirReputacao(autorId);
 		exigirEspacoPara(autorId);
 		MediaUploadView view = mediaService.createUpload(new CreateMediaUploadCommand(new UserId(autorId),
-			FigurinhaImagem.PNG.equals(mime) ? "figurinha.png" : "figurinha.jpg", mime, tamanho,
-			MediaService.FIGURINHA_PURPOSE));
+			FigurinhaImagem.nomeDoArquivo(mime), mime, tamanho, MediaService.FIGURINHA_PURPOSE));
 		// O cliente escreve a imagem AQUI, e não no endereço assinado do bucket: é esta rota que
 		// recebe os bytes para conferir antes de qualquer coisa chegar ao storage.
 		return new Envio(view.id(), view.objectKey(), "/storage/" + view.objectKey(), Map.of());
@@ -136,7 +138,9 @@ public class FigurinhasComunidadeService {
 		byte[] limpo;
 		try {
 			validado = FigurinhaArquivoValidado.conferir(bytes, asset.mimeType());
-			// A mesma checagem de conteúdo das imagens públicas de post (nudez/sexualidade).
+			// A mesma checagem de conteúdo das imagens públicas de post (nudez/sexualidade). O SVG
+			// não passa por ela: é vetor, não bitmap — quem confere o vetor é o sanitizador, em
+			// FigurinhaArquivoValidado.
 			imageModeration.verifyBeforeStorage(validado.bytes(), validado.mimeType());
 			limpo = mediaService.limparMetadados(validado.bytes(), validado.mimeType(), asset.objectKey());
 		}
@@ -186,6 +190,7 @@ public class FigurinhasComunidadeService {
 				"Este nome ou código não é permitido pelas Diretrizes.");
 		}
 		exigirNomeConfirmado(autorId);
+		exigirReputacao(autorId);
 		exigirEspacoPara(autorId);
 		// O teto de criação é contado aqui, e não no passo 1: é aqui que a figurinha passa a existir.
 		rateLimiter.require(autorId, UserRateLimiter.CREATE_FIGURINHA);
@@ -345,6 +350,19 @@ public class FigurinhasComunidadeService {
 			throw new ApiException(403, "EMAIL_NOT_VERIFIED",
 				"Confirme seu e-mail ou ative a verificação em duas etapas para cadastrar figurinhas.");
 		}
+	}
+
+	/** O piso de reputação e o motivo da recusa vivem em {@link FigurinhaEnvioPolicy}. */
+	private void exigirReputacao(String autorId) {
+		envioPolicy.exigir(autorId);
+	}
+
+	/**
+	 * Se a conta pode enviar figurinha, com números: a tela mostra o que falta antes de a pessoa
+	 * escolher o arquivo, em vez de descobrir na recusa do último passo.
+	 */
+	public FigurinhaEnvioPolicy.Decisao decisaoDeEnvio(String autorId) {
+		return envioPolicy.avaliar(autorId);
 	}
 
 	private void exigirEspacoPara(String autorId) {

@@ -36,7 +36,11 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 
 import com.socialcoisa.rede.figurinhas.application.FigurinhasComunidadeService;
+import com.socialcoisa.rede.identity.application.IdentityVerificationService;
+import com.socialcoisa.rede.identity.domain.IdentityVerification;
+import com.socialcoisa.rede.identity.domain.IdentityVerificationStatus;
 import com.socialcoisa.rede.media.application.MediaImageModerationService;
+import com.socialcoisa.rede.profile.application.ReputationService;
 import com.socialcoisa.rede.media.application.port.out.MediaObjectStore;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.ModeratorGuard;
@@ -84,6 +88,13 @@ class FigurinhaComunidadeFlowTests {
 	@MockitoSpyBean
 	private ModeratorGuard moderatorGuard;
 
+	// O portão de envio: identidade verificada (aqui sempre) e reputação mínima (por teste).
+	@MockitoSpyBean
+	private IdentityVerificationService identity;
+
+	@MockitoBean
+	private ReputationService reputations;
+
 	private MockMvc mockMvc;
 	private TestAuthHelper auth;
 
@@ -93,6 +104,17 @@ class FigurinhaComunidadeFlowTests {
 		auth = new TestAuthHelper(mockMvc, objectMapper);
 		// A moderação segue as regras reais (admin ou moderador aprovado); o teste promove o
 		// moderador pelo endpoint do painel, como a produção faz.
+		// A reputação calculada (conta nova tem pouca) é a única parte simulada aqui: os cenários
+		// de envio precisam de conta identificada com reputação suficiente. A recusa por identidade
+		// e por reputação é de FigurinhaEnvioPolicyTests e dos testes no fim deste arquivo.
+		org.mockito.Mockito.when(reputations.reputationOf(anyString())).thenReturn(500);
+		org.mockito.Mockito.when(identity.current(anyString())).thenAnswer(chamada -> {
+			String userId = chamada.getArgument(0);
+			java.time.Instant agora = java.time.Instant.now();
+			IdentityVerification pendente = IdentityVerification.notVerified("verif-" + userId, userId, agora)
+				.transitionTo(IdentityVerificationStatus.PENDING, "didit", "sessao-teste", agora);
+			return pendente.transitionTo(IdentityVerificationStatus.VERIFIED, "didit", "sessao-teste", agora);
+		});
 	}
 
 	// ------------------------------------------------------------------ fluxo
@@ -180,13 +202,35 @@ class FigurinhaComunidadeFlowTests {
 	// ------------------------------------------------------------------ conferência do arquivo
 
 	@Test
-	void recusaTipoForaDePngJpeg() throws Exception {
+	void gifESvgTambemSaoAceitos() throws Exception {
+		TestAuthHelper.AuthSession autor = auth.authenticate("figgif1");
+		Map<String, Object> gif = enviar(autor, codigo(), "Gatinho animado", gif(48, 40, 2), "image/gif");
+		assertThat(gif.get("largura")).isEqualTo(48);
+
+		TestAuthHelper.AuthSession outro = auth.authenticate("figsvg1");
+		byte[] svg = ("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 32 32\">"
+			+ "<script>alert(1)</script><circle cx=\"16\" cy=\"16\" r=\"14\" fill=\"blue\"/></svg>")
+			.getBytes(StandardCharsets.UTF_8);
+		Map<String, Object> publicado = enviar(outro, codigo(), "Bolinha desenhada", svg, "image/svg+xml");
+		assertThat(publicado.get("largura")).isEqualTo(32);
+
+		// Os dois formatos novos chegam ao storage com o tipo deles (o GIF como GIF, o vetor como SVG).
+		org.mockito.ArgumentCaptor<String> tipo = org.mockito.ArgumentCaptor.forClass(String.class);
+		org.mockito.Mockito.verify(storage, org.mockito.Mockito.atLeastOnce()).write(anyString(), tipo.capture(),
+			anyLong(), any());
+		assertThat(tipo.getAllValues()).contains("image/gif", "image/svg+xml");
+	}
+
+	@Test
+	void recusaTipoForaDosQuatroFormatos() throws Exception {
 		TestAuthHelper.AuthSession autor = auth.authenticate("figtipo1");
-		mockMvc.perform(post("/figurinhas/envios").header("X-Session-Token", autor.token())
-				.contentType(MediaType.APPLICATION_JSON)
-				.content(objectMapper.writeValueAsString(Map.of("mimeType", "image/svg+xml", "size", 100))))
-			.andExpect(status().isBadRequest())
-			.andExpect(jsonPath("$.code").value("FIGURINHA_TIPO_NAO_PERMITIDO"));
+		for (String mime : List.of("image/webp", "application/pdf", "image/bmp")) {
+			mockMvc.perform(post("/figurinhas/envios").header("X-Session-Token", autor.token())
+					.contentType(MediaType.APPLICATION_JSON)
+					.content(objectMapper.writeValueAsString(Map.of("mimeType", mime, "size", 100))))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("FIGURINHA_TIPO_NAO_PERMITIDO"));
+		}
 	}
 
 	@Test
@@ -450,6 +494,54 @@ class FigurinhaComunidadeFlowTests {
 		TestDatabase.markEmailVerified(autor.userId(), java.time.Instant.now());
 	}
 
+	// ------------------------------------------------------------------ portão de envio
+
+	@Test
+	void envioExigeReputacaoMinimaDeCem() throws Exception {
+		TestAuthHelper.AuthSession autor = auth.authenticate("figrepna1");
+		org.mockito.Mockito.when(reputations.reputationOf(autor.userId())).thenReturn(99);
+		mockMvc.perform(post("/figurinhas/envios").header("X-Session-Token", autor.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("mimeType", "image/png", "size", 100))))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("LOW_REPUTATION"))
+			.andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("100")));
+
+		mockMvc.perform(get("/figurinhas/envios/pode").header("X-Session-Token", autor.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.pode").value(false))
+			.andExpect(jsonPath("$.reputacao").value(99))
+			.andExpect(jsonPath("$.reputacaoMinima").value(100))
+			.andExpect(jsonPath("$.identidadeVerificada").value(true))
+			.andExpect(jsonPath("$.motivo").value("LOW_REPUTATION"));
+
+		org.mockito.Mockito.when(reputations.reputationOf(autor.userId())).thenReturn(100);
+		mockMvc.perform(get("/figurinhas/envios/pode").header("X-Session-Token", autor.token()))
+			.andExpect(jsonPath("$.pode").value(true))
+			.andExpect(jsonPath("$.motivo").doesNotExist());
+		enviar(autor, codigo(), "No piso exato", png(32, 32));
+	}
+
+	@Test
+	void semIdentidadeVerificadaORecusaFalaDeIdentidade() throws Exception {
+		TestAuthHelper.AuthSession autor = auth.authenticate("figsemid1");
+		org.mockito.Mockito.when(identity.current(autor.userId())).thenReturn(IdentityVerification.notVerified(
+			"verif-semid", autor.userId(), java.time.Instant.now()));
+
+		mockMvc.perform(get("/figurinhas/envios/pode").header("X-Session-Token", autor.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.pode").value(false))
+			.andExpect(jsonPath("$.identidadeVerificada").value(false))
+			.andExpect(jsonPath("$.motivo").value("IDENTITY_REQUIRED"));
+
+		mockMvc.perform(post("/figurinhas/envios").header("X-Session-Token", autor.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("mimeType", "image/png", "size", 100))))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.code").value("REPUTACAO_INDISPONIVEL"))
+			.andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("identidade")));
+	}
+
 	// ------------------------------------------------------------------ auxiliares
 
 	/** Promove a conta a moderador pelo painel do admin — o mesmo caminho da produção. */
@@ -470,6 +562,11 @@ class FigurinhaComunidadeFlowTests {
 	private Map<String, Object> enviar(TestAuthHelper.AuthSession autor, String codigo, String nome, byte[] imagem)
 			throws Exception {
 		String mime = imagem.length > 0 && (imagem[0] & 0xFF) == 0x89 ? "image/png" : "image/jpeg";
+		return enviar(autor, codigo, nome, imagem, mime);
+	}
+
+	private Map<String, Object> enviar(TestAuthHelper.AuthSession autor, String codigo, String nome, byte[] imagem,
+			String mime) throws Exception {
 		String mediaId = declarar(autor, mime, imagem.length);
 		mockMvc.perform(enviarBytes(mediaId, imagem, autor)).andExpect(status().isOk());
 		MvcResult result = mockMvc.perform(post("/figurinhas").header("X-Session-Token", autor.token())
@@ -540,6 +637,25 @@ class FigurinhaComunidadeFlowTests {
 		BufferedImage rgb = new BufferedImage(largura, altura, BufferedImage.TYPE_INT_RGB);
 		rgb.getGraphics().drawImage(imagem, 0, 0, null);
 		ImageIO.write(rgb, "png", out);
+		return out.toByteArray();
+	}
+
+	/** GIF de verdade, escrito pelo ImageIO; com mais de um quadro sai GIF89a animado. */
+	private static byte[] gif(int largura, int altura, int quadros) throws Exception {
+		javax.imageio.ImageWriter escritor = ImageIO.getImageWritersByFormatName("gif").next();
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		try (javax.imageio.stream.ImageOutputStream saida = ImageIO.createImageOutputStream(out)) {
+			escritor.setOutput(saida);
+			escritor.prepareWriteSequence(null);
+			for (int quadro = 0; quadro < quadros; quadro++) {
+				BufferedImage imagem = new BufferedImage(largura, altura, BufferedImage.TYPE_INT_RGB);
+				escritor.writeToSequence(new javax.imageio.IIOImage(imagem, null, null), null);
+			}
+			escritor.endWriteSequence();
+		}
+		finally {
+			escritor.dispose();
+		}
 		return out.toByteArray();
 	}
 
