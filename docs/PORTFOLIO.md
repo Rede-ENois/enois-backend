@@ -59,7 +59,7 @@ Erros: `400 PORTFOLIO_BLOCK_TYPE_REQUIRED`, `400 PORTFOLIO_BLOCK_TITLE_TOO_LONG`
 | Título da peça | 160 |
 | Texto da peça | 4.000 |
 
-## Banco (V380)
+## Banco (V384)
 
 - `portfolio_pages`: `user_id` (pk), `draft_html`, `published_version`, `published_at`, `updated_at`.
 - `portfolio_publications`: `id`, `user_id`, `version`, `html`, `blocks` (JSON), `published_at`;
