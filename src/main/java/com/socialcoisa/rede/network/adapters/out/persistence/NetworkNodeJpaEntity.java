@@ -3,6 +3,9 @@ package com.socialcoisa.rede.network.adapters.out.persistence;
 import java.math.BigDecimal;
 import java.time.Instant;
 
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NodeProfile;
 import com.socialcoisa.rede.network.domain.NodeStatus;
@@ -77,8 +80,13 @@ class NetworkNodeJpaEntity {
 	/**
 	 * Maior temperatura entre os sensores da máquina, em graus (brief §8.2); {@code null} = a máquina
 	 * não tem sensor legível, que é "não disponível" e não uma temperatura medida.
+	 *
+	 * <p>Sem o {@code JdbcTypeCode}, o {@link BigDecimal} mapeia para {@code decimal(38,2)} e o
+	 * Dialect do MariaDB recusa contra a coluna {@code double} da V382; como {@code double}, ele espera
+	 * {@code Types.DOUBLE} — o tipo da coluna nos dois bancos (H2 e MariaDB).</p>
 	 */
 	@Column(name = "observed_temperature_c")
+	@JdbcTypeCode(SqlTypes.DOUBLE)
 	private BigDecimal observedTemperatureC;
 
 	@Column(name = "observed_content_used_mb")
