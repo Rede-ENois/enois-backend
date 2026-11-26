@@ -16,8 +16,18 @@ import java.util.Map;
  */
 public class CorteTermico {
 
-	/** Quantas pessoas distintas, no mínimo, para o painel mostrar um indicador. */
-	public static final int MINIMO_PARTICIPANTES = 20;
+	/**
+	 * Quantas MANIFESTAÇÕES, no mínimo, para o painel mostrar um indicador. O pedido mudou a régua
+	 * de vinte pessoas para cinco manifestações: a rede pequena não espera uma multidão para ver o
+	 * próprio clima.
+	 */
+	public static final int MINIMO_MANIFESTACOES = 5;
+
+	/**
+	 * E pelo menos duas PESSOAS distintas: cinco manifestações de uma pessoa só são uma opinião
+	 * repetida, não o clima da comunidade. A mesma régua do Papo Reto (uma pessoa não é conversa).
+	 */
+	public static final int MINIMO_PARTICIPANTES = 2;
 
 	private final TermometroPeriodo periodo;
 
@@ -99,9 +109,12 @@ public class CorteTermico {
 		return json.append("}").toString();
 	}
 
-	/** O painel mostra indicador? Menos gente que o chão é amostra pequena: nada se exibe. */
+	/**
+	 * O painel mostra indicador? Menos manifestações que o chão (ou uma pessoa só repetindo) é
+	 * amostra pequena: nada se exibe.
+	 */
 	public boolean temAmoSuficiente() {
-		return participantes >= MINIMO_PARTICIPANTES;
+		return manifestacoes >= MINIMO_MANIFESTACOES && participantes >= MINIMO_PARTICIPANTES;
 	}
 
 	/** Porcentagem da emoção na janela, inteira de 0 a 100, calculada das contagens brutas. */
