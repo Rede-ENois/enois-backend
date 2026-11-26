@@ -260,7 +260,7 @@ O §8.2 do brief pede a latência em p50, p95 e p99. O que existia era `network_
 Média responde "quanto, em média" e não "quanto é o pior 5%", que é a pergunta da cauda.
 
 **Como mede.** Cada tarefa concluída com sucesso entra numa **faixa** de duração (potências de dois,
-de 1 ms a ≈ 68 min) na hora corrente, em `network_task_latency_buckets` (V383). A escrita é um
+de 1 ms a ≈ 68 min) na hora corrente, em `network_task_latency_buckets` (V386). A escrita é um
 `UPSERT` que soma (`samples = samples + 1`) com a hora truncada antes de gravar: duas tarefas da
 mesma hora caem na mesma linha, e a tabela cresce com o número de faixas usadas, não com o de
 tarefas. O painel (`GET /admin/network/nodes/{id}/observability`, campo `latency`) lê 24 horas e
@@ -281,6 +281,6 @@ ausência) e `NetworkTaskLatencyTests` (6 casos: 9 rápidas + 1 lenta pela rota 
 tarefa com percentil nulo, falha fora do histograma, janela de 24 h, soma na mesma linha, dois nós
 sem vazamento). Mutações conferidas: não registrar no desfecho derruba 2; registrar falha derruba 1;
 ignorar a janela derruba 1; gravar sem truncar a hora derruba 1; somar sem o nó derruba 1.
-`node-task-latency-migration-test` **14 PASS / 0 FAIL** em MariaDB 11.4 real: `V383` aplicada duas
+`node-task-latency-migration-test` **14 PASS / 0 FAIL** em MariaDB 11.4 real: `V386` aplicada duas
 vezes, nó/tarefa anteriores preservados, chave composta, `utf8mb4`, upsert somando na mesma linha,
-janela de 24 h separando hoje de anteontem. Mutação (V383 vazia) derruba **6**.
+janela de 24 h separando hoje de anteontem. Mutação (V386 vazia) derruba **6**.

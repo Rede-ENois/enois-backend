@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Migração V383 (histograma de latência das tarefas por nó) contra um MariaDB real, aplicada DUAS
+# Migração V386 (histograma de latência das tarefas por nó) contra um MariaDB real, aplicada DUAS
 # vezes.
 #
 # O que esta migração promete e o que aqui se mede:
@@ -25,7 +25,7 @@ fail() { printf '[FAIL] %s\n' "$1" >&2; FAIL=$((FAIL + 1)); }
 
 BASE_MIGRATIONS=(V305__network_nodes.sql V325__network_node_observability.sql
   V306__network_tasks.sql)
-for migration in "${BASE_MIGRATIONS[@]}" V383__network_task_latency_buckets.sql; do
+for migration in "${BASE_MIGRATIONS[@]}" V386__network_task_latency_buckets.sql; do
   [[ -f "$MIGRATIONS/$migration" ]] || { fail "migração ausente: $migration"; exit 1; }
 done
 
@@ -100,7 +100,7 @@ for migration in "${BASE_MIGRATIONS[@]}"; do
   fi
 done
 
-# Nó e tarefa do contrato ANTES da V383: só as colunas que já existiam.
+# Nó e tarefa do contrato ANTES da V386: só as colunas que já existiam.
 db >/dev/null 2>&1 <<'SQL'
 insert into network_nodes (id, display_name, owner_user_id, status, region, country, created_at)
 values ('nd_lat_mig001', 'no-lat', 'user-lat', 'ACTIVE', 'sa-east-1', 'BR', now());
@@ -117,11 +117,11 @@ else
   exit 1
 fi
 
-if apply V383__network_task_latency_buckets.sql >/dev/null 2>&1; then
-  pass "V383 aplica sobre as tabelas existentes"
+if apply V386__network_task_latency_buckets.sql >/dev/null 2>&1; then
+  pass "V386 aplica sobre as tabelas existentes"
 else
-  fail "V383 falhou na 1ª aplicação"
-  db < "$MIGRATIONS/V383__network_task_latency_buckets.sql" 2>&1 | head -3 >&2
+  fail "V386 falhou na 1ª aplicação"
+  db < "$MIGRATIONS/V386__network_task_latency_buckets.sql" 2>&1 | head -3 >&2
 fi
 
 if [[ "$(n "select count(*) from network_nodes where id = 'nd_lat_mig001'")" == "1" \
@@ -171,10 +171,10 @@ janela=$(n "select sum(samples) from network_task_latency_buckets where node_id 
   || fail "janela leu '$janela' (esperado 3)"
 
 # 2ª aplicação: idempotente e sem perder o que foi contado.
-if apply V383__network_task_latency_buckets.sql >/dev/null 2>&1; then
-  pass "V383 aplica uma 2ª vez sem erro"
+if apply V386__network_task_latency_buckets.sql >/dev/null 2>&1; then
+  pass "V386 aplica uma 2ª vez sem erro"
 else
-  fail "V383 falhou na 2ª aplicação"
+  fail "V386 falhou na 2ª aplicação"
 fi
 [[ "$(n "select sum(samples) from network_task_latency_buckets where node_id = 'nd_lat_mig001'")" == "8" ]] \
   && pass "contagem preservada depois da 2ª aplicação (8)" \
