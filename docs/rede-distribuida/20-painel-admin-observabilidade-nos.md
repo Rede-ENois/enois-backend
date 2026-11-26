@@ -495,3 +495,53 @@ virando zero (2), adapter descartando a taxa (1), heartbeat descartando a taxa (
 amostra mais nova (1). Uma mutação fica verde por construção — gravar o estado só nos ciclos que
 medem —, porque o ciclo seguinte que mede sobrescreve o estado congelado; ela é inobservável, não
 inútil.
+
+## 14. As quatro dimensões de saúde na rede inteira (ciclo 170)
+
+O §8.8 do brief exige "obrigatoriamente" quatro dimensões de saúde — host, runtime, aplicação e
+participação na rede — e explica o motivo: **uma máquina pode estar online e a réplica estar
+inutilizável**. Elas existiam só na página do nó (`NodeHealth`, doc 06): para saber se a rede estava
+saudável, o operador abria nó por nó até achar o problema.
+
+`GET /admin/network/nodes/dashboard` ganha `health`:
+
+| campo | o que diz |
+|---|---|
+| `countedNodes` | nós no quadro |
+| `byStatus` | quantos em cada status do catálogo |
+| `ok` / `degraded` / `failing` | por dimensão (`HOST`, `RUNTIME`, `APPLICATION`, `NETWORK`), quantos nós em cada estado |
+| `measured` | `false` quando o atraso de sincronização de algum nó do quadro não foi consultado |
+| `alerts` / `alertsTotal` | um alerta por nó com problema, o mais grave primeiro; o total mesmo quando a lista vem cortada |
+
+Decisões:
+
+- **Pendente de aprovação fica fora.** É fila de aprovação, não incidente — o mesmo recorte de
+  `unavailable` no topo.
+- **O atraso de sincronização alimenta a dimensão de aplicação**, e a conta é uma consulta por tipo
+  de conteúdo. O quadro consulta até 50 nós por ciclo; acima disso `measured` é `false`, em vez de
+  afirmar "em dia" sobre quem ninguém olhou.
+- **A ordem dos alertas é a da urgência e é estável**: o que tira o nó da rede (`NODE_REVOKED`,
+  `NODE_SUSPENDED`, `NODE_SILENT`) antes do que o faz servir pior (`NODE_FAILING`, `NODE_BEHIND`),
+  e depois a carga (`NODE_SATURATED`, `NODE_MEMORY_FULL`, `NODE_FULL`); dentro do mesmo código, pelo
+  id do nó. Sem isso, o recorte exibido dependeria da ordem em que a listagem veio do banco.
+- **Carga antes de vaga.** Um nó em 92% com vaga declarada é `NODE_SATURATED`, não `NODE_FULL`: o
+  teto é promessa, a CPU medida é o que está acontecendo — a mesma ordem do modo da rede, em que
+  quem está saturado não promete vaga.
+- **Um alerta por nó**, o mais grave: o suspenso que também está saturado não conta duas vezes. O
+  quadro, esse sim, conta todos os fatos — o alerta é o resumo, a tabela é a medida.
+
+**O que este bloco não faz, e por quê.** O §8.8 lista quinze alertas; aqui entram os que derivam de
+dado que o Control Plane **já mede** num ciclo, sem estado novo: silêncio, suspensão/revogação,
+quarentena, sem perfil, falhas seguidas, atraso, saturação, memória no teto e sem vaga. O brief pede
+também severidade, **deduplicação, agrupamento e histórico de resolução** — isso é estado (um alerta
+que persiste entre ciclos, com quem resolveu e quando), exige tabela própria e é outro ciclo. Os
+alertas de captura do MariaDB, de declarações fora da capacidade e de tentativa de operação não
+autorizada também ficam pendentes: os dois primeiros dependem do CDC (bloqueado por decisão de
+infraestrutura, doc 14) e o terceiro de um registro de recusas por nó que hoje só existe na auditoria.
+
+Provas: `NetworkDashboardHealthTests` (12 casos) e `NetworkNodesTests.dashboardAgregaARedeEmNumeros`
+(a rota real: cinco nós, quatro no quadro). Mutações conferidas: pendente dentro do quadro (1),
+atraso ignorado (2), atraso não consultado virando medido (1), ordem de urgência invertida (2),
+recorte sem teto (1), host silencioso sem alerta (2), suspenso sem alerta (2), falhas seguidas sem
+alerta (1), memória cheia sem alerta (1), vaga testada antes da carga (1) e dimensão contada no balde
+errado (1).

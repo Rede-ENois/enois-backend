@@ -629,6 +629,33 @@ class NetworkNodesTests {
 		// Nó sem heartbeat não inventa versão: só os três que reportaram contam.
 		assertThat(body.get("runtimeVersions").size()).isEqualTo(1);
 		assertThat(body.get("runtimeVersions").get("0.1.0").asInt()).isEqualTo(3);
+
+		// As quatro dimensões do §8.8 chegam à rota, contadas sobre os quatro que já operaram — o
+		// pendente de aprovação fica fora, como o `unavailable` acima.
+		var saude = body.get("health");
+		// O recorte é o dos quatro que já operaram — o pendente fica fora, sem gerar alerta.
+		assertThat(saude.get("countedNodes").asInt()).isEqualTo(4);
+		assertThat(saude.get("measured").asBoolean()).isTrue();
+		assertThat(saude.get("byStatus").get("PENDING_APPROVAL").asInt()).isEqualTo(1);
+		assertThat(saude.get("ok").get("HOST").asInt()).isEqualTo(3);
+		// O suspenso é suspenso ANTES do primeiro heartbeat: nunca reportou runtime.
+		assertThat(saude.get("ok").get("RUNTIME").asInt()).isEqualTo(3);
+		assertThat(saude.get("degraded").get("RUNTIME").asInt()).isEqualTo(1);
+		assertThat(saude.get("failing").get("HOST").asInt()).isEqualTo(1);
+		// Participação: só o sano está OK. O saturado está com a carga no teto (DEGRADED); o suspenso
+		// está fora por decisão; e o em quarentena, que continua com heartbeat em dia, aparece como
+		// FAILING de rede — quarentena é remoção do balanceamento, e a dimensão de rede mede
+		// participação, não o processo.
+		assertThat(saude.get("ok").get("NETWORK").asInt()).isEqualTo(1);
+		assertThat(saude.get("degraded").get("NETWORK").asInt()).isEqualTo(1);
+		assertThat(saude.get("failing").get("NETWORK").asInt()).isEqualTo(2);
+		// Um alerta por nó com problema — e o pendente não gera nenhum (não é incidente). O suspenso
+		// deste cenário é suspenso ANTES do primeiro heartbeat: o fato que se apresenta é o silêncio,
+		// e o alerta diz isso. O caso "suspenso com heartbeat em dia" é do alarme da suspensão, e
+		// tem teste próprio (`NetworkDashboardHealthTests`).
+		assertThat(saude.get("alerts").size()).isEqualTo(3);
+		assertThat(saude.get("alertsTotal").asInt()).isEqualTo(3);
+		assertThat(saude.get("alerts").toString()).contains("NODE_QUARANTINED", "NODE_SILENT", "NODE_SATURATED");
 	}
 
 	/** Heartbeat com credencial de nó real, como o runtime manda. */

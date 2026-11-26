@@ -89,7 +89,12 @@ class NetworkDashboardDistributionTests {
 			mock(com.socialcoisa.rede.network.application.port.out.NodeObservabilityRepository.class);
 		when(samples.samples(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyInt()))
 			.thenReturn(List.of());
-		service = new NetworkDashboardService(nodes, regions, tasks, samples, Clock.fixed(NOW, ZoneOffset.UTC));
+		com.socialcoisa.rede.network.application.port.out.ContentVersionRepository versions =
+			mock(com.socialcoisa.rede.network.application.port.out.ContentVersionRepository.class);
+		when(versions.countBehind(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any(
+			com.socialcoisa.rede.network.domain.ContentKind.class))).thenReturn(0L);
+		service = new NetworkDashboardService(nodes, regions, tasks, samples, versions,
+			Clock.fixed(NOW, ZoneOffset.UTC));
 	}
 
 	private static NetworkNode node(String id, NodeStatus status, Integer runningNow) {

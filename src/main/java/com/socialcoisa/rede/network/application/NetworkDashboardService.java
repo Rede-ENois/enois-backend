@@ -12,9 +12,12 @@ import java.util.TreeMap;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.socialcoisa.rede.network.application.port.out.ContentVersionRepository;
 import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.application.port.out.NetworkTaskRepository;
 import com.socialcoisa.rede.network.application.port.out.NodeObservabilityRepository;
+import com.socialcoisa.rede.network.domain.ContentKind;
+import com.socialcoisa.rede.network.domain.NodeHealth;
 import com.socialcoisa.rede.network.domain.TaskStatus;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NetworkRegions;
@@ -48,14 +51,16 @@ public class NetworkDashboardService {
 	private final NetworkRegionService regions;
 	private final NetworkTaskRepository tasks;
 	private final NodeObservabilityRepository samples;
+	private final ContentVersionRepository versions;
 	private final Clock clock;
 
 	NetworkDashboardService(NetworkNodeRepository nodes, NetworkRegionService regions, NetworkTaskRepository tasks,
-			NodeObservabilityRepository samples, Clock clock) {
+			NodeObservabilityRepository samples, ContentVersionRepository versions, Clock clock) {
 		this.nodes = nodes;
 		this.regions = regions;
 		this.tasks = tasks;
 		this.samples = samples;
+		this.versions = versions;
 		this.clock = clock;
 	}
 
@@ -136,7 +141,7 @@ public class NetworkDashboardService {
 			declaredMemoryMb, freeSlots, cpuSamples == 0 ? null : cpuSum / cpuSamples,
 			cpuSamples, memorySamples == 0 ? null : memorySumMb / memorySamples, memorySamples,
 			byRegion, byProfile, topRuntimes, evacuated, load(all), workTypes(all, evacuated, now),
-			throughput(all, now));
+			throughput(all, now), health(all, now));
 	}
 
 	/**
@@ -193,7 +198,7 @@ public class NetworkDashboardService {
 			int declaredCpuCores, int declaredMemoryMb, int freeSlots, Double avgCpuPercent, int cpuSamples,
 			Integer avgMemoryMb, int memorySamples, Map<String, Integer> byRegion, Map<String, Integer> byProfile,
 			Map<String, Integer> runtimeVersions, List<String> outOfServiceRegions, Distribution load,
-			List<WorkCoverage> workTypes, Throughput throughput) {
+			List<WorkCoverage> workTypes, Throughput throughput, HealthGroup health) {
 	}
 
 	/**
@@ -258,6 +263,148 @@ public class NetworkDashboardService {
 		return new Throughput(entradas == 0 ? null : Math.round(in * 100) / 100.0,
 			saidas == 0 ? null : Math.round(out * 100) / 100.0, medida.size(),
 			comAcumulado == 0 ? null : acumulado);
+	}
+
+	/** O atraso do nó é uma consulta por tipo de conteúdo; acima do teto fica não medido. */
+	static final int MAX_HEALTH_BEHIND_NODES = 50;
+
+	/** O painel mostra os alertas mais urgentes; {@code alertsTotal} diz quantos existem. */
+	static final int MAX_HEALTH_ALERTS = 50;
+
+	/**
+	 * As quatro dimensões de saúde do §8.8 sobre a rede <b>inteira</b> — o topo do painel.
+	 *
+	 * <p>A dimensão já existia por nó ({@link com.socialcoisa.rede.network.domain.NodeHealth}, na
+	 * página do nó). O que faltava era o agregado: quantos nós atendem em cada dimensão e quais
+	 * estão {@code FAILING}. A pergunta do operador — "a máquina está de pé? o runtime se
+	 * identifica? a aplicação serve? a rede a aceita?" — só tem resposta de rede se as quatro forem
+	 * contadas separadas; um "verde" único afunda o nó que perdeu heartbeat junto do nó suspenso por
+	 * decisão administrativa.</p>
+	 *
+	 * <p><b>O que entra.</b> Todo nó listado, menos os {@code PENDING_APPROVAL}: esse não está fora
+	 * de saúde, está esperando aprovação, e contá-lo como {@code FAILING} faria fila de aprovação
+	 * parecer incidente — é o mesmo recorte de {@code unavailable} no topo.</p>
+	 *
+	 * <p><b>O atraso de sincronização.</b> A dimensão de aplicação depende dele, e a conta é uma
+	 * consulta por tipo de conteúdo. O quadro mede até {@value #MAX_HEALTH_BEHIND_NODES} nós por
+	 * ciclo; acima disso, {@code measured=false} diz que o atraso de alguém não foi consultado, em
+	 * vez de afirmar "em dia" sobre quem ninguém olhou.</p>
+	 *
+	 * <p><b>Os alertas.</b> Um por nó, o mais urgente, pela regra do domínio
+	 * ({@link NodeHealth#alert}) — a ordem é estável ({@code severidade}, depois o id), para o
+	 * recorte exibido não depender da ordem em que a listagem veio do banco. {@code alertsTotal}
+	 * é quantos existem, mesmo quando a lista vem cortada.</p>
+	 */
+	private HealthGroup health(List<NetworkNode> all, Instant now) {
+		Map<String, Integer> ok = new LinkedHashMap<>();
+		Map<String, Integer> degraded = new LinkedHashMap<>();
+		Map<String, Integer> failing = new LinkedHashMap<>();
+		Map<String, Integer> byStatus = new TreeMap<>();
+		List<HealthAlert> alertas = new java.util.ArrayList<>();
+		int contados = 0;
+		int medidos = 0;
+		for (NodeHealth.Dimension d : NodeHealth.Dimension.values()) {
+			ok.put(d.name(), 0);
+			degraded.put(d.name(), 0);
+			failing.put(d.name(), 0);
+		}
+		for (NetworkNode node : all) {
+			byStatus.merge(node.status().name(), 1, Integer::sum);
+			if (node.status() == NodeStatus.PENDING_APPROVAL) {
+				continue;
+			}
+			contados++;
+			Long behind = behindOf(node.id(), medidos < MAX_HEALTH_BEHIND_NODES);
+			if (behind != null) {
+				medidos++;
+			}
+			NodeHealth painel = NodeHealth.of(node, behind == null ? 0 : behind, now);
+			for (NodeHealth.Dimension d : NodeHealth.Dimension.values()) {
+				NodeHealth.State estado = d.of(painel);
+				if (estado == NodeHealth.State.OK) {
+					ok.merge(d.name(), 1, Integer::sum);
+				}
+				else if (estado == NodeHealth.State.DEGRADED) {
+					degraded.merge(d.name(), 1, Integer::sum);
+				}
+				else if (estado == NodeHealth.State.FAILING) {
+					failing.merge(d.name(), 1, Integer::sum);
+				}
+			}
+			NodeHealth.Alert alerta = NodeHealth.alert(painel, node, now, behind == null ? 0 : behind);
+			if (alerta != null) {
+				alertas.add(new HealthAlert(node.id(), node.displayName(), alerta.dimension(), alerta.code(),
+					alerta.reason()));
+			}
+		}
+		alertas.sort(Comparator.comparingInt((HealthAlert a) -> severidade(a.code()))
+			.thenComparing(HealthAlert::nodeId)
+			.thenComparing(HealthAlert::code));
+		return new HealthGroup(contados, byStatus, ok, degraded, failing, medidos == contados,
+			List.copyOf(alertas.subList(0, Math.min(alertas.size(), MAX_HEALTH_ALERTS))), alertas.size());
+	}
+
+	/**
+	 * O atraso de sincronização do nó — agregados em versão anterior à da origem. {@code null} é
+	 * "não consultei" (acima do teto), nunca "está em dia": a dimensão de aplicação afirma saúde a
+	 * partir dele.
+	 */
+	private Long behindOf(String nodeId, boolean medir) {
+		if (!medir) {
+			return null;
+		}
+		long behind = 0;
+		for (ContentKind kind : ContentKind.values()) {
+			behind += versions.countBehind(nodeId, kind);
+		}
+		return behind;
+	}
+
+	/**
+	 * A urgência do código, para a lista de alertas: o que tira o nó da rede vem antes do que o faz
+	 * servir pior. Código que não está aqui cai no fim, e o teste de ordem obriga a classificá-lo.
+	 */
+	static int severidade(String code) {
+		return switch (code) {
+			case "NODE_REVOKED", "NODE_SUSPENDED", "NODE_SILENT" -> 0;
+			case "NODE_QUARANTINED", "NODE_NO_WORK" -> 1;
+			case "NODE_FAILING", "NODE_BEHIND" -> 2;
+			case "NODE_SATURATED", "NODE_MEMORY_FULL", "NODE_FULL" -> 3;
+			default -> 4;
+		};
+	}
+
+	private static long segundosDesde(NetworkNode node, Instant now) {
+		return node.lastSeenAt() == null ? -1 : Math.max(0, Duration.between(node.lastSeenAt(), now).getSeconds());
+	}
+
+	/**
+	 * As quatro dimensões contadas na rede e os alertas do §8.8.
+	 *
+	 * @param countedNodes  nós no quadro (todos, menos {@code PENDING_APPROVAL})
+	 * @param byStatus      quantos nós em cada status do catálogo, para a tela explicar a diferença
+	 * @param ok            por dimensão ({@code HOST}, {@code RUNTIME}, {@code APPLICATION},
+	 *                      {@code NETWORK}), quantos nós estão {@code OK}
+	 * @param degraded      idem, quantos atendem com defeito
+	 * @param failing       idem, quantos não atendem
+	 * @param measured      {@code true} quando o atraso de <b>todos</b> os nós do quadro foi consultado
+	 * @param alerts        os alertas mais urgentes (recorte de {@code alertsTotal})
+	 * @param alertsTotal   quantos alertas existem no quadro inteiro
+	 */
+	public record HealthGroup(int countedNodes, Map<String, Integer> byStatus, Map<String, Integer> ok,
+			Map<String, Integer> degraded, Map<String, Integer> failing, boolean measured, List<HealthAlert> alerts,
+			int alertsTotal) {
+	}
+
+	/**
+	 * @param nodeId    o nó do alerta
+	 * @param nodeName  o nome que o operador vê
+	 * @param dimension dimensão da saúde onde o fato aparece
+	 * @param code      código estável ({@code NODE_SILENT}, {@code NODE_SATURATED}, …)
+	 * @param reason    a frase com o número e o porquê
+	 */
+	public record HealthAlert(String nodeId, String nodeName, NodeHealth.Dimension dimension, String code,
+			String reason) {
 	}
 
 	/**

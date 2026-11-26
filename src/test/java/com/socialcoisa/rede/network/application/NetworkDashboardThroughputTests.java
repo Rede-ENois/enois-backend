@@ -65,7 +65,12 @@ class NetworkDashboardThroughputTests {
 		when(regions.outOfService()).thenReturn(List.of());
 		samples = mock(NodeObservabilityRepository.class);
 		when(samples.samples(anyString(), anyInt())).thenReturn(List.of());
-		service = new NetworkDashboardService(nodes, regions, tasks, samples, Clock.fixed(NOW, ZoneOffset.UTC));
+		com.socialcoisa.rede.network.application.port.out.ContentVersionRepository versions =
+			mock(com.socialcoisa.rede.network.application.port.out.ContentVersionRepository.class);
+		when(versions.countBehind(anyString(), org.mockito.ArgumentMatchers.any(
+			com.socialcoisa.rede.network.domain.ContentKind.class))).thenReturn(0L);
+		service = new NetworkDashboardService(nodes, regions, tasks, samples, versions,
+			Clock.fixed(NOW, ZoneOffset.UTC));
 	}
 
 	private static NetworkNode node(String id, NodeStatus status, Instant lastSeen, Long bytesInMb) {
