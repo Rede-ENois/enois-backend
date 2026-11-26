@@ -51,7 +51,7 @@ O brief (§8.2) pede, por nó: uso de rede e throughput de entrada e saída. Hoj
 | CPU total, memória, disco livre | **entregue** (heartbeat → painel por nó) |
 | tarefas em execução, versão do runtime, último contato | **entregue** |
 | uso de rede / throughput (entrada e saída) | **não medido pelo runtime**, coluna pronta no banco |
-| swap, pressão de memória, IOPS, latência de disco, temperatura, GC, threads, p95/p99 de tarefa, DLQ | **swap e pressão desde o ciclo 157** (§7); **IOPS e latência de disco desde o 158** (§8 e §9); **temperatura desde o 159** (§10); **p95/p99 do tempo de execução das tarefas desde o 160** (§11). GC/threads (o runtime é shell, não JVM), p95/p99 de requisição HTTP e DLQ por fila seguem inexistentes — ver `docs/rede-distribuida/11-global-coop-fase-0.md` §3 |
+| swap, pressão de memória, IOPS, latência de disco, temperatura, GC, threads, p95/p99 de tarefa, DLQ por fila | **swap e pressão desde o ciclo 157** (§7); **IOPS e latência de disco desde o 158** (§8 e §9); **temperatura desde o 159** (§10); **p95/p99 do tempo de execução das tarefas desde o 160** (§11); **DLQ por fila desde o 161** (`deadByQueue`, doc 03). GC/threads (o runtime é shell, não JVM) e p95/p99 de requisição HTTP não existem — ver `docs/rede-distribuida/11-global-coop-fase-0.md` §3 |
 
 ## 5. O que o mantenedor precisa conferir no deploy (não é código)
 
@@ -81,10 +81,7 @@ Provas: `NetworkParticipantTrafficTests` (2 casos novos no painel de admin — m
 `network-nodes-section` do DS (2 casos: medido e ausência/metade).
 
 **O que continua faltando do §8.2 do brief** (medido, não estimado): GC/threads do runtime (o
-runtime não é JVM — é shell), p95/p99 de **requisição HTTP** (o `MonitoringService` mede a do
-Control Plane, não a de cada nó), DLQ por fila. (Swap e pressão de memória entraram no ciclo 157 —
-§7; IOPS e latência de disco, no ciclo 158 — §8 e §9; temperatura, no ciclo 159 — §10; p95/p99 do
-tempo de execução das tarefas por nó, no ciclo 160 — §11.)
+runtime não é JVM — é shell) e p95/p99 de **requisição HTTP** (o `MonitoringService` mede a do Control Plane, não a de cada nó). (Swap e pressão de memória entraram no ciclo 157 — §7; IOPS e latência de disco, no ciclo 158 — §8 e §9; temperatura, no ciclo 159 — §10; p95/p99 do tempo de execução das tarefas por nó, no ciclo 160 — §11; a DLQ por fila, no 161 — §12.)
 
 ## 7. A memória em duas medidas, swap e pressão (ciclo 157)
 
@@ -284,3 +281,15 @@ ignorar a janela derruba 1; gravar sem truncar a hora derruba 1; somar sem o nó
 `node-task-latency-migration-test` **14 PASS / 0 FAIL** em MariaDB 11.4 real: `V386` aplicada duas
 vezes, nó/tarefa anteriores preservados, chave composta, `utf8mb4`, upsert somando na mesma linha,
 janela de 24 h separando hoje de anteontem. Mutação (V386 vazia) derruba **6**.
+
+## 12. DLQ por fila (ciclo 161)
+
+O `dead` do `/admin/network/tasks/overview` dizia **que** havia tarefa esgotada, não **qual fila**.
+`deadByQueue` abre a conta por tipo de tarefa, só nos estados terminais sem sucesso (`DEAD`,
+`FAILED`, `CANCELLED`): "8 mortas em `OBJECT_PUT`" (replicação) e "8 mortas em `MEDIA_THUMBNAIL`"
+(encoder) pedem ações diferentes. Uma consulta agrupada por tipo e estado, não uma por tipo. Tipo sem
+essas tarefas não aparece; o quadro vem vazio quando não há nada terminal.
+
+Provas: `NetworkTaskQueueTests` (3 casos: duas filas mortas não se misturam e tarefa viva não entra;
+falhada e cancelada separadas da morta; quadro vazio sem terminal). Mutações conferidas: tudo numa
+fila só derruba 1; estado ignorado (tudo `DEAD`) derruba 3; todos os estados no quadro derruba 1.

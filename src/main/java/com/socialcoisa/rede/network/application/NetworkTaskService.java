@@ -4,9 +4,12 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
+import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -525,6 +528,34 @@ public class NetworkTaskService {
 	@Transactional(readOnly = true)
 	public long countByStatus(TaskStatus status) {
 		return tasks.countByStatus(status);
+	}
+
+	/**
+	 * O quadro de filas do painel: por tipo de tarefa, quantas estão em cada estado (brief §8.2, "DLQ
+	 * por fila").
+	 *
+	 * <p>O total de {@code DEAD} diz <i>que</i> há DLQ; não diz <i>qual</i> fila parou de funcionar.
+	 * Com o quadro por tipo, "8 mortas em {@code OBJECT_PUT}" e "8 mortas em {@code MEDIA_THUMBNAIL}"
+	 * viram coisas diferentes — a primeira é replicação, a segunda é encoder —, e é a linha que precisa
+	 * de olho que fica visível sem abrir tarefa por tarefa.</p>
+	 *
+	 * <p>Tipo sem tarefa em estado nenhum aparece com o mapa vazio: a fila existe no contrato, e uma
+	 * fila saudável e vazia é informação. Estado sem tarefa não entra no mapa — ausência é zero, e o
+	 * painel não precisa de 63 chaves para desenhar o quadro.</p>
+	 */
+	public Map<TaskType, Map<TaskStatus, Long>> queues(TaskStatus... statuses) {
+		Set<TaskStatus> wanted = statuses.length == 0 ? EnumSet.allOf(TaskStatus.class)
+			: EnumSet.copyOf(List.of(statuses));
+		Map<TaskType, Map<TaskStatus, Long>> quadro = new EnumMap<>(TaskType.class);
+		for (TaskType tipo : TaskType.values()) {
+			quadro.put(tipo, new EnumMap<>(TaskStatus.class));
+		}
+		for (var celula : tasks.countByQueueAndStatus()) {
+			if (wanted.contains(celula.status())) {
+				quadro.get(celula.taskType()).merge(celula.status(), celula.tasks(), Long::sum);
+			}
+		}
+		return quadro;
 	}
 
 	/**

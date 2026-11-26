@@ -289,6 +289,15 @@ vigente, audita cada devolução como `NETWORK_TASK_DRAINED` e designa de novo n
 painel (`GET /admin/network/tasks/overview`) expõe `awaitingDrain`: quantas do `dispatched` estão
 presas a nó fora de operação entre a suspensão e a varredura seguinte.
 
+### DLQ por fila (painel)
+
+`DEAD` é a DLQ: a tarefa esgotou as tentativas e não volta sozinha. O `dead` do `/overview` conta o
+total; o campo **`deadByQueue`** abre a conta por fila, no formato
+`{ "<TASK_TYPE>": { "<STATUS>": <n> } }` — só os estados terminais sem sucesso (`DEAD`, `FAILED`,
+`CANCELLED`), porque é deles que o operador precisa saber a origem. Um tipo sem nenhuma tarefa nesses
+estados não aparece (quadro vazio quando não há nada terminal). É leitura de uma consulta agrupada
+por tipo e estado — o painel pede o quadro inteiro de uma vez.
+
 ### Região no escalonamento (ADR-012)
 
 A ordem de escolha do nó é **degradação → origem (`NODE_LOCAL`, ADR-010) → região → folga →
