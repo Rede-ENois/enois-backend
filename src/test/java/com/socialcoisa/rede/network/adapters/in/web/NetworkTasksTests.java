@@ -473,8 +473,12 @@ class NetworkTasksTests {
 		}
 		assertThat(modes.evaluate()).isEqualTo(NetworkMode.HIGH_LOAD);
 
-		// A fila esvazia (as tarefas foram designadas): volta a NORMAL pelo número medido.
-		jdbc.update("update network_tasks set status = 'DONE'");
+		// A fila esvazia (as tarefas foram designadas): volta a NORMAL pelo número medido. O filtro é
+		// desta classe: a base H2 é compartilhada entre classes, e um `update` sem `where` marca DONE
+		// as tarefas de outro contexto que ainda as tem em memória — o `attempt` lido antes fica
+		// obsoleto, o resultado do outro teste é descartado (`TASK_ATTEMPT_STALE`) e ele falha por um
+		// efeito que não mediu.
+		jdbc.update("update network_tasks set status = 'DONE' where idempotency_key like 'load-%'");
 		assertThat(modes.evaluate()).isEqualTo(NetworkMode.NORMAL);
 	}
 

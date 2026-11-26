@@ -63,6 +63,10 @@ class NetworkTaskLatencyTests {
 		jdbc.update("delete from network_node_logs");
 		jdbc.update("delete from network_node_samples");
 		jdbc.update("delete from network_task_latency_buckets");
+		// O modo da rede é global e a base H2 é compartilhada: `EMERGENCY` (deixado por outro cenário)
+		// faz `dispatchPending` devolver 0, e a tarefa deste teste ficaria PENDING para sempre. O
+		// cenário precisa de NORMAL explicitamente, não do que a classe anterior deixou.
+		jdbc.update("delete from network_state");
 		jdbc.update("delete from network_tasks");
 		jdbc.update("delete from network_node_keys");
 		jdbc.update("delete from network_provision_tokens");
@@ -124,7 +128,7 @@ class NetworkTaskLatencyTests {
 		String taskId = enqueueAndDispatch(node, 500);
 		jdbc.update("update network_tasks set dispatched_at = ? where id = ?",
 			java.sql.Timestamp.from(java.time.Instant.now().minusSeconds(1)), taskId);
-		report(node, taskId, 1, "FAILED", Map.of("code", "TASK_FAILED", "retryable", false));
+		report(node, taskId, "FAILED", Map.of("code", "TASK_FAILED", "retryable", false));
 
 		Integer samples = jdbc.queryForObject(
 			"select coalesce(sum(samples), 0) from network_task_latency_buckets where node_id = ?", Integer.class,
@@ -206,7 +210,7 @@ class NetworkTaskLatencyTests {
 	/** Enfileira, coloca no nó e conclui com um tempo de execução forjado em milissegundos. */
 	private void complete(Node node, long durationMs) throws Exception {
 		String taskId = enqueueAndDispatch(node, durationMs);
-		report(node, taskId, 1, "DONE", null);
+		report(node, taskId, "DONE", null);
 	}
 
 	private String enqueueAndDispatch(Node node, long durationMs) {
@@ -216,14 +220,29 @@ class NetworkTaskLatencyTests {
 			new NetworkTaskService.EnqueueCommand(TaskType.ASYNC_JOB, "lat-" + java.util.UUID.randomUUID(), "{}",
 				DataClass.PUBLIC, null, null, node.id()));
 		tasks.dispatchPending();
+		// A tarefa TEM de ter saído da fila: resultado de tarefa PENDING é descartado
+		// (`TASK_ATTEMPT_STALE`), e o teste mediria zero amostras sem dizer por quê.
+		var despacho = jdbc.queryForMap(
+			"select status, assigned_node_id from network_tasks where id = ?", task.id());
+		assertThat(despacho.get("STATUS")).as("a tarefa saiu da fila para o nó do cenário")
+			.isEqualTo("DISPATCHED");
+		assertThat(despacho.get("ASSIGNED_NODE_ID")).isEqualTo(node.id());
 		// O resultado é reportado agora; para o tempo de execução ser o desejado, o DESPACHO recua.
 		jdbc.update("update network_tasks set dispatched_at = ? where id = ?",
 			java.sql.Timestamp.from(java.time.Instant.now().minusMillis(durationMs)), task.id());
 		return task.id();
 	}
 
-	private void report(Node node, String taskId, int attempt, String status, Map<String, Object> error)
-			throws Exception {
+	/**
+	 * Reporta o resultado com o `attempt` que a linha tem AGORA no banco.
+	 *
+	 * <p>O `attempt` em memória do objeto enfileirado pode ter ficado velho se outro contexto mexeu
+	 * na linha (a base H2 é compartilhada). O serviço descarta o resultado com `TASK_ATTEMPT_STALE` e
+	 * responde 200 — o teste passaria a medir "nada aconteceu", não a latência. Quem quiser provar
+	 * que o resultado foi <b>aplicado</b> tem de usar o número que o banco guarda.</p>
+	 */
+	private void report(Node node, String taskId, String status, Map<String, Object> error) throws Exception {
+		int attempt = jdbc.queryForObject("select attempt from network_tasks where id = ?", Integer.class, taskId);
 		Map<String, Object> body = new HashMap<>();
 		body.put("taskId", taskId);
 		body.put("attempt", attempt);
@@ -231,11 +250,16 @@ class NetworkTaskLatencyTests {
 		if (error != null) {
 			body.put("error", error);
 		}
-		mockMvc
+		var resposta = mockMvc
 			.perform(post("/network/tasks/" + taskId + "/result").header("X-Node-Id", node.id())
 				.header("X-Node-Key", node.key()).contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(body)))
-			.andExpect(status().isOk());
+			.andExpect(status().isOk())
+			.andReturn().getResponse().getContentAsString();
+		// Resultado descartado não é conclusão: o cenário que mede latência não pode seguir assim.
+		if (!"FAILED".equals(status)) {
+			assertThat(resposta).as("o resultado de %s foi aplicado", taskId).doesNotContain("TASK_ATTEMPT_STALE");
+		}
 	}
 
 	private String adminToken() throws Exception {

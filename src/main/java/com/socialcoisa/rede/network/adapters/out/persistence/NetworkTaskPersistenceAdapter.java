@@ -162,6 +162,15 @@ class NetworkTaskPersistenceAdapter implements NetworkTaskRepository {
 	}
 
 	@Override
+	public List<QueueCount> countByQueueAndStatus() {
+		return repository.countGroupedByQueueAndStatus()
+			.stream()
+			.map(row -> new QueueCount(TaskType.valueOf(row.getTaskType()), TaskStatus.valueOf(row.getStatus()),
+				row.getTasks()))
+			.toList();
+	}
+
+	@Override
 	public Map<String, Long> countDoneByNode(Collection<String> nodeIds) {
 		if (nodeIds.isEmpty()) {
 			return Map.of();
