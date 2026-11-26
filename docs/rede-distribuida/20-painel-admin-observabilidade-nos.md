@@ -53,7 +53,7 @@ O brief (§8.2) pede, por nó: uso de rede e throughput de entrada e saída. Hoj
 | CPU total, memória, disco livre | **entregue** (heartbeat → painel por nó) |
 | tarefas em execução, versão do runtime, último contato | **entregue** |
 | uso de rede / throughput (entrada e saída) | **medido desde o ciclo 161** — o runtime soma o acumulado de `/proc/net/dev` (interfaces externas) no heartbeat; o painel mostra o total e a fatia de saída |
-| swap, pressão de memória, IOPS, latência de disco, temperatura, GC, threads, p95/p99 de tarefa, DLQ por fila | **swap e pressão desde o ciclo 157** (§7); **IOPS e latência de disco desde o 158** (§8 e §9); **temperatura desde o 159** (§10); **p95/p99 do tempo de execução das tarefas desde o 160**; **retentativas desde o ciclo 162** (§11.1) (§11); **DLQ por fila desde o 161** (`deadByQueue`, doc 03). GC/threads (o runtime é shell, não JVM) e p95/p99 de requisição HTTP não existem — ver `docs/rede-distribuida/11-global-coop-fase-0.md` §3 |
+| swap, pressão de memória, IOPS, latência de disco, temperatura, GC, threads, p95/p99 de tarefa, DLQ por fila | **swap e pressão desde o ciclo 157** (§7); **IOPS e latência de disco desde o 158** (§8 e §9); **temperatura desde o 159** (§10); **p95/p99 do tempo de execução das tarefas desde o 160**; **retentativas desde o ciclo 162** (§11.1); **DLQ por fila desde o 161** (`deadByQueue`, doc 03). **p50/p95/p99 de requisição HTTP do Control Plane desde o 163** (§11.2, com o tamanho da amostra); GC/threads (o runtime é shell, não JVM) não existem — ver `docs/rede-distribuida/11-global-coop-fase-0.md` §3 |
 
 ## 5. O que o mantenedor precisa conferir no deploy (não é código)
 
@@ -329,6 +329,35 @@ o filtro derruba 1; gravar a tentativa no contador da duração derruba 1. `node
 **11 PASS / 0 FAIL** em MariaDB 11.4 real: V387 aplicada duas vezes, duração anterior preservada com
 `retries` 0, upsert somando na mesma linha sem mexer em `samples`, 2ª aplicação sem tocar dado vivo.
 Mutações conferidas: coluna anulável derruba 3; sem `if not exists` derruba a 2ª aplicação.
+
+## 11.2 p50/p95/p99 de requisição HTTP do Control Plane (ciclo 163)
+
+O §8.2 pede a latência de <b>aplicação</b> (p50/p95/p99 de requisição), que é outra métrica da §11:
+ali é o tempo de execução das <b>tarefas</b>, por nó e por faixa; aqui é a duração de cada
+<b>requisição HTTP ao Control Plane</b>, medida pelo filtro e agregada por minuto no
+`MonitoringService` (`/admin/monitoring/overview`, campos `p50Ms`, `p95Ms`, `p99Ms`).
+
+**O que já existia e estava certo.** O percentil é o nearest-rank sobre as durações reais dos
+últimos 5 minutos (teto de 2000 por minuto). Ao medir, o cálculo parecia ter erro de representação
+(codei `ceil(n * p)` sem folga e supus que o `double` pulava uma posição) — <b>verifiquei e não tem</b>:
+para todo n de 1 a 2000, com p em 0,50, 0,95 e 0,99, o produto é exato e a folga de `1e-9` não move
+posição nenhuma. O código do percentil ficou como estava e o comentário diz isso; não se "conserta" o
+que não está quebrado.
+
+**O que faltava.** O p95 era um número sem denominador: a resposta não dizia sobre quantas
+requisições ele foi calculado. `latencySamplesInWindow` (aditivo, inteiro) acompanha os percentis —
+"p95 em 3 s" sobre duas requisições não é a mesma afirmação que sobre duas mil, e a §8.2 pede a
+métrica para apoiar decisão. Minuto sem requisição continua 0 no ponto da série (o contrato antigo do
+campo, que o painel lê como "sem dado") e não herda o p95 do minuto vizinho.
+
+Provas: `MonitoringRequestLatencyTests` (3 casos: 2000 durações distintas 1..2000 ms — p50 na
+posição 1000, p95 na 1900, p99 na 1980, com `latencySamplesInWindow` 2000; duas amostras, p95 no
+maior e o denominador 2; relógio fixo, minuto vazio com p95 0 e o corrente com o valor). Mutações
+conferidas: `latencySamplesInWindow` fixo em 0 derruba 2; o minuto vazio herdando o p95 derruba 1. Um
+mutante inerte (o ponto ocupado usando a lista da janela) foi <b>descartado</b>: com uma única
+amostra o valor é o mesmo e ele não muda comportamento. O relógio do teste é fixo de propósito: a
+leitura de `overview` corta a série em `clock.millis()`, e com relógio real a virada do minuto entre
+as duas leituras faria o ponto "corrente" mudar de posição.
 
 ## 12. DLQ por fila (ciclo 161)
 
