@@ -119,10 +119,17 @@ class NetworkNodeController {
 	 * <p>{@code bytesInMb}/{@code bytesOutMb} são o tráfego ACUMULADO nas interfaces
 	 * dele (brief §18, "consultar tráfego"); o Control Plane só recebe a contagem e não soma nada
 	 * por conta própria — quem transfere é a máquina do participante, e é ela que mede.
+	 *
+	 * <p>{@code netInMbps}/{@code netOutMbps} são outra medida: a TAXA de entrada e saída em MiB/s
+	 * (brief §8.2, "Throughput de entrada e saída"), calculada pelo nó entre dois ciclos. Não é o
+	 * acumulado dividido por nada — o runtime guarda o instante da medição anterior e divide por ele,
+	 * porque intervalo que o servidor não viu não pode ser reconstruído depois. Nulo é "não medido"
+	 * (runtime anterior, primeiro ciclo sem anterior, contador que retrocedeu), nunca 0.</p>
 	 */
 	record Observed(Double cpuPercent, Integer memoryMb, Integer memoryAvailableMb, Integer runningTasks,
 			Long diskFreeMb, Long diskTotalMb, Double diskIops, Double diskLatencyMs, Double temperatureC, Long usedMb,
-			Long bytesInMb, Long bytesOutMb, Integer threads, Long swapUsedMb, Double memoryPressurePercent) {
+			Long bytesInMb, Long bytesOutMb, Integer threads, Long swapUsedMb, Double memoryPressurePercent,
+			Double netInMbps, Double netOutMbps) {
 	}
 
 	/**
@@ -275,7 +282,7 @@ class NetworkNodeController {
 			observability.record(updated, observed.cpuPercent(), updated.observedMemoryMb(), observed.diskFreeMb(),
 				observed.runningTasks(), updated.observedDiskIops(), updated.observedDiskLatencyMs(),
 				graus(observed.temperatureC()), observed.threads(), observed.swapUsedMb(),
-				observed.memoryPressurePercent());
+				observed.memoryPressurePercent(), observed.netInMbps(), observed.netOutMbps());
 		}
 		if (request != null && request.logs() != null) {
 			for (LogRequest line : request.logs()) {

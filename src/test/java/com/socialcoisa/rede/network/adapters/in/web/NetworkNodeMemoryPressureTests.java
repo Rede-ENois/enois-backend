@@ -131,6 +131,69 @@ class NetworkNodeMemoryPressureTests {
 			.andExpect(jsonPath("$.series[0].swapUsedMb").value(300));
 	}
 
+	@Test
+	void aTaxaDeRedeDoHeartbeatViraAMostraEApareceNoResumo() throws Exception {
+		String admin = adminToken();
+		Node node = activeNode(admin, "taxa");
+
+		heartbeat(node, Map.of("cpuPercent", 3.0, "runningTasks", 0,
+			// O acumulado e a taxa são medidas diferentes e chegam no mesmo corpo: o acumulado é do
+			// painel do participante (§18), a taxa é do throughput (§8.2).
+			"bytesInMb", 9_000L, "bytesOutMb", 1_000L, "netInMbps", 1.25, "netOutMbps", 0.5));
+
+		Map<String, Object> linha = jdbc.queryForMap(
+			"select net_in_mbps, net_out_mbps from network_node_samples where node_id = ?", node.id());
+		assertThat(((Number) linha.get("net_in_mbps")).doubleValue()).as("taxa de entrada do corpo")
+			.isEqualTo(1.25);
+		assertThat(((Number) linha.get("net_out_mbps")).doubleValue()).as("taxa de saída do corpo")
+			.isEqualTo(0.5);
+
+		mockMvc.perform(get("/admin/network/nodes/" + node.id() + "/observability").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.summary.netInMbpsLatest").value(1.25))
+			.andExpect(jsonPath("$.summary.netOutMbpsLatest").value(0.5));
+	}
+
+	@Test
+	void runtimeQueSoMandaOAcumuladoDeixaATaxaNulaENaoZero() throws Exception {
+		String admin = adminToken();
+		Node node = activeNode(admin, "sem-taxa");
+
+		// Runtime anterior: manda o acumulado e não mediu o intervalo. A taxa não é o acumulado
+		// dividido por nada — nula é "não medido", e 0 afirmaria "nada passou".
+		heartbeat(node, Map.of("cpuPercent", 3.0, "runningTasks", 0, "bytesInMb", 9_000L, "bytesOutMb", 1_000L));
+
+		Map<String, Object> linha = jdbc.queryForMap(
+			"select net_in_mbps, net_out_mbps from network_node_samples where node_id = ?", node.id());
+		assertThat(linha.get("net_in_mbps")).as("taxa não medida é nula").isNull();
+		assertThat(linha.get("net_out_mbps")).as("taxa não medida é nula").isNull();
+
+		mockMvc.perform(get("/admin/network/nodes/" + node.id() + "/observability").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.summary.netInMbpsLatest").doesNotExist())
+			.andExpect(jsonPath("$.summary.netOutMbpsLatest").doesNotExist());
+	}
+
+	@Test
+	void oPontoNovoSemATaxaNaoApagaOUltimoValorMedido() throws Exception {
+		String admin = adminToken();
+		Node node = activeNode(admin, "taxa-lacuna");
+
+		heartbeat(node, Map.of("cpuPercent", 3.0, "runningTasks", 0, "netInMbps", 2.5, "netOutMbps", 1.5));
+		// O ponto seguinte não mediu a taxa (o contador retrocedeu, interface recriada). Pegar a
+		// amostra mais nova mostraria "não medido" para uma máquina que mediu 2,5 MiB/s há um minuto.
+		jdbc.update("insert into network_node_samples (node_id, sampled_at, cpu_percent, running_tasks) "
+			+ "values (?, dateadd('MINUTE', 1, current_timestamp), 4.0, 0)", node.id());
+
+		mockMvc.perform(get("/admin/network/nodes/" + node.id() + "/observability").header("X-Session-Token", admin))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.summary.netInMbpsLatest").value(2.5))
+			.andExpect(jsonPath("$.summary.netOutMbpsLatest").value(1.5))
+			// A série continua com a lacuna no ponto novo: trocar o resumo não inventa medida.
+			.andExpect(jsonPath("$.series[-1].netInMbps").doesNotExist())
+			.andExpect(jsonPath("$.series[0].netInMbps").value(2.5));
+	}
+
 	private void heartbeat(Node node, Map<String, Object> observed) throws Exception {
 		Map<String, Object> body = new HashMap<>();
 		body.put("runtimeVersion", "0.1.0");

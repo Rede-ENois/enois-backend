@@ -83,7 +83,13 @@ class NetworkDashboardDistributionTests {
 
 		NetworkRegionService regions = mock(NetworkRegionService.class);
 		when(regions.outOfService()).thenReturn(List.of());
-		service = new NetworkDashboardService(nodes, regions, tasks, Clock.fixed(NOW, ZoneOffset.UTC));
+		// Sem amostra gravada: o throughput global fica "não medido" nestes casos, que são da
+		// distribuição de trabalho (a taxa tem teste próprio, NetworkDashboardThroughputTests).
+		com.socialcoisa.rede.network.application.port.out.NodeObservabilityRepository samples =
+			mock(com.socialcoisa.rede.network.application.port.out.NodeObservabilityRepository.class);
+		when(samples.samples(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyInt()))
+			.thenReturn(List.of());
+		service = new NetworkDashboardService(nodes, regions, tasks, samples, Clock.fixed(NOW, ZoneOffset.UTC));
 	}
 
 	private static NetworkNode node(String id, NodeStatus status, Integer runningNow) {

@@ -124,11 +124,24 @@ public class NodeObservabilityService {
 	public void record(NetworkNode node, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
 			Integer runningTasks, Double diskIops, Double diskLatencyMs, java.math.BigDecimal temperatureC,
 			Integer threads, Long swapUsedMb, Double memoryPressurePercent) {
+		record(node, cpuPercent, memoryMb, diskFreeMb, runningTasks, diskIops, diskLatencyMs, temperatureC, threads,
+			swapUsedMb, memoryPressurePercent, null, null);
+	}
+
+	/**
+	 * A amostra com a TAXA de rede medida (brief §8.2, "Throughput de entrada e saída"). Não é o
+	 * acumulado do heartbeat: são MiB por segundo, o que está passando agora — nulo quando o runtime
+	 * não mediu o intervalo, e nunca 0, que afirmaria "nada passou".
+	 */
+	@Transactional
+	public void record(NetworkNode node, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
+			Integer runningTasks, Double diskIops, Double diskLatencyMs, java.math.BigDecimal temperatureC,
+			Integer threads, Long swapUsedMb, Double memoryPressurePercent, Double netInMbps, Double netOutMbps) {
 		Instant now = clock.instant();
 		Instant minute = now.truncatedTo(java.time.temporal.ChronoUnit.MINUTES);
 		repository.saveSample(new Sample(node.id(), minute, cpuPercent, memoryMb, diskFreeMb, runningTasks, null,
 			node.status().name(), null, diskIops, diskLatencyMs, temperatureC, threads, swapUsedMb,
-			memoryPressurePercent));
+			memoryPressurePercent, netInMbps, netOutMbps));
 		repository.trimSamples(node.id(), SAMPLE_KEEP);
 	}
 
@@ -239,10 +252,15 @@ public class NodeObservabilityService {
 	 * da janela (brief §8.2, "Sistema operacional"), e não o da amostra mais nova: os dois ficam nulos
 	 * quando o kernel não os expõe, e o ponto mais recente sem eles não apaga o último número que
 	 * existiu.</p>
+	 *
+	 * <p>{@code netInMbpsLatest}/{@code netOutMbpsLatest} são o último valor <b>medido</b> da taxa de
+	 * rede (brief §8.2, "Throughput de entrada e saída"), e não o acumulado do heartbeat: o mesmo
+	 * critério de {@link #latestMeasured} — nulo, nunca 0, quando ninguém mediu o intervalo.</p>
 	 */
 	record Summary(Double cpuAvgPercent, Double cpuMaxPercent, Integer memoryMbLatest, Long diskFreeMbLatest,
 			Integer runningTasksLatest, int sampleCount, Double diskIopsLatest, Double diskLatencyMsLatest,
-			java.math.BigDecimal temperatureCLatest, Long swapUsedMbLatest, Double memoryPressurePercentLatest) {
+			java.math.BigDecimal temperatureCLatest, Long swapUsedMbLatest, Double memoryPressurePercentLatest,
+			Double netInMbpsLatest, Double netOutMbpsLatest) {
 	}
 
 	record View(String id, String at, String level, String message) {
@@ -301,7 +319,8 @@ public class NodeObservabilityService {
 			latest == null ? null : latest.diskFreeMb(), latest == null ? null : latest.runningTasks(),
 			samples.size(), latest == null ? null : latest.diskIops(),
 			latest == null ? null : latest.diskLatencyMs(), latest == null ? null : latest.temperatureC(),
-			latestMeasured(samples, Sample::swapUsedMb), latestMeasured(samples, Sample::memoryPressurePercent));
+			latestMeasured(samples, Sample::swapUsedMb), latestMeasured(samples, Sample::memoryPressurePercent),
+			latestMeasured(samples, Sample::netInMbps), latestMeasured(samples, Sample::netOutMbps));
 	}
 
 	private static java.util.Map<String, Long> logLevels(List<LogLine> logs) {

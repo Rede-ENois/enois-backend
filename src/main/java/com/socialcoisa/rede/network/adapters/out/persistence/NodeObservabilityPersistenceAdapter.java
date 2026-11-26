@@ -24,11 +24,12 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 	 */
 	private static final String UPSERT_SAMPLE = """
 		insert into network_node_samples (node_id, sampled_at, cpu_percent, memory_mb, swap_used_mb,
-		  memory_pressure_percent, disk_free_mb, disk_iops, disk_latency_ms, temperature_c, threads,
-		  running_tasks, queue_depth, mode, activity)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		  memory_pressure_percent, net_in_mbps, net_out_mbps, disk_free_mb, disk_iops, disk_latency_ms,
+		  temperature_c, threads, running_tasks, queue_depth, mode, activity)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		on duplicate key update cpu_percent = values(cpu_percent), memory_mb = values(memory_mb),
 		  swap_used_mb = values(swap_used_mb), memory_pressure_percent = values(memory_pressure_percent),
+		  net_in_mbps = values(net_in_mbps), net_out_mbps = values(net_out_mbps),
 		  disk_free_mb = values(disk_free_mb), disk_iops = values(disk_iops),
 		  disk_latency_ms = values(disk_latency_ms), temperature_c = values(temperature_c),
 		  threads = values(threads), running_tasks = values(running_tasks),
@@ -36,7 +37,7 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 		""";
 
 	private static final String SAMPLE_COLUMNS = "node_id, sampled_at, cpu_percent, memory_mb, swap_used_mb, "
-		+ "memory_pressure_percent, disk_free_mb, "
+		+ "memory_pressure_percent, net_in_mbps, net_out_mbps, disk_free_mb, "
 		+ "disk_iops, disk_latency_ms, temperature_c, threads, running_tasks, queue_depth, mode, activity";
 
 	private static final String LIST_SAMPLES = "select " + SAMPLE_COLUMNS
@@ -93,7 +94,8 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 		nullableLong(rs, "disk_free_mb"), nullableInt(rs, "running_tasks"), nullableInt(rs, "queue_depth"),
 		rs.getString("mode"), rs.getString("activity"), nullableDouble(rs, "disk_iops"),
 		nullableDouble(rs, "disk_latency_ms"), rs.getBigDecimal("temperature_c"), nullableInt(rs, "threads"),
-		nullableLong(rs, "swap_used_mb"), nullableDouble(rs, "memory_pressure_percent"));
+		nullableLong(rs, "swap_used_mb"), nullableDouble(rs, "memory_pressure_percent"),
+		nullableDouble(rs, "net_in_mbps"), nullableDouble(rs, "net_out_mbps"));
 
 	private static final RowMapper<LogLine> LOG_MAPPER = (rs, row) -> new LogLine(rs.getString("id"),
 		rs.getString("node_id"), rs.getTimestamp("logged_at").toInstant(), rs.getString("level"),
@@ -108,10 +110,10 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 	@Override
 	public void saveSample(Sample sample) {
 		jdbc.update(UPSERT_SAMPLE, sample.nodeId(), Timestamp.from(sample.sampledAt()), sample.cpuPercent(),
-			sample.memoryMb(), sample.swapUsedMb(), sample.memoryPressurePercent(), sample.diskFreeMb(),
-			sample.diskIops(), sample.diskLatencyMs(), sample.temperatureC(), sample.threads(),
-			sample.runningTasks(),
-			sample.queueDepth(), sample.mode(), sample.activity());
+			sample.memoryMb(), sample.swapUsedMb(), sample.memoryPressurePercent(), sample.netInMbps(),
+			sample.netOutMbps(), sample.diskFreeMb(), sample.diskIops(), sample.diskLatencyMs(),
+			sample.temperatureC(), sample.threads(), sample.runningTasks(), sample.queueDepth(), sample.mode(),
+			sample.activity());
 	}
 
 	@Override

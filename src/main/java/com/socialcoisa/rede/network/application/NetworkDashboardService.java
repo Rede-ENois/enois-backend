@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.application.port.out.NetworkTaskRepository;
+import com.socialcoisa.rede.network.application.port.out.NodeObservabilityRepository;
 import com.socialcoisa.rede.network.domain.TaskStatus;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NetworkRegions;
@@ -46,13 +47,15 @@ public class NetworkDashboardService {
 	private final NetworkNodeRepository nodes;
 	private final NetworkRegionService regions;
 	private final NetworkTaskRepository tasks;
+	private final NodeObservabilityRepository samples;
 	private final Clock clock;
 
 	NetworkDashboardService(NetworkNodeRepository nodes, NetworkRegionService regions, NetworkTaskRepository tasks,
-			Clock clock) {
+			NodeObservabilityRepository samples, Clock clock) {
 		this.nodes = nodes;
 		this.regions = regions;
 		this.tasks = tasks;
+		this.samples = samples;
 		this.clock = clock;
 	}
 
@@ -132,7 +135,8 @@ public class NetworkDashboardService {
 		return new Dashboard(total, active, unavailable, quarantined, alive, degraded, declaredCores,
 			declaredMemoryMb, freeSlots, cpuSamples == 0 ? null : cpuSum / cpuSamples,
 			cpuSamples, memorySamples == 0 ? null : memorySumMb / memorySamples, memorySamples,
-			byRegion, byProfile, topRuntimes, evacuated, load(all), workTypes(all, evacuated, now));
+			byRegion, byProfile, topRuntimes, evacuated, load(all), workTypes(all, evacuated, now),
+			throughput(all, now));
 	}
 
 	/**
@@ -189,7 +193,71 @@ public class NetworkDashboardService {
 			int declaredCpuCores, int declaredMemoryMb, int freeSlots, Double avgCpuPercent, int cpuSamples,
 			Integer avgMemoryMb, int memorySamples, Map<String, Integer> byRegion, Map<String, Integer> byProfile,
 			Map<String, Integer> runtimeVersions, List<String> outOfServiceRegions, Distribution load,
-			List<WorkCoverage> workTypes) {
+			List<WorkCoverage> workTypes, Throughput throughput) {
+	}
+
+	/**
+	 * O throughput da rede agora — o §8.3 do brief ("throughput global").
+	 *
+	 * <p>Soma das taxas <b>medidas</b> de cada nó vivo neste instante, em MiB/s. Não é a soma dos
+	 * acumulados do heartbeat: um total desde o boot somado à taxa não dá razão nenhuma, e a taxa é
+	 * o que a pergunta do §8.2 pode responder. Só entra quem está {@code ACTIVE} e vivo na janela do
+	 * scheduler: um nó que parou de bater coração há uma hora não tem taxa de agora, e o último
+	 * número dele somaria tráfego que já é passado.</p>
+	 *
+	 * @param inMbps      soma das entradas medidas; {@code null} quando nenhum nó vivo tem taxa
+	 * @param outMbps     soma das saídas medidas; o mesmo critério, campo a campo
+	 * @param measuredNodes quantos nós vivos contribuíram com pelo menos uma das duas medidas
+	 * @param measuredBytesSinceBoot soma do ACUMULADO desde o boot dos nós vivos (painel do
+	 *        participante); {@code null} quando ninguém reportou — é outra pergunta, e não vira taxa
+	 */
+	public record Throughput(Double inMbps, Double outMbps, int measuredNodes, Long measuredBytesSinceBoot) {
+	}
+
+	/**
+	 * A taxa de rede dos nós vivos. Cada campo se soma só sobre os nós que o mediram: um nó com a
+	 * leitura do intervalo falha não empurra a soma para baixo com um zero que ninguém leu, do mesmo
+	 * jeito que a média de CPU ignora quem não reportou CPU.
+	 */
+	private Throughput throughput(List<NetworkNode> all, Instant now) {
+		double in = 0;
+		double out = 0;
+		int entradas = 0;
+		int saidas = 0;
+		java.util.Set<String> medida = new java.util.HashSet<>();
+		long acumulado = 0;
+		int comAcumulado = 0;
+		for (NetworkNode node : all) {
+			if (node.status() != NodeStatus.ACTIVE || !node.alive(now, Duration.ofSeconds(STALE_SECONDS))) {
+				continue;
+			}
+			// O ponto do minuto corrente: a taxa de um minuto atrás não é "agora". O número exibido é
+			// do minuto, e a série é do minuto; um nó cujo último ponto é anterior não soma.
+			List<NodeObservabilityRepository.Sample> ultimo = samples.samples(node.id(), 1);
+			if (ultimo.isEmpty()
+					|| !ultimo.get(0).sampledAt().equals(now.truncatedTo(java.time.temporal.ChronoUnit.MINUTES))) {
+				continue;
+			}
+			NodeObservabilityRepository.Sample ponto = ultimo.get(0);
+			if (ponto.netInMbps() != null) {
+				in += ponto.netInMbps();
+				entradas++;
+			}
+			if (ponto.netOutMbps() != null) {
+				out += ponto.netOutMbps();
+				saidas++;
+			}
+			if (ponto.netInMbps() != null || ponto.netOutMbps() != null) {
+				medida.add(node.id());
+			}
+			if (node.observedBytesInMb() != null) {
+				acumulado += node.observedBytesInMb();
+				comAcumulado++;
+			}
+		}
+		return new Throughput(entradas == 0 ? null : Math.round(in * 100) / 100.0,
+			saidas == 0 ? null : Math.round(out * 100) / 100.0, medida.size(),
+			comAcumulado == 0 ? null : acumulado);
 	}
 
 	/**

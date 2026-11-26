@@ -52,7 +52,7 @@ O brief (§8.2) pede, por nó: uso de rede e throughput de entrada e saída. Hoj
 |---|---|
 | CPU total, memória, disco livre | **entregue** (heartbeat → painel por nó) |
 | tarefas em execução, versão do runtime, último contato | **entregue** |
-| uso de rede / throughput (entrada e saída) | **medido desde o ciclo 161** — o runtime soma o acumulado de `/proc/net/dev` (interfaces externas) no heartbeat; o painel mostra o total e a fatia de saída |
+| uso de rede / throughput (entrada e saída) | **medido desde o ciclo 161** — o runtime soma o acumulado de `/proc/net/dev` (interfaces externas) no heartbeat; o painel mostra o total e a fatia de saída. **A TAXA desde o ciclo 169** (§13): MiB/s do intervalo, medida separada do acumulado |
 | swap, pressão de memória, IOPS, latência de disco, temperatura, GC, threads, p95/p99 de tarefa, DLQ por fila | **swap e pressão desde o ciclo 157** (§7); **IOPS e latência de disco desde o 158** (§8 e §9); **temperatura desde o 159** (§10); **p95/p99 do tempo de execução das tarefas desde o 160**; **retentativas desde o ciclo 162** (§11.1); **DLQ por fila desde o 161** (`deadByQueue`, doc 03). **p50/p95/p99 de requisição HTTP do Control Plane desde o 163** (§11.2, com o tamanho da amostra); **threads do processo do nó desde o 163** (§11.3); GC e heap não se aplicam ao runtime (é shell, não JVM) — ver `docs/rede-distribuida/11-global-coop-fase-0.md` §3 |
 
 ## 5. O que o mantenedor precisa conferir no deploy (não é código)
@@ -454,3 +454,44 @@ remonta os tokens depois de `:` — com o espaço depois de `:` a segunda coluna
 e na ponte, e somar as duas contaria o mesmo tráfego duas vezes. Provas: `node-traffic-test.sh`
 (8 casos, roda o `cycle` real com `/proc/net/dev` forjado); mutações conferidas — separador
 ausente (1 falha), ponte/docker somados (3), posições fixas (3), ausente virando zero (1).
+
+## 13. Taxa de rede medida, e o throughput global (ciclo 169)
+
+O §8.2 pede **throughput** de entrada e saída; o §8.3, **throughput global**. O que existia desde o
+ciclo 58 era o **acumulado** de `/proc/net/dev` — um contador que só sobe, útil para o painel do
+participante ("quanto já passou por aqui", §18) e que não responde "quanto está passando agora".
+Somar os acumulados dos nós não dá razão nenhuma, e a diferença entre dois pontos dividida pelo
+intervalo entre eles não pode ser refeita depois: o intervalo de cada amostra não fica gravado.
+
+| onde | o que passa a existir |
+|---|---|
+| runtime | guarda contadores e instante da medida anterior em `$NODE_HOME/net-prev` e manda `netInMbps`/`netOutMbps` — MiB/s do intervalo — ao lado do acumulado |
+| heartbeat | `observed.netInMbps`/`observed.netOutMbps` (novos, aditivos) |
+| série do minuto | colunas `net_in_mbps`/`net_out_mbps` (V391); o resumo do nó publica `netInMbpsLatest`/`netOutMbpsLatest` |
+| painel global | `GET /admin/network/nodes/dashboard` ganha `throughput`: `inMbps`, `outMbps`, `measuredNodes` e `measuredBytesSinceBoot` |
+
+Decisões:
+
+- **A taxa é medida; o acumulado é outra pergunta.** `bytesInMb`/`bytesOutMb` continuam indo em MiB
+  e são do acumulado desde o boot. A taxa vai em campo próprio, em MiB/s.
+- **Ausente é nulo, nunca 0.** Primeiro ciclo (sem anterior para subtrair), `/proc/net/dev` ilegível
+  e contador que retrocedeu (interface recriada — uma taxa negativa ou de horas não é medida) não
+  mandam o campo. Uma rede ociosa manda `0.000`: foi medido, e nada passou.
+- **O estado avança sempre**, inclusive no ciclo que não mediu: se só avançasse quando medisse, um
+  contador reiniciado deixaria o nó sem taxa até alguém reiniciar o processo.
+- **O global soma só o minuto corrente de nós `ACTIVE` e vivos** na janela do scheduler, e cada
+  campo soma só sobre quem o mediu. Sem nenhuma medida, `inMbps`/`outMbps` são nulos — zero
+  afirmaria "nada passou" para o que ninguém mediu. `measuredBytesSinceBoot` fica em campo próprio
+  para o acumulado não aparecer como se fosse taxa.
+
+Provas: `node-network-throughput-test.sh` (11 casos: roda o `cycle` real com `/proc/net/dev` forjado
+e intervalo fixado no estado); `node-network-throughput-migration-test.sh` (V391 2× em MariaDB
+11.4 real, dados preservados); `NetworkDashboardThroughputTests` (4 casos);
+`NetworkNodeMemoryPressureTests` (3 casos novos: taxa do heartbeat vira amostra, runtime antigo deixa
+nulo, o ponto novo sem taxa não apaga a última medida). Mutações conferidas: taxa derivada do
+acumulado (3 falhas), sem anterior medindo mesmo assim (8), contador que retrocedeu virando taxa (1),
+sem `/proc` mandando zero (8), global somando acumulado (2), morto entrando na soma (1), sem medida
+virando zero (2), adapter descartando a taxa (1), heartbeat descartando a taxa (1), resumo pegando a
+amostra mais nova (1). Uma mutação fica verde por construção — gravar o estado só nos ciclos que
+medem —, porque o ciclo seguinte que mede sobrescreve o estado congelado; ela é inobservável, não
+inútil.

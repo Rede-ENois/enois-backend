@@ -16,26 +16,37 @@ public interface NodeObservabilityRepository {
 	 * Um ponto do gráfico: um por minuto, por nó. {@code threads} é o número de threads do processo
 	 * do runtime no instante do heartbeat (brief §8.2, "Runtime"): nulo é "não medido", e nunca 0.
 	 * {@code swapUsedMb} e {@code memoryPressurePercent} são swap em uso e a espera por memória do
-	 * PSI (brief §8.2, "Sistema operacional"), nulos quando o kernel não expõe.
+	 * PSI (brief §8.2, "Sistema operacional"), nulos quando o kernel não expõe. {@code netInMbps} e
+	 * {@code netOutMbps} são a TAXA de rede em MiB/s (brief §8.2, "Throughput de entrada e saída"),
+	 * nulos sem medição — não são o acumulado que o heartbeat manda para o painel do participante.
 	 */
 	record Sample(String nodeId, Instant sampledAt, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
 			Integer runningTasks, Integer queueDepth, String mode, String activity, Double diskIops,
 			Double diskLatencyMs, java.math.BigDecimal temperatureC, Integer threads, Long swapUsedMb,
-			Double memoryPressurePercent) {
+			Double memoryPressurePercent, Double netInMbps, Double netOutMbps) {
+
+		/** Amostra de runtime anterior à V391: sem a taxa de rede medida. */
+		public Sample(String nodeId, Instant sampledAt, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
+				Integer runningTasks, Integer queueDepth, String mode, String activity, Double diskIops,
+				Double diskLatencyMs, java.math.BigDecimal temperatureC, Integer threads, Long swapUsedMb,
+				Double memoryPressurePercent) {
+			this(nodeId, sampledAt, cpuPercent, memoryMb, diskFreeMb, runningTasks, queueDepth, mode, activity,
+				diskIops, diskLatencyMs, temperatureC, threads, swapUsedMb, memoryPressurePercent, null, null);
+		}
 
 		/** Amostra de runtime anterior à V389: sem swap nem pressão de memória medidos. */
 		public Sample(String nodeId, Instant sampledAt, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
 				Integer runningTasks, Integer queueDepth, String mode, String activity, Double diskIops,
 				Double diskLatencyMs, java.math.BigDecimal temperatureC, Integer threads) {
 			this(nodeId, sampledAt, cpuPercent, memoryMb, diskFreeMb, runningTasks, queueDepth, mode, activity,
-				diskIops, diskLatencyMs, temperatureC, threads, null, null);
+				diskIops, diskLatencyMs, temperatureC, threads, null, null, null, null);
 		}
 
 		/** Amostra de runtime anterior à V380: sem o I/O de disco medido. */
 		public Sample(String nodeId, Instant sampledAt, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
 				Integer runningTasks, Integer queueDepth, String mode, String activity) {
 			this(nodeId, sampledAt, cpuPercent, memoryMb, diskFreeMb, runningTasks, queueDepth, mode, activity, null,
-				null, null, null, null, null);
+				null, null, null, null, null, null, null);
 		}
 
 		/** Amostra de runtime anterior à V382: sem a temperatura da máquina. */
@@ -43,7 +54,7 @@ public interface NodeObservabilityRepository {
 				Integer runningTasks, Integer queueDepth, String mode, String activity, Double diskIops,
 				Double diskLatencyMs) {
 			this(nodeId, sampledAt, cpuPercent, memoryMb, diskFreeMb, runningTasks, queueDepth, mode, activity,
-				diskIops, diskLatencyMs, null, null, null, null);
+				diskIops, diskLatencyMs, null, null, null, null, null, null);
 		}
 	}
 

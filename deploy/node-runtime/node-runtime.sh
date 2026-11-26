@@ -60,6 +60,12 @@ DISKSTATE_FILE="$NODE_HOME/disk-prev"
 # O arquivo de contadores do kernel lido pela medição de I/O do ciclo. Variável e não caminho fixo
 # para o harness poder servir contadores conhecidos; em produção o padrão é o do kernel.
 DISKSTATS_FILE="${DISKSTATS_FILE:-/proc/diskstats}"
+# Contadores de rede (acumulado, em BYTES) e instante da medida anterior, para a TAXA de entrada e
+# saída do intervalo. Mesmo motivo do disco: `cycle` roda num processo por volta, então o intervalo
+# que só o processo anterior viu fica em arquivo. É uma medida SEPARADA do acumulado que vai para o
+# painel do participante — aquele é o total desde o boot, este é MiB/s.
+NETSTATE_FILE="$NODE_HOME/net-prev"
+NET_DEV_FILE="${NET_DEV_FILE:-/proc/net/dev}"
 # Sensores de temperatura lidos pela mesma razão: caminho fixo em produção, sobreponível no harness
 # (e no container, quando o `/sys` do host é montado em outro ponto).
 THERMAL_HWMON_DIR="${THERMAL_HWMON_DIR:-/sys/class/hwmon}"
@@ -1431,6 +1437,7 @@ cycle() {
   # 1. heartbeat: estado, modo e se pode pedir tarefa.
   local hb mode accept_tasks observed_cpu observed_mem observed_avail mem_swap mem_pressure observed_disk observed_term term_part disk_part mem_part
   local disk_now disk_prev disk_prev_at disk_now_ns d_reads d_writes d_ms p_reads p_writes p_ms ops disk_io_iops disk_io_latency disk_io_part=
+  local net_now net_prev net_prev_at net_now_ns n_rx n_tx p_rx p_tx net_rate_part=
   local temp_part temp_max_c temp_max_raw temp_file temp_raw temp_c
   local runtime_part threads
   observed_cpu=$(awk 'NR==1 {printf "%.1f", $1}' /proc/loadavg 2>/dev/null || echo 0)
@@ -1646,7 +1653,10 @@ cycle() {
   # não termina em `:`, então nem entra. Sem `/proc/net/dev` e sem contador numérico os campos NÃO
   # vão: ausente é "não medido", nunca zero, que afirmaria "não transferiu nada".
   net_part=''
-  if [[ -r /proc/net/dev ]]; then
+  if [[ -r "$NET_DEV_FILE" ]]; then
+    # Bytes crus (sem arredondar para MiB): a taxa do intervalo é a diferença entre dois ciclos, e
+    # arredondar cada leitura antes de subtrair perderia justamente o tráfego pequeno de um ciclo de
+    # 15 s. O campo do acumulado continua em MiB, como o contrato da V345 define.
     net_medido=$(awk '
       /^[ ]*[^ ]+:/ {
         name = $1
@@ -1662,10 +1672,43 @@ cycle() {
       }
       END {
         if (!seen) exit 0
-        printf "%d %d", int(rx / 1048576), int(tx / 1048576)
-      }' /proc/net/dev 2>/dev/null) || net_medido=''
+        printf "%d %d", rx, tx
+      }' "$NET_DEV_FILE" 2>/dev/null) || net_medido=''
     if [[ "$net_medido" =~ ^[0-9]+\ [0-9]+$ ]]; then
-      net_part=",\"bytesInMb\":${net_medido%% *},\"bytesOutMb\":${net_medido##* }"
+      net_part=",\"bytesInMb\":$(( ${net_medido%% *} / 1048576 )),\"bytesOutMb\":$(( ${net_medido##* } / 1048576 ))"
+      # Taxa do intervalo (brief §8.2, "Throughput de entrada e saída"; §8.3, "throughput global"):
+      # MiB/s entre a medida ANTERIOR (instante em nanossegundos, no arquivo de estado) e esta. O
+      # acumulado diz "quanto já passou"; a taxa diz "quanto está passando", e a diferença entre
+      # amostras não pode ser refeita depois — o intervalo de cada uma não fica gravado.
+      #
+      # Sem medida anterior (primeiro ciclo), intervalo zero/não provável (relógio atrasado) ou
+      # contador que RETROCEDEU (interface recriada, contador de 32 bits reiniciado) os campos NÃO
+      # vão: uma taxa negativa ou de horas não é medida, e o painel diz "não medido" em vez de
+      # mostrar um valor que ninguém mediu.
+      net_prev_at=''
+      net_prev=''
+      if [[ -r "$NETSTATE_FILE" ]]; then
+        read -r net_prev_at net_prev < "$NETSTATE_FILE" 2>/dev/null || true
+      fi
+      net_now_ns=$(date +%s%N)
+      if [[ "$net_now_ns" =~ ^[0-9]+$ && "$net_prev" =~ ^[0-9]+\ [0-9]+$ \
+            && "$net_prev_at" =~ ^[0-9]+$ ]] && (( net_now_ns > net_prev_at )); then
+        read -r n_rx n_tx <<<"$net_medido"
+        read -r p_rx p_tx <<<"$net_prev"
+        if (( n_rx >= p_rx && n_tx >= p_tx )); then
+          net_rate=$(awk -v a="$n_rx" -v b="$p_rx" -v c="$n_tx" -v e="$p_tx" \
+            -v ns="$(( net_now_ns - net_prev_at ))" \
+            'BEGIN {s = ns / 1000000000; printf "%.3f %.3f", ((a - b) / 1048576) / s, ((c - e) / 1048576) / s}')
+          net_rate_part=",\"netInMbps\":${net_rate%% *},\"netOutMbps\":${net_rate##* }"
+        fi
+      fi
+      # O estado do próximo ciclo é o de AGORA — mesmo quando esta rodada não mediu: se o arquivo só
+      # avançasse nos ciclos bem-sucedidos, um contador reiniciado deixaria o nó sem taxa até alguém
+      # reiniciar o processo.
+      if [[ "$net_now_ns" =~ ^[0-9]+$ ]]; then
+        printf '%s %s\n' "$net_now_ns" "$net_medido" > "$NETSTATE_FILE" 2>/dev/null \
+          && chmod 600 "$NETSTATE_FILE" 2>/dev/null || true
+      fi
     fi
   fi
   # Linhas do ciclo vão JUNTO do heartbeat: é a única saída do nó (ele não abre porta), e o
@@ -1693,7 +1736,7 @@ cycle() {
   # ainda não tem nada depois de `runningTasks`): `${fragmento#,}` tira a vírgula da frente uma vez.
   obs="\"cpuPercent\":$observed_cpu,\"runningTasks\":0"
   primeiro=1
-  for fragmento in "$mem_part" "$temp_part" "$disk_io_part" "$disk_part" "$net_part" "$runtime_part"; do
+  for fragmento in "$mem_part" "$temp_part" "$disk_io_part" "$disk_part" "$net_part" "$net_rate_part" "$runtime_part"; do
     [[ -n "$fragmento" ]] || continue
     if [[ "$primeiro" == 1 ]]; then
       obs="$obs,${fragmento#,}"
