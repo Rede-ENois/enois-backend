@@ -101,10 +101,21 @@ public class NodeObservabilityService {
 	@Transactional
 	public void record(NetworkNode node, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
 			Integer runningTasks, Double diskIops, Double diskLatencyMs, java.math.BigDecimal temperatureC) {
+		record(node, cpuPercent, memoryMb, diskFreeMb, runningTasks, diskIops, diskLatencyMs, temperatureC, null);
+	}
+
+	/**
+	 * A amostra com as threads do processo do runtime (brief §8.2, "Runtime"). Nulo é "não medido" —
+	 * runtime antigo (anterior à V388) ou `/proc` inacessível —, e não 0, que afirmaria um processo
+	 * sem thread nenhuma.
+	 */
+	public void record(NetworkNode node, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
+			Integer runningTasks, Double diskIops, Double diskLatencyMs, java.math.BigDecimal temperatureC,
+			Integer threads) {
 		Instant now = clock.instant();
 		Instant minute = now.truncatedTo(java.time.temporal.ChronoUnit.MINUTES);
 		repository.saveSample(new Sample(node.id(), minute, cpuPercent, memoryMb, diskFreeMb, runningTasks, null,
-			node.status().name(), null, diskIops, diskLatencyMs, temperatureC));
+			node.status().name(), null, diskIops, diskLatencyMs, temperatureC, threads));
 		repository.trimSamples(node.id(), SAMPLE_KEEP);
 	}
 

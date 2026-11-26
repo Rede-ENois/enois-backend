@@ -24,17 +24,17 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 	 */
 	private static final String UPSERT_SAMPLE = """
 		insert into network_node_samples (node_id, sampled_at, cpu_percent, memory_mb, disk_free_mb,
-		  disk_iops, disk_latency_ms, temperature_c, running_tasks, queue_depth, mode, activity)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		  disk_iops, disk_latency_ms, temperature_c, threads, running_tasks, queue_depth, mode, activity)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		on duplicate key update cpu_percent = values(cpu_percent), memory_mb = values(memory_mb),
 		  disk_free_mb = values(disk_free_mb), disk_iops = values(disk_iops),
 		  disk_latency_ms = values(disk_latency_ms), temperature_c = values(temperature_c),
-		  running_tasks = values(running_tasks),
+		  threads = values(threads), running_tasks = values(running_tasks),
 		  queue_depth = values(queue_depth), mode = values(mode), activity = values(activity)
 		""";
 
 	private static final String SAMPLE_COLUMNS = "node_id, sampled_at, cpu_percent, memory_mb, disk_free_mb, "
-		+ "disk_iops, disk_latency_ms, temperature_c, running_tasks, queue_depth, mode, activity";
+		+ "disk_iops, disk_latency_ms, temperature_c, threads, running_tasks, queue_depth, mode, activity";
 
 	private static final String LIST_SAMPLES = "select " + SAMPLE_COLUMNS
 		+ " from network_node_samples where node_id = ? order by sampled_at desc limit ?";
@@ -89,7 +89,7 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 		rs.getTimestamp("sampled_at").toInstant(), nullableDouble(rs, "cpu_percent"), nullableInt(rs, "memory_mb"),
 		nullableLong(rs, "disk_free_mb"), nullableInt(rs, "running_tasks"), nullableInt(rs, "queue_depth"),
 		rs.getString("mode"), rs.getString("activity"), nullableDouble(rs, "disk_iops"),
-		nullableDouble(rs, "disk_latency_ms"), rs.getBigDecimal("temperature_c"));
+		nullableDouble(rs, "disk_latency_ms"), rs.getBigDecimal("temperature_c"), nullableInt(rs, "threads"));
 
 	private static final RowMapper<LogLine> LOG_MAPPER = (rs, row) -> new LogLine(rs.getString("id"),
 		rs.getString("node_id"), rs.getTimestamp("logged_at").toInstant(), rs.getString("level"),
@@ -105,7 +105,7 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 	public void saveSample(Sample sample) {
 		jdbc.update(UPSERT_SAMPLE, sample.nodeId(), Timestamp.from(sample.sampledAt()), sample.cpuPercent(),
 			sample.memoryMb(), sample.diskFreeMb(), sample.diskIops(), sample.diskLatencyMs(), sample.temperatureC(),
-			sample.runningTasks(),
+			sample.threads(), sample.runningTasks(),
 			sample.queueDepth(), sample.mode(), sample.activity());
 	}
 

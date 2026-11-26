@@ -67,6 +67,10 @@ THERMAL_ZONE_DIR="${THERMAL_ZONE_DIR:-/sys/class/thermal}"
 # Acima disto a leitura é descartada: nenhum componente em operação normal passa de 110 °C, e o que
 # passa é sensor de ponto de critério ou sensor quebrado.
 THERMAL_MAX_C="${THERMAL_MAX_C:-110}"
+# Diretório de processos lido pela contagem de threads (brief §8.2, "threads"). Variável e não
+# caminho fixo pelo mesmo motivo dos contadores de disco: o harness serve um diretório conhecido, e
+# em produção é o do kernel.
+PROC_ROOT="${PROC_ROOT:-/proc}"
 
 event() {
   # event <nivel> <mensagem>: guarda para o próximo heartbeat.
@@ -1359,6 +1363,7 @@ cycle() {
   local hb mode accept_tasks observed_cpu observed_mem observed_avail mem_swap mem_pressure observed_disk observed_term term_part disk_part mem_part
   local disk_now disk_prev disk_prev_at disk_now_ns d_reads d_writes d_ms p_reads p_writes p_ms ops disk_io_iops disk_io_latency disk_io_part=
   local temp_part temp_max_c temp_max_raw temp_file temp_raw temp_c
+  local runtime_part threads
   observed_cpu=$(awk 'NR==1 {printf "%.1f", $1}' /proc/loadavg 2>/dev/null || echo 0)
   # Memória em DUAS medidas, como o Control Plane lê desde a V378: `memoryMb` é o USO e
   # `memoryAvailableMb` o DISPONÍVEL. Antes o runtime media só `MemAvailable` e o mandava como
@@ -1456,6 +1461,23 @@ cycle() {
   done
   if [[ -n "$temp_max_raw" ]]; then
     temp_part=",\"temperatureC\":$temp_max_c"
+  fi
+  # Processo do runtime (brief §8.2, "Runtime": threads). O runtime do nó é um `bash` por ciclo — cada
+  # volta é uma execução curta e sai —, então o que existe para medir aqui é o número de threads do
+  # processo que está medindo: `Threads:` de `/proc/<pid>/status`, que o kernel publica para a tarefa
+  # inteira (o thread de sinal do bash e o que ele abriu). Não é "threads do sistema": é o processo
+  # do nó, e é o que a §8.2 pede no bloco "Runtime".
+  #
+  # NÃO vai daqui: GC, heap e non-heap (não há coletor nem heap em shell — o do Control Plane é do
+  # processo Java dele), e uptime/reinicializações (o processo morre a cada ciclo; o que se mede de
+  # vida do HOST é `uptimeSeconds`, que já existe desde o ciclo anterior). Mandar 0 seria afirmar
+  # "zero threads", que é outra medida: sem `/proc/<pid>/status` o campo NÃO vai.
+  runtime_part=''
+  if [[ -r "$PROC_ROOT/self/status" ]]; then
+    threads=$(awk '/^Threads:/ {print $2; exit}' "$PROC_ROOT/self/status" 2>/dev/null)
+    if [[ "$threads" =~ ^[0-9]+$ ]]; then
+      runtime_part=",\"threads\":$threads"
+    fi
   fi
   disk_io_part=''
   if [[ -r "$DISKSTATS_FILE" ]]; then
@@ -1584,15 +1606,35 @@ cycle() {
   events=$(events_json)
   [[ -n "$events" ]] && logs_part=",\"logs\":[$events]"
   # O corpo tem de ser JSON VÁLIDO. Ele é montado por fragmentos opcionais (`mem_part`,
-  # `temp_part`, `disk_io_part`, `disk_part`, `net_part`), e cada fragmento carrega a própria
-  # vírgula — é a única forma de o campo ausente não deixar vírgula solta. O separador depois de
-  # `runningTasks` esteve ausente e `temp_part`/`disk_io_part` começavam sem vírgula: com memória,
-  # temperatura ou I/O medidos o corpo ia malformado (`0"memoryMb"`), o Control Plane respondia
-  # 400 e o nó recebia "heartbeat falhou" a cada ciclo — saindo do balanceamento por
-  # `last_seen_at` velho, sem que nenhum campo da memória explicasse. Provado por
+  # `temp_part`, `disk_io_part`, `disk_part`, `net_part`, `runtime_part`), e cada fragmento carrega
+  # a própria vírgula — é a única forma de o campo ausente não deixar vírgula solta. O separador
+  # depois de `runningTasks` esteve ausente e `temp_part`/`disk_io_part` começavam sem vírgula: com
+  # memória, temperatura ou I/O medidos o corpo ia malformado (`0"memoryMb"`), o Control Plane
+  # respondia 400 e o nó recebia "heartbeat falhou" a cada ciclo — saindo do balanceamento por
+  # `last_seen_at` velho, sem que nenhum campo da memória explicasse.
+  #
+  # A regra "cada fragmento carrega a própria vírgula" só fecha se o fragmento SEGUINTE só entrar
+  # quando o anterior entrou. No ciclo 163 apareceu o irmão do defeito: sem `/proc/meminfo`
+  # (`mem_part` vazio — o normal num container) e com temperatura medida, o corpo saía
+  # `"runningTasks":0,,"temperatureC"`; logo, 400 do Control Plane e o nó fora do balanceamento em
+  # toda máquina sem meminfo. Por isso o acúmulo é em `obs` e cada parte só entra se a anterior
+  # estiver lá. Provado por
   # `node-traffic-test.sh`, que lê o corpo como JSON de verdade.
+  # Cada fragmento já começa com a vírgula dele. O PRIMEIRO a entrar não precisa dela (o `obs`
+  # ainda não tem nada depois de `runningTasks`): `${fragmento#,}` tira a vírgula da frente uma vez.
+  obs="\"cpuPercent\":$observed_cpu,\"runningTasks\":0"
+  primeiro=1
+  for fragmento in "$mem_part" "$temp_part" "$disk_io_part" "$disk_part" "$net_part" "$runtime_part"; do
+    [[ -n "$fragmento" ]] || continue
+    if [[ "$primeiro" == 1 ]]; then
+      obs="$obs,${fragmento#,}"
+      primeiro=0
+    else
+      obs="$obs$fragmento"
+    fi
+  done
   hb=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
-    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"runningTasks\":0,$mem_part$temp_part$disk_io_part$disk_part$net_part}$term_part$logs_part}" \
+    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{$obs}$term_part$logs_part}" \
     "$CONTROL_PLANE/network/nodes/heartbeat") || { printf '[executor] heartbeat falhou\n' >&2; return 1; }
   : > "$EVENTS_FILE" 2>/dev/null || true
   mode=$(json_field "$hb" mode)

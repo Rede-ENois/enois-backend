@@ -53,7 +53,7 @@ O brief (§8.2) pede, por nó: uso de rede e throughput de entrada e saída. Hoj
 | CPU total, memória, disco livre | **entregue** (heartbeat → painel por nó) |
 | tarefas em execução, versão do runtime, último contato | **entregue** |
 | uso de rede / throughput (entrada e saída) | **medido desde o ciclo 161** — o runtime soma o acumulado de `/proc/net/dev` (interfaces externas) no heartbeat; o painel mostra o total e a fatia de saída |
-| swap, pressão de memória, IOPS, latência de disco, temperatura, GC, threads, p95/p99 de tarefa, DLQ por fila | **swap e pressão desde o ciclo 157** (§7); **IOPS e latência de disco desde o 158** (§8 e §9); **temperatura desde o 159** (§10); **p95/p99 do tempo de execução das tarefas desde o 160**; **retentativas desde o ciclo 162** (§11.1); **DLQ por fila desde o 161** (`deadByQueue`, doc 03). **p50/p95/p99 de requisição HTTP do Control Plane desde o 163** (§11.2, com o tamanho da amostra); GC/threads (o runtime é shell, não JVM) não existem — ver `docs/rede-distribuida/11-global-coop-fase-0.md` §3 |
+| swap, pressão de memória, IOPS, latência de disco, temperatura, GC, threads, p95/p99 de tarefa, DLQ por fila | **swap e pressão desde o ciclo 157** (§7); **IOPS e latência de disco desde o 158** (§8 e §9); **temperatura desde o 159** (§10); **p95/p99 do tempo de execução das tarefas desde o 160**; **retentativas desde o ciclo 162** (§11.1); **DLQ por fila desde o 161** (`deadByQueue`, doc 03). **p50/p95/p99 de requisição HTTP do Control Plane desde o 163** (§11.2, com o tamanho da amostra); **threads do processo do nó desde o 163** (§11.3); GC e heap não se aplicam ao runtime (é shell, não JVM) — ver `docs/rede-distribuida/11-global-coop-fase-0.md` §3 |
 
 ## 5. O que o mantenedor precisa conferir no deploy (não é código)
 
@@ -358,6 +358,39 @@ mutante inerte (o ponto ocupado usando a lista da janela) foi <b>descartado</b>:
 amostra o valor é o mesmo e ele não muda comportamento. O relógio do teste é fixo de propósito: a
 leitura de `overview` corta a série em `clock.millis()`, e com relógio real a virada do minuto entre
 as duas leituras faria o ponto "corrente" mudar de posição.
+
+## 11.3 Threads do processo do nó (ciclo 163)
+
+O §8.2 pede, no bloco **Runtime**, "Threads" — e o runtime do nó mede o host inteiro; as threads do
+**próprio processo** não eram lidas. O que o bloco pede e o que existe:
+
+| item do bloco | estado |
+|---|---|
+| estado do processo, uso de memória | **entregue** (memória do host e `runningTasks` da amostra) |
+| threads | **medido desde o ciclo 163** (`threads`, V388) |
+| GC, heap, non-heap | **não se aplica**: o runtime é `bash`, não JVM. O do Control Plane está no `/admin/monitoring/overview` (`jvm`) |
+| tempo de execução, reinicializações | uptime do **host** existe desde antes; o do processo não — cada ciclo é um processo curto que sai, e "uptime do processo" seria sempre ~0 |
+
+**Como mede.** `Threads:` de `/proc/<pid>/status` do processo que está medindo (o kernel publica
+ali a contagem da tarefa inteira). Vai como `threads` no `observed` do heartbeat e vira a coluna
+`threads` da amostra do minuto. Ausente — `/proc` inacessível, runtime antigo — fica **nulo**:
+zero afirmaria um processo sem thread. Valor ilegível (arquivo truncado) não vira medida.
+
+**Defeito grave achado no caminho.** Montar o corpo por fragmentos que "carregam a própria vírgula"
+só fecha se o fragmento seguinte só entrar quando o anterior entrou. Sem `/proc/meminfo` (o normal em
+container) e com temperatura medida, o `observed` saía `"runningTasks":0,,"temperatureC"` — JSON
+inválido, **400 do Control Plane e o nó fora do balanceamento** em toda máquina sem meminfo. É o irmão
+do defeito do ciclo 161 (falta de vírgula). Agora o acúmulo é em `obs`: o primeiro fragmento entra sem
+a vírgula da frente (`${fragmento#,}`) e os demais entram como estão.
+
+Provas: `node-threads-test` **8/8** roda o `cycle` **real** com `/proc` forjado: `Threads:` do arquivo
+vai como `threads`, acompanha o arquivo na volta seguinte, ausente NÃO vai, ilegível NÃO vira medida, e
+o corpo sem memória medida é JSON válido. Mutações conferidas: sem a leitura (2 falhas), `threads` fixo
+em 0 (3), sem a guarda numérica (1), vírgula dupla no corpo (2). `NetworkNodeThreadsTests` (2 casos,
+pela rota real) — mutações: adapter não grava (1), controller descarta (1). `node-threads-migration-test`
+**10/10** em MariaDB 11.4 real (V388 duas vezes, amostra anterior intacta com `threads` NULL, UPSERT do
+minuto, `int NULL` sem default, dado vivo intacto na 2ª) — mutações: `not null default 0` (2), sem
+`if not exists` (1).
 
 ## 12. DLQ por fila (ciclo 161)
 

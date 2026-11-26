@@ -654,7 +654,7 @@ public class NetworkNodeService {
 	public record HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 			Integer memoryAvailableMb, Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Double diskIops,
 			Double diskLatencyMs, BigDecimal temperatureC, Long contentUsedMb, Long bytesInMb, Long bytesOutMb,
-			Integer observedTerm, String observedIp) {
+			Integer threads, Integer observedTerm, String observedIp) {
 
 		/**
 		 * Heartbeat de runtime anterior ao tráfego medido (V345): os dois contadores ficam nulos.
@@ -666,7 +666,7 @@ public class NetworkNodeService {
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Integer observedTerm) {
 			this(runtimeVersion, cpuPercent, memoryMb, null, runningTasks, diskFreeMb, diskTotalMb, null, null,
-				null, contentUsedMb, null, null, observedTerm, null);
+				null, contentUsedMb, null, null, null, observedTerm, null);
 		}
 
 		/**
@@ -679,7 +679,7 @@ public class NetworkNodeService {
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Integer observedTerm) {
 			this(runtimeVersion, cpuPercent, memoryMb, null, runningTasks, diskFreeMb, diskTotalMb, null, null,
-				null, null, null, null, observedTerm, null);
+				null, null, null, null, null, observedTerm, null);
 		}
 
 		/**
@@ -693,7 +693,7 @@ public class NetworkNodeService {
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Integer observedTerm) {
 			this(runtimeVersion, cpuPercent, memoryMb, null, runningTasks, diskFreeMb, null, null, null,
-				null, null, null, null, observedTerm, null);
+				null, null, null, null, null, observedTerm, null);
 		}
 	}
 }
