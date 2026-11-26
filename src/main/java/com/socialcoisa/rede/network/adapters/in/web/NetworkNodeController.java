@@ -122,7 +122,7 @@ class NetworkNodeController {
 	 */
 	record Observed(Double cpuPercent, Integer memoryMb, Integer memoryAvailableMb, Integer runningTasks,
 			Long diskFreeMb, Long diskTotalMb, Double diskIops, Double diskLatencyMs, Double temperatureC, Long usedMb,
-			Long bytesInMb, Long bytesOutMb, Integer threads) {
+			Long bytesInMb, Long bytesOutMb, Integer threads, Long swapUsedMb, Double memoryPressurePercent) {
 	}
 
 	/**
@@ -250,6 +250,7 @@ class NetworkNodeController {
 			observed == null ? null : graus(observed.temperatureC()),
 			observed == null ? null : observed.usedMb(), observed == null ? null : observed.bytesInMb(),
 			observed == null ? null : observed.bytesOutMb(), observed == null ? null : observed.threads(),
+			observed == null ? null : observed.swapUsedMb(), observed == null ? null : observed.memoryPressurePercent(),
 			request == null ? null : request.observedTerm(),
 			peerIp(forwardedFor, peerAddressFromRequest())));
 		// acceptTasks também é falso quando o PRÓPRIO nó está em quarentena de status: é assim que
@@ -273,7 +274,8 @@ class NetworkNodeController {
 			// com a coluna do nó nula. A temperatura usa a mesma régua da coluna (`graus`).
 			observability.record(updated, observed.cpuPercent(), updated.observedMemoryMb(), observed.diskFreeMb(),
 				observed.runningTasks(), updated.observedDiskIops(), updated.observedDiskLatencyMs(),
-				graus(observed.temperatureC()), observed.threads());
+				graus(observed.temperatureC()), observed.threads(), observed.swapUsedMb(),
+				observed.memoryPressurePercent());
 		}
 		if (request != null && request.logs() != null) {
 			for (LogRequest line : request.logs()) {

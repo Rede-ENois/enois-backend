@@ -128,12 +128,12 @@ Decisões:
 - **A série histórica usa o uso derivado**: `network_node_samples.memory_mb` recebe o valor que o
   serviço derivou para o nó, não o campo cru do corpo. O runtime antigo registrava o disponível na
   série também, e a amostra passaria a dizer "7,9 GB em uso" da máquina ociosa.
-- **Swap e pressão: medidos e enviados, ainda não consumidos.** O runtime do ciclo 157 mede
-  `swapUsedMb` (`SwapTotal - SwapFree`) e `memoryPressurePercent` (`avg300` do `some` em
-  `/proc/pressure/memory`) e os manda no corpo do heartbeat, mas o Control Plane **ainda não os
-  recebe** no contrato do `Observed` nem os guarda: hoje eles são descartados na borda. Quando
-  entrarem, precisam de coluna própria na série e do quadro na página do nó — o campo não aparece
-  no painel enquanto isso.
+- **Swap e pressão: medidos e agora consumidos (ciclo 165).** O runtime mede `swapUsedMb`
+  (`SwapTotal - SwapFree`) e `memoryPressurePercent` (`avg300` do `some` em
+  `/proc/pressure/memory`) desde o ciclo 157, mas o Control Plane não os recebia no contrato do
+  `Observed`: eram descartados na borda. Desde a V389 eles entram no heartbeat, viram as colunas
+  `swap_used_mb` e `memory_pressure_percent` da amostra, e aparecem em
+  `summary.swapUsedMbLatest`/`summary.memoryPressurePercentLatest` (§11.4).
 
 ### Verificação
 
@@ -391,6 +391,48 @@ pela rota real) — mutações: adapter não grava (1), controller descarta (1).
 **10/10** em MariaDB 11.4 real (V388 duas vezes, amostra anterior intacta com `threads` NULL, UPSERT do
 minuto, `int NULL` sem default, dado vivo intacto na 2ª) — mutações: `not null default 0` (2), sem
 `if not exists` (1).
+
+## 11.4 Swap em uso e pressão de memória (ciclo 165)
+
+O §8.2 pede, no sistema operacional, **swap** e **pressão de memória**. O runtime media os dois desde
+o ciclo 157 e o Control Plane os descartava — o painel dizia "não medido" para sempre.
+
+| campo do heartbeat | o que é | origem |
+|---|---|---|
+| `swapUsedMb` | swap em **uso**, em MiB | `SwapTotal - SwapFree` de `/proc/meminfo` |
+| `memoryPressurePercent` | tempo em que alguma tarefa esperou memória, média de 300 s | `avg300` do `some` em `/proc/pressure/memory` (PSI) |
+
+**Onde aparece.** Viram as colunas `swap_used_mb` (bigint) e `memory_pressure_percent` (double) da
+amostra do minuto (V389), e o painel do nó as publica em `summary.swapUsedMbLatest` e
+`summary.memoryPressurePercentLatest`.
+
+Decisões:
+
+- **Ausente é nulo, nunca 0.** `meminfo` sem as linhas de swap (container sem swap) e kernel sem PSI
+  (anterior a 4.20, ou desligado no boot) não mandam o campo; um `avg300` ilegível (arquivo truncado)
+  também não. Zero afirmaria "nenhum swap em uso" e "ninguém esperou memória" para quem não leu o
+  arquivo.
+- **`avg300`, não `avg10`/`avg60`.** São janelas diferentes; a de 300 s é a que diz "está sofrendo"
+  sem piscar com um pico de um segundo.
+- **O resumo mostra o último valor MEDIDO da janela**, não o da amostra mais nova. Um ponto recente
+  sem a medida (PSI desligado em quente, swap removido) não é "a máquina melhorou" — é "não sei", e
+  o número de dez minutos atrás com a idade da série ao lado (`freshness`) diz mais do que um vazio.
+  A série em si continua mostrando a lacuna no ponto: trocar o resumo não inventa medida.
+- **`swapUsedMb` é MiB em uso**, não o total e não o livre; `bigint` porque 4 GiB de swap não cabem
+  num `int` de 2^31 MiB.
+
+**Verificação:** `NetworkNodeMemoryPressureTests` **3** pela rota real (swap 512/pressão 4.5 viram
+amostra e chegam ao resumo; runtime que não mede deixa nulo e o resumo omite; o ponto novo sem a
+medida não apaga a última medida, e a série mantém a lacuna). Mutações: resumo pegando a amostra
+mais nova (1), adapter não gravando (1), controller descartando (1). `node-memory-pressure-test`
+**9/9** roda o `cycle` **real** com `/proc` forjado (swap = total − livre em MiB; `meminfo` sem swap
+não afirma swap; pressão é o `avg300`, com `avg10`/`avg60` bem diferentes de propósito; sem PSI não
+afirma; PSI sem `avg300` não vira medida; corpo JSON válido). Mutações: swap livre no lugar do usado
+(2), `full` no lugar de `some` (2), `avg10` no lugar de `avg300` (3), nome do campo trocado (2).
+`node-memory-pressure-migration-test` **11/11** em MariaDB 11.4 real (V389 duas vezes, amostra
+anterior intacta com as duas NULL, `bigint`/`double` sem default, UPSERT do minuto com memória junto,
+4 GiB de swap cabe). Mutações: `int not null default 0` (3), sem `if not exists` (1), pressão como
+`int` (3).
 
 ## 12. DLQ por fila (ciclo 161)
 
