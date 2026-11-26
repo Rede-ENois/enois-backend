@@ -285,15 +285,25 @@ ignorar a janela derruba 1; gravar sem truncar a hora derruba 1; somar sem o nó
 vezes, nó/tarefa anteriores preservados, chave composta, `utf8mb4`, upsert somando na mesma linha,
 janela de 24 h separando hoje de anteontem. Mutação (V383 vazia) derruba **6**.
 
-### O tipo da coluna de temperatura: dois cruzamentos, uma régua (ciclo 160)
+### O tipo físico da coluna de temperatura (ciclo 160)
 
-A coluna `observed_temperature_c` é `double` na V382 e `BigDecimal` na entidade, e a anotação
-`columnDefinition` governa os dois bancos de jeitos opostos: **sem** ela o H2 valida `double` contra
-`numeric(38,2)` e o boot não sobe; **com** ela o MariaDB lê `numeric` no DDL lógico e também não
-sobe, porque a coluna real é `double`. O ciclo 159 pôs a anotação e a `qa` recusou o boot; o 159b
-tirou-a para a `qa` subir, e a suíte local quebrou porque a suíte nunca vê o dialect de produção.
+A coluna `observed_temperature_c` é `double` na V382 e `BigDecimal` na entidade. Sem
+`columnDefinition = "double"` o H2 gera `numeric(38,2)` para o `BigDecimal` e a validação de schema
+da suíte recusa a coluna que é `double` no banco: o app de teste não sobe (medido — 3 erros em
+`RedeApplicationTests`). Com a anotação, o H2 e o dialect de produção emitem `double`, que é o tipo
+que a V382 criou.
 
-`NodeColumnTypeTests` fecha o furo: gera o DDL da entidade com o dialect que os profiles publicam
-(prd/qa/hml) e exige `double`. Mutação conferida — tirar o `columnDefinition` faz o teste dizer
-`expected "double" but was "decimal"` nos três profiles, e a `V382` continua `double`.
+`NodeColumnTypeTests` prende essa decisão na régua de produção: gera o DDL da entidade com o dialect
+que prd/qa/hml publicam e exige `double`. Mutação conferida — tirar o `columnDefinition` faz o teste
+dizer `expected "double" but was "decimal"` nos três profiles.
+
+**O que ficou em aberto, e por quê.** A #1143 atribuiu a queda do boot na `qa` à anotação, e o
+relato não se reproduziu aqui: com a V305/V325/V343/V380/V382 aplicadas num **MariaDB 11.4 real**,
+validar o mapeamento com o `MariaDBDialect` (metadados JDBC desligados, como em produção) passa com
+**e sem** a anotação — porque o Hibernate casa o `BigDecimal` por tipo Java com a coluna `double`
+antes de comparar o tipo do DDL lógico. A causa real do incidente segue não medida; o que está
+provado é o que a suíte pode provar (H2) e o que aqui se mediu (MariaDB de sonda, não a `qa`): com a
+anotação, nenhum dos dois lados recusa. A conversão da entidade para `Double` foi tentada e mexe na
+conversão de leitura/escrita (`Incompatible types` na montagem do registro), portanto não entra de
+carona neste ciclo.
 
