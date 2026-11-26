@@ -1455,7 +1455,7 @@ cycle() {
     fi
   done
   if [[ -n "$temp_max_raw" ]]; then
-    temp_part="\"temperatureC\":$temp_max_c"
+    temp_part=",\"temperatureC\":$temp_max_c"
   fi
   disk_io_part=''
   if [[ -r "$DISKSTATS_FILE" ]]; then
@@ -1491,7 +1491,7 @@ cycle() {
             ops=$(( (d_reads - p_reads) + (d_writes - p_writes) ))
             disk_io_iops=$(awk -v o="$ops" -v ns="$(( disk_now_ns - disk_prev_at ))" \
               'BEGIN {printf "%.2f", o / (ns / 1000000000)}')
-            disk_io_part="\"diskIops\":$disk_io_iops"
+            disk_io_part=",\"diskIops\":$disk_io_iops"
             # Latência só faz sentido com operação concluída: sem I/O o tempo total é zero, e dividir
             # afirmaria "0 ms", que não mede coisa nenhuma.
             if (( ops > 0 )); then
@@ -1533,17 +1533,48 @@ cycle() {
   # "quanto ele prometeu" -- a pergunta do §7 do brief do Storage. Zero é resposta legítima (nó
   # sem conteúdo), então o campo vai sempre que o cálculo roda; `df` que falhou não afeta.
   disk_part="$disk_part,\"usedMb\":$(( $(content_bytes) / 1048576 ))"
-  # Tráfego ACUMULADO das interfaces desde o boot (brief §8.2, "uso de rede"): o Control Plane já
-  # tem as colunas `observed_bytes_in_mb` / `observed_bytes_out_mb` (V345) e o heartbeat já aceita
-  # os campos — mas o runtime nunca os mediu, e o painel do nó não mostrava tráfego nenhum. Vai em
-  # MiB, como as outras medidas de tamanho; loopback fica de fora. Sem `/proc/net/dev` os campos
-  # NÃO vão: ausente é "não medido", nunca zero, que afirmaria "não transferiu nada".
+  # Tráfego (brief §8.2, "uso de rede"): o ACUMULADO das interfaces desde o boot, em MiB, fora o
+  # loopback. O Control Plane tinha as colunas (`V345`) e o heartbeat aceitava os campos, mas o
+  # runtime nunca os media — e o painel do participante (§18, "consultar tráfego") e o do admin
+  # mostravam tráfego nenhum.
+  #
+  # É o acumulado, e não a taxa por ciclo, porque é assim que o contrato o define: o participante
+  # vê `trafficInMb`/`trafficOutMb` e a FATIA de saída sobre o total (`outboundSharePercent`), e a
+  # V345 trata o valor como contador monotônico. Uma taxa por volta somada à coluna do último
+  # heartbeat daria o tráfego de UM ciclo no lugar do total, com um total que dança.
+  #
+  # O que soma: as interfaces que carregam tráfego de FORA — `eth*`, `en*`, `wl*` (Ethernet e Wi-Fi)
+  # e `ww*` (celular). Ficam de fora loopback (conversa do próprio nó), ponte (`br-*`), `docker0` e
+  # `veth*` (interfaces internas de container): o pacote de um container aparece nele e na ponte, e
+  # somar as duas contaria o mesmo tráfego duas vezes.
+  #
+  # Formato do kernel (`/proc/net/dev`): a linha da interface é `nome:` seguida de 16 contadores; o
+  # RECEBIDO (1º) e o TRANSMITIDO (9º) vêm em BYTES. Separar por `[: ]+` e contar posições fixas
+  # erraria: com o espaço depois de `:` a 2ª coluna fica vazia e o índice anda. Por isso os tokens
+  # são remontados após o `:` e o nome é comparado antes dele — o cabeçalho (`Inter-|`, `face |`)
+  # não termina em `:`, então nem entra. Sem `/proc/net/dev` e sem contador numérico os campos NÃO
+  # vão: ausente é "não medido", nunca zero, que afirmaria "não transferiu nada".
   net_part=''
   if [[ -r /proc/net/dev ]]; then
-    net_medido=$(awk -F'[: ]+' '/^[ ]*[a-z]/ && $2 != "lo" { rx += $3; tx += $11 } END { printf "%d %d", rx / 1048576, tx / 1048576 }' /proc/net/dev)
-    read -r net_rx_mb net_tx_mb <<< "$net_medido"
-    if [[ "$net_rx_mb" =~ ^[0-9]+$ && "$net_tx_mb" =~ ^[0-9]+$ ]]; then
-      net_part=",\"bytesInMb\":$net_rx_mb,\"bytesOutMb\":$net_tx_mb"
+    net_medido=$(awk '
+      /^[ ]*[^ ]+:/ {
+        name = $1
+        sub(/:$/, "", name)
+        if (name !~ /^(eth|en|wl|ww)/) next
+        rest = $0
+        sub(/^[^:]*:/, "", rest)
+        n = split(rest, v, " ")
+        if (n < 9) next
+        if (v[1] !~ /^[0-9]+$/ || v[9] !~ /^[0-9]+$/) next
+        rx += v[1]; tx += v[9]
+        seen = 1
+      }
+      END {
+        if (!seen) exit 0
+        printf "%d %d", int(rx / 1048576), int(tx / 1048576)
+      }' /proc/net/dev 2>/dev/null) || net_medido=''
+    if [[ "$net_medido" =~ ^[0-9]+\ [0-9]+$ ]]; then
+      net_part=",\"bytesInMb\":${net_medido%% *},\"bytesOutMb\":${net_medido##* }"
     fi
   fi
   # Linhas do ciclo vão JUNTO do heartbeat: é a única saída do nó (ele não abre porta), e o
@@ -1552,8 +1583,16 @@ cycle() {
   local events logs_part=""
   events=$(events_json)
   [[ -n "$events" ]] && logs_part=",\"logs\":[$events]"
+  # O corpo tem de ser JSON VÁLIDO. Ele é montado por fragmentos opcionais (`mem_part`,
+  # `temp_part`, `disk_io_part`, `disk_part`, `net_part`), e cada fragmento carrega a própria
+  # vírgula — é a única forma de o campo ausente não deixar vírgula solta. O separador depois de
+  # `runningTasks` esteve ausente e `temp_part`/`disk_io_part` começavam sem vírgula: com memória,
+  # temperatura ou I/O medidos o corpo ia malformado (`0"memoryMb"`), o Control Plane respondia
+  # 400 e o nó recebia "heartbeat falhou" a cada ciclo — saindo do balanceamento por
+  # `last_seen_at` velho, sem que nenhum campo da memória explicasse. Provado por
+  # `node-traffic-test.sh`, que lê o corpo como JSON de verdade.
   hb=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
-    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"runningTasks\":0$mem_part$temp_part$disk_io_part$disk_part$net_part}$term_part$logs_part}" \
+    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"runningTasks\":0,$mem_part$temp_part$disk_io_part$disk_part$net_part}$term_part$logs_part}" \
     "$CONTROL_PLANE/network/nodes/heartbeat") || { printf '[executor] heartbeat falhou\n' >&2; return 1; }
   : > "$EVENTS_FILE" 2>/dev/null || true
   mode=$(json_field "$hb" mode)
