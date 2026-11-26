@@ -133,6 +133,39 @@ public class PapoRetoWorker {
 	 * publicação. É o mais específico que nomeia a conversa — e é o que impede o ranking de
 	 * listar a mesma conversa três vezes. As tags da publicação entram como assunto declarado.
 	 */
+	/**
+	 * A leitura de intenção é OPCIONAL: quando presente e o modelo estiver disponível, os TEMAS
+	 * reais que ela entende substituem as expressões extraídas — o ranking deixa de agrupar por
+	 * palavra repetida e passa a agrupar pelo assunto do texto. Sem ela (ou degradada), o corte
+	 * segue com a extração determinística, exatamente como antes.
+	 */
+	@org.springframework.beans.factory.annotation.Autowired(required = false)
+	private com.socialcoisa.rede.leitura.application.LeituraDeTexto leitura;
+
+	/** Injeta a leitura (o Spring faz por campo; os testes usam este método). */
+	PapoRetoWorker comLeitura(com.socialcoisa.rede.leitura.application.LeituraDeTexto leituraDeTexto) {
+		this.leitura = leituraDeTexto;
+		return this;
+	}
+
+	/**
+	 * Os assuntos de uma publicação: os TEMAS reais da leitura de intenção quando o modelo leu o
+	 * texto; senão, o cluster da extração determinística (composto com contexto).
+	 */
+	private java.util.List<String> assuntosDaPublicacao(PapoPublicacaoReader.Publicacao publicacao,
+			PapoPublicacaoReader fonte) {
+		if (leitura != null && leitura.disponivel() && publicacao.texto() != null
+				&& !publicacao.texto().isBlank()) {
+			var lido = leitura.ler(publicacao.texto()).leitura();
+			if (lido.lidoPeloModelo() && lido.temTemas()) {
+				return lido.temas();
+			}
+		}
+		List<PapoAssuntoExtractor.Fala> extraidas = extractor.extrair(publicacao.texto(), fonte.fonte(),
+				publicacao.assuntosDeclarados());
+		return extractor.assuntos(extraidas);
+	}
+
 	private void falar(Instant de, Instant ate) {
 		List<PapoRetoRepository.Fala> falas = new ArrayList<>();
 		for (PapoPublicacaoReader fonte : fontes) {
@@ -140,9 +173,7 @@ public class PapoRetoWorker {
 				List<PapoTemaFala> jaLidas = repository.temasDePublicacao(publicacao.publicacaoId());
 				Set<String> expressoesDaPublicacao = new HashSet<>();
 				jaLidas.forEach(fala -> expressoesDaPublicacao.add(fala.expressao()));
-				List<PapoAssuntoExtractor.Fala> extraidas = extractor.extrair(publicacao.texto(), fonte.fonte(),
-						publicacao.assuntosDeclarados());
-				for (String expressao : extractor.assuntos(extraidas)) {
+				for (String expressao : assuntosDaPublicacao(publicacao, fonte)) {
 					if (expressoesDaPublicacao.contains(expressao)) {
 						continue;
 					}

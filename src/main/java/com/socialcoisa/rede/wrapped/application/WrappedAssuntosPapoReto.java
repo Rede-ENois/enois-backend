@@ -6,6 +6,7 @@ import java.util.Map;
 
 import org.springframework.stereotype.Component;
 
+import com.socialcoisa.rede.leitura.application.LeituraDeTexto;
 import com.socialcoisa.rede.paporeto.application.PapoAssuntoExtractor;
 import com.socialcoisa.rede.wrapped.application.port.out.WrappedAssuntos;
 import com.socialcoisa.rede.wrapped.domain.WrappedAssunto;
@@ -23,12 +24,34 @@ class WrappedAssuntosPapoReto implements WrappedAssuntos {
 
 	private final PapoAssuntoExtractor extrator = new PapoAssuntoExtractor();
 
+	/**
+	 * A leitura de intenção, opcional: quando o modelo leu o texto, os TEMAS reais entram no lugar
+	 * das expressões extraídas. Sem ela, degrada para a extração como antes.
+	 */
+	private final LeituraDeTexto leitura;
+
+	WrappedAssuntosPapoReto(org.springframework.beans.factory.ObjectProvider<LeituraDeTexto> leitura) {
+		this.leitura = leitura.getIfAvailable();
+	}
+
 	@Override
 	public List<WrappedAssunto> extrair(List<String> textos, int limite) {
 		Map<String, Integer> contagem = new LinkedHashMap<>();
 		for (String texto : textos) {
 			if (texto == null || texto.isBlank()) {
 				continue;
+			}
+			if (leitura != null && leitura.disponivel()) {
+				var lido = leitura.ler(texto).leitura();
+				if (lido.lidoPeloModelo() && lido.temTemas()) {
+					var vistos = new java.util.HashSet<String>();
+					for (String tema : lido.temas()) {
+						if (vistos.add(tema)) {
+							contagem.merge(tema, 1, Integer::sum);
+						}
+					}
+					continue;
+				}
 			}
 			for (PapoAssuntoExtractor.Fala fala : extrator.extrair(texto, "POST")) {
 				contagem.merge(fala.expressao(), 1, Integer::sum);
