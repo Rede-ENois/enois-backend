@@ -284,3 +284,16 @@ ignorar a janela derruba 1; gravar sem truncar a hora derruba 1; somar sem o nó
 `node-task-latency-migration-test` **14 PASS / 0 FAIL** em MariaDB 11.4 real: `V383` aplicada duas
 vezes, nó/tarefa anteriores preservados, chave composta, `utf8mb4`, upsert somando na mesma linha,
 janela de 24 h separando hoje de anteontem. Mutação (V383 vazia) derruba **6**.
+
+### O tipo da coluna de temperatura: dois cruzamentos, uma régua (ciclo 160)
+
+A coluna `observed_temperature_c` é `double` na V382 e `BigDecimal` na entidade, e a anotação
+`columnDefinition` governa os dois bancos de jeitos opostos: **sem** ela o H2 valida `double` contra
+`numeric(38,2)` e o boot não sobe; **com** ela o MariaDB lê `numeric` no DDL lógico e também não
+sobe, porque a coluna real é `double`. O ciclo 159 pôs a anotação e a `qa` recusou o boot; o 159b
+tirou-a para a `qa` subir, e a suíte local quebrou porque a suíte nunca vê o dialect de produção.
+
+`NodeColumnTypeTests` fecha o furo: gera o DDL da entidade com o dialect que os profiles publicam
+(prd/qa/hml) e exige `double`. Mutação conferida — tirar o `columnDefinition` faz o teste dizer
+`expected "double" but was "decimal"` nos três profiles, e a `V382` continua `double`.
+

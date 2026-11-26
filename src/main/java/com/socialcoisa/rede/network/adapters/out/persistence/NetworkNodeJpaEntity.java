@@ -77,8 +77,13 @@ class NetworkNodeJpaEntity {
 	/**
 	 * Maior temperatura entre os sensores da máquina, em graus (brief §8.2); {@code null} = a máquina
 	 * não tem sensor legível, que é "não disponível" e não uma temperatura medida.
+	 *
+	 * <p>{@code columnDefinition = "double"} casa com a V382, e sem ele nenhum dos dois lados funciona:
+	 * o H2 valida a coluna {@code double} contra {@code numeric(38,2)} e o boot não sobe; o MariaDB vê
+	 * {@code numeric} no DDL e não sobe também, porque a coluna real é `double`. Não é cosmético —
+	 * {@code NodeColumnTypeTests} gera o DDL com o dialect de cada profile e prende o tipo.</p>
 	 */
-	@Column(name = "observed_temperature_c")
+	@Column(name = "observed_temperature_c", columnDefinition = "double")
 	private BigDecimal observedTemperatureC;
 
 	@Column(name = "observed_content_used_mb")
