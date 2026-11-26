@@ -66,6 +66,12 @@ public final class SafeHtml {
 	public static final int MAX_BLOG_HTML = 20_000;
 
 	/**
+	 * Teto do HTML do portfólio. É uma página inteira de apresentação, aberta em uma tela própria
+	 * como o post de página e o card de projeto, então usa o mesmo número dos dois.
+	 */
+	public static final int MAX_PORTFOLIO_HTML = 200_000;
+
+	/**
 	 * Corte do texto cru antes de parsear: evita gastar CPU com um paste gigante. Fica acima do
 	 * teto porque a limpeza costuma encolher o markup (scripts fora, tags nao permitidas fora).
 	 */
@@ -177,6 +183,11 @@ public final class SafeHtml {
 	/** HTML obrigatório do card de projeto: mesma limpeza da família, teto próprio. */
 	public static String sanitizeProjectHtml(String raw) {
 		return sanitize(raw, MAX_PROJECT_HTML, "PROJECT_HTML_TOO_LONG", "HTML do projeto");
+	}
+
+	/** HTML da página do portfólio: mesma limpeza da família, teto de página inteira. */
+	public static String sanitizePortfolioHtml(String raw) {
+		return sanitize(raw, MAX_PORTFOLIO_HTML, "PORTFOLIO_HTML_TOO_LONG", "HTML do portfólio");
 	}
 
 	public static String requireProfileHtml(String raw) {
