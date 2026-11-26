@@ -947,3 +947,42 @@ não são do domínio dela. A réplica 0 é do Control Plane, não de nó; filtr
 `copies` incluiu o CP. Antes de generalizar uma régua, perguntar **quais linhas ela alcança** — e o
 teste que só olha o caso novo (nó suspenso com cópia de nó) não pega a regressão: quem pega é o teste
 de integração que confirma a cópia e espera a lacuna fechar.
+
+### Correção do ciclo 162: a pausa pode ser seguida de uma confirmação legítima
+
+O §25.10 do `storage-acceptance.sh` exigia que a pausa de um nó de armazenamento fizesse o objeto
+aparecer em `underReplicated` ou em `onRevokedNode`. Falhava cerca de **uma rodada em duas**, e a
+causa não era a regra desta seção — foi medida com log no `scan` e `select` no banco no instante da
+falha:
+
+- o relatório vinha `objectsScanned 1` com `confirmed 2`, e o nó em questão estava `PAUSED` no
+  cadastro naquele exato momento;
+- a varredura lê as cópias `OK` por `object_id` e o status do nó na mesma transação, e ainda assim
+  contava o nó pausado. Logo, o que ela leu é **consistente com o estado anterior à pausa**: a pausa
+  é uma transação à parte, e o executável do nó no teste (`node-executor.py`, o mesmo passo que
+  confirma a réplica em `POST /network/storage/objects/{id}/replica`) também corre em paralelo ao
+  `pause` e pode ter confirmado a cópia depois dele — uma confirmação **legítima**, ainda em
+  `ACTIVE`, que a varredura lê corretamente.
+
+**O que mudou:**
+
+| afirmação | antes | agora |
+|---|---|---|
+| §25.10 | a pausa abre lacuna para o objeto, sempre | mede a cena: a cópia do nó estava `OK` antes da pausa e o objeto continua legível com o nó pausado |
+| §25.11 | a cura repõe a cópia até o alvo | **mais**: o nó está `ACTIVE` de fato antes da cópia ser reposta |
+
+O §25.11 ganhou a medida que faltava porque a recuperação podia "passar" repondo a cópia com o nó
+ainda fora de operação — o objeto voltaria a contar uma máquina que o participante mandou parar, e o
+§25.10 não veria. Hoje o nó é `resumido` duas vezes e confirmado `ACTIVE`; se não voltar, a rodada
+falha com o estado no texto.
+
+**Por que a asserção antiga não podia ficar mais fraca — e não foi o que se fez.** Com alvo 2 e dois
+nós (`ALVO = replicasExpected`, sem o harness fixar nada), as cópias contadas são sempre o CP e um
+nó. `confirmed`, `byDurability` e `nodesWithCopy` não dizem **qual** nó é o terceiro: com o scrubber
+mutado para contar o nó pausado (`filter(p -> false)`), a asserção que olhava esses campos ficou
+**verde em duas rodadas** — não discriminava. Uma asserção que aceita o relatório lido antes da
+pausa também seria verde com a regra desligada. O que ficou medido é o que a pausa de fato controla
+no teste: o objeto continua sendo lido, e a recuperação só conclui com o nó em operação.
+
+Provas: `storage-acceptance` **15 PASS / 0 FAIL em 5 rodadas seguidas** (antes: ~4 falhas em 11
+rodadas).

@@ -21,21 +21,55 @@ import java.util.TreeMap;
  * <p>Sem amostra, os percentis são {@code null} — não 0. Zero seria "todas as tarefas concluíram em
  * 0 ms", que é uma medida, e de uma rede que não executou nada.</p>
  */
-public record TaskLatency(Map<Integer, Integer> samplesByUpperBoundMs) {
+public record TaskLatency(Map<Integer, Integer> samplesByUpperBoundMs, Map<Integer, Integer> retriesByUpperBoundMs) {
 
 	/** Menor faixa: 1 ms. Tarefa abaixo disso cai nela. */
 	private static final int FIRST_BUCKET_MS = 1;
 	/** Maior faixa: 2^16 ms (≈ 68 min). Acima disso, tudo cai aqui — a tarefa não terminou em tempo útil. */
 	private static final int MAX_BUCKET_MS = 1 << 16;
 
+	/**
+	 * {@code retriesByUpperBoundMs} é a faixa das tarefas que FORAM devolvidas à fila (brief §8.2,
+	 * "retentativas"), com as tentativas perdidas antes da conclusão.
+	 *
+	 * <p>Entram na distribuição de tentativas — {@code p50Ms} responde "em quantas tentativas o nó
+	 * costuma concluir" — e <b>não</b> na de duração: o tempo até a falha não é tempo de execução, e
+	 * misturá-los esticaria a cauda com trabalho que não terminou. Ficaram separados de propósito
+	 * porque a "latência" do §8.2 é a de execução; tentativa é a outra pergunta.</p>
+	 */
 	public TaskLatency {
 		samplesByUpperBoundMs = samplesByUpperBoundMs == null ? Map.of()
 			: java.util.Collections.unmodifiableMap(new TreeMap<>(samplesByUpperBoundMs));
+		retriesByUpperBoundMs = retriesByUpperBoundMs == null ? Map.of()
+			: java.util.Collections.unmodifiableMap(new TreeMap<>(retriesByUpperBoundMs));
+	}
+
+	/** Distribuição de duração sozinha: nenhuma tarefa foi devolvida à fila. */
+	public TaskLatency(Map<Integer, Integer> samplesByUpperBoundMs) {
+		this(samplesByUpperBoundMs, Map.of());
 	}
 
 	/** Distribuição vazia: o nó não concluiu tarefa nenhuma na janela. */
 	public static TaskLatency empty() {
 		return new TaskLatency(Map.of());
+	}
+
+	/** Tarefas concluídas que já tinham sido devolvidas à fila ao menos uma vez. */
+	public long retries() {
+		return retriesByUpperBoundMs.values().stream().mapToLong(Integer::longValue).sum();
+	}
+
+	/** Percentil de TENTATIVAS até concluir; {@code null} sem tarefa que tenha sido devolvida. */
+	public Long retriesP50() {
+		return new TaskLatency(retriesByUpperBoundMs).percentile(0.50);
+	}
+
+	public Long retriesP95() {
+		return new TaskLatency(retriesByUpperBoundMs).percentile(0.95);
+	}
+
+	public Long retriesP99() {
+		return new TaskLatency(retriesByUpperBoundMs).percentile(0.99);
 	}
 
 	/**

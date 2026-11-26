@@ -53,7 +53,7 @@ O brief (§8.2) pede, por nó: uso de rede e throughput de entrada e saída. Hoj
 | CPU total, memória, disco livre | **entregue** (heartbeat → painel por nó) |
 | tarefas em execução, versão do runtime, último contato | **entregue** |
 | uso de rede / throughput (entrada e saída) | **medido desde o ciclo 161** — o runtime soma o acumulado de `/proc/net/dev` (interfaces externas) no heartbeat; o painel mostra o total e a fatia de saída |
-| swap, pressão de memória, IOPS, latência de disco, temperatura, GC, threads, p95/p99 de tarefa, DLQ por fila | **swap e pressão desde o ciclo 157** (§7); **IOPS e latência de disco desde o 158** (§8 e §9); **temperatura desde o 159** (§10); **p95/p99 do tempo de execução das tarefas desde o 160** (§11); **DLQ por fila desde o 161** (`deadByQueue`, doc 03). GC/threads (o runtime é shell, não JVM) e p95/p99 de requisição HTTP não existem — ver `docs/rede-distribuida/11-global-coop-fase-0.md` §3 |
+| swap, pressão de memória, IOPS, latência de disco, temperatura, GC, threads, p95/p99 de tarefa, DLQ por fila | **swap e pressão desde o ciclo 157** (§7); **IOPS e latência de disco desde o 158** (§8 e §9); **temperatura desde o 159** (§10); **p95/p99 do tempo de execução das tarefas desde o 160**; **retentativas desde o ciclo 162** (§11.1) (§11); **DLQ por fila desde o 161** (`deadByQueue`, doc 03). GC/threads (o runtime é shell, não JVM) e p95/p99 de requisição HTTP não existem — ver `docs/rede-distribuida/11-global-coop-fase-0.md` §3 |
 
 ## 5. O que o mantenedor precisa conferir no deploy (não é código)
 
@@ -283,6 +283,52 @@ ignorar a janela derruba 1; gravar sem truncar a hora derruba 1; somar sem o nó
 `node-task-latency-migration-test` **14 PASS / 0 FAIL** em MariaDB 11.4 real: `V386` aplicada duas
 vezes, nó/tarefa anteriores preservados, chave composta, `utf8mb4`, upsert somando na mesma linha,
 janela de 24 h separando hoje de anteontem. Mutação (V386 vazia) derruba **6**.
+
+## 11.1 Retentativas das tarefas (ciclo 162)
+
+O §8.2 do brief pede **retentativas**, e o que a rede tinha não respondia. `network_tasks.attempt`
+já era a tentativa em curso, mas **quem a contava era só o `claim`** (o despacho); a devolução à fila
+(`requeue`, em falha retentável e em recusa de verificador) deixava o número parado. A consequência
+era medida:
+
+- `p95/p99` da §11 respondiam "quanto tempo até concluir" e ninguém sabia **em quantas tentativas** o
+  nó concluía — um nó que acerta de primeira e um que precisa de quatro tinham o mesmo número;
+- a tarefa devolvida voltava com `attempt` antigo, e o painel não conseguia separar **fila normal**
+  de **fila doente** (a que já falhou uma vez e vai tentar de novo).
+
+**A regra do número.** `attempt` conta **entregas**: começa em 0 na criação, o `claim` soma 1 a cada
+entrega e a devolução **não** mexe — devolver é dizer "tente de novo", não "já tentou". Duas razões
+para não somar na devolução: (a) o número pularia de 1 para 3 numa rodada com recuperação de claim
+vencido; (b) o limite de `maxAttempts`, que compara com o `attempt` da entrega, gastaria duas
+tentativas do participante por um único claim perdido. A tentativa perdida é derivada na hora de
+gravar: a entrega que conclui soube seu número, e as anteriores (uma a menos) não concluíram.
+
+**O que muda no painel.**
+
+- `GET /admin/network/tasks/overview` ganha `retried`: tarefas **abertas** (`PENDING`) que já foram
+  entregues ao menos uma vez (`attempt >= 1`). Recém-criada está em 0 e não conta; é essa a diferença
+  entre `pending` e "quanto disso é a fila doente".
+- `GET /admin/network/nodes/{id}/observability`, campo `latency`, ganha `retriesInWindow` (quantas
+  tarefas concluídas na janela precisaram de retentativa) e `retriesP50`/`retriesP95`/`retriesP99`
+  (distribuição de **tentativas perdidas até concluir**, na mesma interpolação por faixa da §11).
+  Sem nenhuma tarefa retentada na janela, os percentis são `null` — 0 seria "precisou de zero
+  tentativas", que é outra afirmação.
+
+**Por que coluna separada da duração.** O tempo até uma falha não é tempo de execução. Somar a
+tentativa à coluna `samples` esticaria a cauda (p95/p99 de execução) com trabalho que não terminou;
+por isso a V387 acrescenta `retries` em vez de reusar `samples`. A leitura soma as duas colunas
+separadamente (`SUM_LATENCY` e `SUM_RETRIES`), e a escrita é o mesmo `UPSERT` contador na mesma linha
+de (nó, hora, faixa).
+
+Provas: `NetworkTaskRetryTests` (3 casos pela rota real: entrega que devolve e conclui — duração 1,
+retentativa 1, faixa da contagem = `bucketOf(entregas - 1)`; conclusão de primeira com percentil de
+tentativa `null`; `/overview` com quatro tarefas — concluída de primeira, devolvida e aberta,
+devolvida e concluída, recém-criada — e `retried` 1, `pending` 2, `done` 2). Mutações conferidas:
+devolução somando a tentativa derruba 1; não gravar a amostra de tentativa derruba 1; `retried` sem
+o filtro derruba 1; gravar a tentativa no contador da duração derruba 1. `node-task-retries-migration-test`
+**11 PASS / 0 FAIL** em MariaDB 11.4 real: V387 aplicada duas vezes, duração anterior preservada com
+`retries` 0, upsert somando na mesma linha sem mexer em `samples`, 2ª aplicação sem tocar dado vivo.
+Mutações conferidas: coluna anulável derruba 3; sem `if not exists` derruba a 2ª aplicação.
 
 ## 12. DLQ por fila (ciclo 161)
 

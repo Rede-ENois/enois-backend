@@ -137,6 +137,20 @@ derruba `heartbeat carrega as linhas do painel`.
 - **Harness intermitente.** O `mariadb:11.4` reinicia o mysqld ao fim do init; "respondeu uma vez"
   não é "ficou no ar". A prontidão passou a exigir um create/drop de tabela após uma pausa.
 
+## 6.4 Retentativas no painel do nó (ciclo 162)
+
+O `latency` de `GET /admin/network/nodes/{id}/observability` carrega, desde a V387, a pergunta das
+**retentativas** (brief §8.2): `retriesInWindow` é quantas das tarefas concluídas na janela de 24 h
+já tinham sido devolvidas à fila ao menos uma vez, e `retriesP50`/`retriesP95`/`retriesP99` dão a
+distribuição de **tentativas perdidas até concluir** — na mesma interpolação por faixa dos percentis
+de duração.
+
+A tentativa entra na coluna `retries`, **não** em `samples`: o tempo até uma falha não é tempo de
+execução, e misturar esticaria a cauda do p95/p99 de duração com trabalho que não terminou. A origem
+é a entrega que concluiu — o `attempt` que ela declarou, menos um. Sem tarefa retentada na janela, os
+percentis são `null` (0 afirmaria "precisou de zero tentativas"). O racional completo, com as
+mutações, está no doc 20 §11.1.
+
 ## 6.5 A idade da série: `freshness`
 
 O brief §8.7 exige que o painel **distinga ausência de dado, nó offline e métrica efetivamente

@@ -162,6 +162,11 @@ class NetworkTaskPersistenceAdapter implements NetworkTaskRepository {
 	}
 
 	@Override
+	public long countRetried() {
+		return repository.countRetried();
+	}
+
+	@Override
 	public List<QueueCount> countByQueueAndStatus() {
 		return repository.countGroupedByQueueAndStatus()
 			.stream()

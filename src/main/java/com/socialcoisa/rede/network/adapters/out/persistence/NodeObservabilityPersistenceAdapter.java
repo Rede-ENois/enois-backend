@@ -58,8 +58,18 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 		on duplicate key update samples = samples + 1
 		""";
 
+	private static final String UPSERT_RETRY = """
+		insert into network_task_latency_buckets (node_id, metrics_hour, bucket_upper_ms, samples, retries)
+		values (?, ?, ?, 0, 1)
+		on duplicate key update retries = retries + 1
+		""";
+
 	private static final String SUM_LATENCY = "select bucket_upper_ms, sum(samples) from network_task_latency_buckets "
 		+ "where node_id = ? and metrics_hour >= ? and metrics_hour <= ? group by bucket_upper_ms";
+
+	private static final String SUM_RETRIES = "select bucket_upper_ms, sum(retries) "
+		+ "from network_task_latency_buckets where node_id = ? and metrics_hour >= ? and metrics_hour <= ? "
+		+ "group by bucket_upper_ms";
 
 	private static final String INSERT_LOG = "insert into network_node_logs (id, node_id, logged_at, level, message) "
 		+ "values (?, ?, ?, ?, ?)";
@@ -116,6 +126,22 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 	public void addLatencySample(String nodeId, Instant at, int bucketUpperMs) {
 		jdbc.update(UPSERT_LATENCY, nodeId, Timestamp.from(at.truncatedTo(java.time.temporal.ChronoUnit.HOURS)),
 			bucketUpperMs);
+	}
+
+	@Override
+	public void addRetrySample(String nodeId, Instant at, long durationMs) {
+		jdbc.update(UPSERT_RETRY, nodeId, Timestamp.from(at.truncatedTo(java.time.temporal.ChronoUnit.HOURS)),
+			com.socialcoisa.rede.network.domain.TaskLatency.bucketOf(durationMs));
+	}
+
+	@Override
+	public java.util.Map<Integer, Integer> retrySamples(String nodeId, Instant now, int hours) {
+		Instant from = now.minusSeconds(hours * 3600L).truncatedTo(java.time.temporal.ChronoUnit.HOURS);
+		java.util.Map<Integer, Integer> samples = new java.util.TreeMap<>();
+		jdbc.query(SUM_RETRIES, rs -> {
+			samples.put(rs.getInt(1), rs.getInt(2));
+		}, nodeId, Timestamp.from(from), Timestamp.from(now));
+		return samples;
 	}
 
 	@Override

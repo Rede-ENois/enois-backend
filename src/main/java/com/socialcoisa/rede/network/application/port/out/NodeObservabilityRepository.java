@@ -63,8 +63,18 @@ public interface NodeObservabilityRepository {
 	void addLatencySample(String nodeId, Instant at, int bucketUpperMs);
 
 	/**
+	 * Soma, para uma tarefa que precisou de {@code durationMs} ms, quantas tentativas foram perdidas
+	 * antes de concluir (brief §8.2, "retentativas"). Entra na faixa da hora de {@code at}, somando
+	 * no banco como {@link #addLatencySample}.
+	 */
+	void addRetrySample(String nodeId, Instant at, long durationMs);
+
+	/**
 	 * Contagem por faixa deste nó nas últimas {@code hours} horas, até {@code now}. Faixa sem tarefa
 	 * não aparece: o que não foi medido não é zero.
 	 */
 	java.util.Map<Integer, Integer> latencySamples(String nodeId, Instant now, int hours);
+
+	/** Mesma leitura de {@link #latencySamples}, na coluna das tentativas até concluir. */
+	java.util.Map<Integer, Integer> retrySamples(String nodeId, Instant now, int hours);
 }

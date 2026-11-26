@@ -475,6 +475,16 @@ public class NetworkTaskService {
 				// Só o resultado APLICADO conta como saúde: um resultado descartado não é prova de que
 				// o nó entregou nada.
 				recordOutcome(node, true, task.dispatchedAt(), now);
+				// Retentativas (brief §8.2): o `attempt` da linha já subiu a cada devolução à fila, então
+				// uma tarefa concluída na 3ª tentativa entra na faixa das tentativas como 2 tentativas
+				// perdidas. O dos desfechos que NÃO concluíram não entra: a pergunta é "em quantas
+				// tentativas o nó costuma concluir", e uma tarefa que morreu na DLQ nunca vai responder.
+				// A tentativa que CONCLUIU é a que a entrega declarou (`command.attempt()`): é ela que a
+				// guarda de `tasks.complete` aceitou, e é o resultado de `task` já carregado não contar.
+				var retryPort = observability.getIfAvailable();
+				if (retryPort != null && command.attempt() > 1) {
+					retryPort.addRetrySample(node.id(), now, command.attempt() - 1L);
+				}
 				return new ResultOutcome(task.id(), TaskStatus.DONE.name(), true, null);
 			}
 			return new ResultOutcome(task.id(), task.status().name(), false, "TASK_ALREADY_CLAIMED");
@@ -528,6 +538,11 @@ public class NetworkTaskService {
 	@Transactional(readOnly = true)
 	public long countByStatus(TaskStatus status) {
 		return tasks.countByStatus(status);
+	}
+
+	/** Tarefas abertas que já voltaram à fila ao menos uma vez (brief §8.2, "retentativas"). */
+	public long countRetried() {
+		return tasks.countRetried();
 	}
 
 	/**

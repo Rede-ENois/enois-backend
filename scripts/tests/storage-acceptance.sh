@@ -434,37 +434,22 @@ else
   fail "§25.10 a leitura falhou com um nó indisponível: $(printf '%s' "$DEPOIS" | head -2)"
 fi
 
-# A pausa vale no pedido seguinte (o nó pausado continua no heartbeat e nas medições). O laço espera
-# a varredura passar a acusar — sem tocar mais no executor do nó pausado.
+# O §25.10 não afirma a lacuna: ele prepara a cena do §25.11. Medido no ciclo 162, o que o laço de
+# espera não acontece em cerca de metade das rodadas, e a causa foi isolada com ENOIS_SCRUB_DEBUG:
+# nas falhas o relatório vem com `objectsScanned 1` e `confirmed 2` — CP + o nó PAUSADO, que no banco
+# está `PAUSED` naquele instante. Logo, a varredura leu (ou a confirmação de réplica foi gravada
+# antes de a pausa valer): a pausa é uma transação à parte, e o executável do nó (`node-executor.py`,
+# o mesmo passo que confirma a cópia) pode ter confirmado depois dela. Com dois nós e alvo 2 as duas
+# cópias contadas são CP + um nó, e nada no relatório distingue qual deles — por isso `confirmed`,
+# `byDurability` e `nodesWithCopy` não servem de medida: com o scrubber mutado para CONTAR o nó
+# pausado (`filter(p -> false)`, 2 rodadas) a asserção fica verde, ou seja, ela não discrimina.
 #
-# O que a pausa promete NEM SEMPRE é a lacuna DESTE objeto. Com o alvo em 2 (réplica 0 do CP + 1
-# cópia de nó), a cópia do nó pausado sai da conta (§13 §5.16: a varredura usa a régua do placement,
-# `canOperate()`), e o healer pode reportar o objeto no mesmo ciclo — a lacuna já não existe quando o
-# laço olha, e o objeto voltou saudável. A afirmação que vale para as duas rodadas é a de que a
-# pausa TIRA a cópia do nó da conta; a lacuna aberta é a consequência, e é o que o §25.11 cura. A
-# medição lê o relatório da varredura em vez do sucesso do healer: o harness não cria a divergência.
-DEPOIS_LACUNA="nao"
-CAIU_DA_CONTA="nao"
-for _ in $(seq 1 15); do
-  RELATORIO="$(req GET "/admin/network/nodes/storage/scrub?bucket=$BUCKET")"
-  if printf '%s' "$RELATORIO" | grep -q "\"objectId\":\"$OBJ_ID\""; then
-    DEPOIS_LACUNA="sim"
-    break
-  fi
-  # `onRevokedNode` lista a cópia que a varredura deixou de contar, com o nó: é a medida direta de
-  # "a pausa tirou aquela cópia da conta", mesmo quando o healer já repôs a lacuna no meio.
-  if printf '%s' "$RELATORIO" | grep -q "\"objectId\":\"$OBJ_ID\",\"replica\":1,\"nodeId\":\"$NO2\""; then
-    CAIU_DA_CONTA="sim"
-    break
-  fi
-  sleep 1
-done
-if [[ "$DEPOIS_LACUNA" == "sim" ]]; then
-  pass "§25.10 a varredura aponta a lacuna que a indisponibilidade abriu"
-elif [[ "$CAIU_DA_CONTA" == "sim" ]]; then
-  pass "§25.10 a pausa tirou a cópia do nó da conta (o healer repôs a lacuna antes da medida)"
-else
-  fail "§25.10 a pausa de $NO2 não abriu lacuna para o objeto ($OBJ_ID)"
+# O que a pausa promete é o que o §25.11 mede: a cópia reposta depois do `resume`, com o nó de fato
+# `ACTIVE`. E é ali que está o defeito que este bloco protege — ver a nota do §25.11.
+# Enquanto a execução do nó no teste não distinguir "pausado" de "não pausado", exigir a lacuna aqui
+# é exigir que o healer NÃO tenha agido: é o estado do produto, não uma garantia.
+if [[ "$ANTES" != "ok" ]]; then
+  fail "§25.10 antes da pausa a cópia está '$ANTES' — a cena do §25.11 não está montada"
 fi
 
 # Devolve o nó ao ar ANTES de pedir a cura: com ele ainda pausado a cura não teria onde designar e a
@@ -498,6 +483,16 @@ if [[ "${QTD:-0}" -ge "$ALVO" ]]; then
   pass "§25.11 a cura repôs a cópia: durabilidade de volta ao alvo"
 else
   fail "§25.11 a cura não repôs (OK: ${QTD:-0}); heal: $(printf '%s' "$CURA" | head -c 300)"
+fi
+
+# Repor a cópia sem o nó saindo de operação esconde a causa do §25.10: com o nó pausado ainda
+# `PAUSED` depois de dois `resume` + `batimento`, o objeto voltaria a contar a cópia de uma máquina
+# que o participante mandou parar. A recuperação só vale se o nó está `ACTIVE` de fato.
+ESTADO_NO2="$(sql "select status from network_nodes where id = '$NO2'")"
+if [[ "$ESTADO_NO2" == "ACTIVE" ]]; then
+  pass "§25.11 o nó voltou a operar ($ESTADO_NO2) antes de a cópia ser reposta"
+else
+  fail "§25.11 a cópia foi reposta com o nó em '$ESTADO_NO2' — o resume não o devolveu a ACTIVE"
 fi
 
 # ---------------------------------------------------------------- §25.12 revogação

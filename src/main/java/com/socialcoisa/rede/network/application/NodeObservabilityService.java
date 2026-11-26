@@ -139,9 +139,11 @@ public class NodeObservabilityService {
 	}
 
 	private TaskLatency latency(String nodeId, Instant now) {
-		com.socialcoisa.rede.network.domain.TaskLatency distribution = new com.socialcoisa.rede.network.domain.TaskLatency(
-			repository.latencySamples(nodeId, now, LATENCY_WINDOW_HOURS));
-		return new TaskLatency(distribution.p50Ms(), distribution.p95Ms(), distribution.p99Ms(), distribution.total());
+		var distribution = new com.socialcoisa.rede.network.domain.TaskLatency(
+			repository.latencySamples(nodeId, now, LATENCY_WINDOW_HOURS),
+			repository.retrySamples(nodeId, now, LATENCY_WINDOW_HOURS));
+		return new TaskLatency(distribution.p50Ms(), distribution.p95Ms(), distribution.p99Ms(), distribution.total(),
+			distribution.retries(), distribution.retriesP50(), distribution.retriesP95(), distribution.retriesP99());
 	}
 
 	/**
@@ -231,7 +233,15 @@ public class NodeObservabilityService {
 	 * nos percentis: um p99 sobre 10 tarefas é uma anedota, e o painel precisa poder dizer isso em vez
 	 * de mostrar um número com três algarismos de confiança que não tem.
 	 */
-	public record TaskLatency(Long p50Ms, Long p95Ms, Long p99Ms, long samplesInWindow) {
+	/**
+	 * {@code retriesInWindow} é quantas das tarefas concluídas tinham sido devolvidas à fila antes
+	 * (brief §8.2, "retentativas"); {@code retriesP*} a distribuição de TENTATIVAS perdidas até
+	 * concluir — separada da duração de propósito (tempo até a falha não é tempo de execução).
+	 * {@code null} quando nenhuma tarefa da janela precisou de retentativa: zero afirmaria "todas
+	 * concluíram na primeira tentativa", que é outra medida.
+	 */
+	public record TaskLatency(Long p50Ms, Long p95Ms, Long p99Ms, long samplesInWindow, long retriesInWindow,
+			Long retriesP50, Long retriesP95, Long retriesP99) {
 	}
 
 	private static Summary summarize(List<Sample> samples) {
