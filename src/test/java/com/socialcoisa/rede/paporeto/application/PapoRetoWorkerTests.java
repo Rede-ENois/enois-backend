@@ -170,6 +170,52 @@ class PapoRetoWorkerTests {
 	}
 
 	@Test
+	void comLeituraDeIntencaoOsTemasReaisSubstituemAsPalavras() {
+		// O texto não tem par ("adorei esse filme") mas a leitura entende o tema real.
+		fonte.publicacoes = List.of(new PapoPublicacaoReader.Publicacao("adorei esse filme", "autor_1", T0,
+				null, "pub_1"));
+		var leitor = new com.socialcoisa.rede.leitura.application.port.out.LeitorDeTexto() {
+			public boolean disponivel() {
+				return true;
+			}
+			public java.util.Optional<com.socialcoisa.rede.leitura.domain.LeituraTexto> ler(String texto) {
+				return java.util.Optional.of(com.socialcoisa.rede.leitura.domain.LeituraTexto.validada(
+						java.util.List.of("cinema nacional"), com.socialcoisa.rede.leitura.domain.Intencao.OPINIAO,
+						"gostou do filme", true));
+			}
+		};
+		var leitura = new com.socialcoisa.rede.leitura.application.LeituraDeTexto(leitor,
+				new com.socialcoisa.rede.leitura.application.port.out.LeituraCache() {
+					private final java.util.Map<String, com.socialcoisa.rede.leitura.domain.LeituraTexto> linhas =
+							new java.util.HashMap<>();
+					public java.util.Map<String, com.socialcoisa.rede.leitura.domain.LeituraTexto> porHashes(
+							java.util.Collection<String> hashes) {
+						var achadas = new java.util.HashMap<String, com.socialcoisa.rede.leitura.domain.LeituraTexto>();
+						for (String h : hashes) {
+							if (linhas.containsKey(h)) {
+								achadas.put(h, linhas.get(h));
+							}
+						}
+						return achadas;
+					}
+					public void salvar(String hash, com.socialcoisa.rede.leitura.domain.LeituraTexto l, int v) {
+						linhas.put(hash, l);
+					}
+					public long degradadas() {
+						return 0;
+					}
+				});
+
+		new PapoRetoWorker(List.of(fonte), repositorio, new PapoAssuntoExtractor(),
+				Clock.fixed(T0.plusSeconds(300), ZoneOffset.UTC), 0.30, 0.25, 0.25, 0.20)
+			.comLeitura(leitura)
+			.corte();
+
+		assertThat(repositorio.falas.stream().map(PapoRetoRepository.Fala::expressao))
+			.containsExactly("cinema nacional");
+	}
+
+	@Test
 	void gravaSomenteAExpressaoNaoOTexto() {
 		fonte.publicacoes = List.of(new PapoPublicacaoReader.Publicacao("inteligencia artificial mudou meu trabalho", "autor_1", T0,
 				null, "pub_1"));
