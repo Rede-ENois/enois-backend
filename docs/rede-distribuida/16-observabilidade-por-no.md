@@ -36,10 +36,17 @@ POST /network/nodes/heartbeat
   "logs": [ { "level": "INFO", "message": "tarefa tk_1 concluida", "at": "2026-11-12T12:00:00Z" } ] }
 ```
 
-`bytesInMb`/`bytesOutMb` são o **tráfego acumulado** das interfaces desde o boot (fora o loopback),
-em MiB, lido de `/proc/net/dev`. O Control Plane já tinha as colunas (`V345`) e o heartbeat já
-aceitava os campos desde então — mas o runtime não os media, e o painel não mostrava tráfego nenhum.
-Sem `/proc/net/dev` os dois campos **não vão**: ausente é "não medido", nunca zero.
+`bytesInMb`/`bytesOutMb` são o **tráfego acumulado** das interfaces desde o boot, em MiB, lido de
+`/proc/net/dev`. Desde o ciclo 161 o runtime os mede (antes: o backend aceitava e o nó não mandava).
+Somam as interfaces que carregam tráfego de fora — `eth*`, `en*`, `wl*` e `ww*`; loopback, ponte
+(`br-*`), `docker0` e `veth*` ficam de fora, porque o pacote de um container aparece nele e na ponte
+e somar os dois contaria o mesmo tráfego duas vezes. Sem `/proc/net/dev` os dois campos **não vão**:
+ausente é "não medido", nunca zero. É acumulado, e não taxa, por contrato: o painel do participante
+mostra o total e a fatia de saída (doc 17 §tráfego).
+
+O corpo inteiro do heartbeat tem de ser JSON válido — o harness `node-traffic-test.sh` o lê como
+documento, porque um fragmento opcional sem a vírgula derrubava todo heartbeat com memória,
+temperatura ou I/O medidos (corrigido no ciclo 161).
 
 O efeito visível é o de um quadro ao vivo (atualizado a cada heartbeat, e a tela recarrega a rota);
 o caminho é o que a arquitetura permite. `logs` é opcional: um runtime anterior a esta fase
