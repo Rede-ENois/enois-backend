@@ -44,6 +44,13 @@ public class NodeObservabilityService {
 	/** Mesma janela de "vivo" do scheduler, do painel e da cobertura: 180 s. */
 	static final long ALIVE_SECONDS = 180;
 
+	/**
+	 * Janela do histograma de latência (brief §8.2). A série de amostras é do minuto; a latência é
+	 * lida em horas porque um p99 sobre 60 amostras é o próprio máximo, e a cauda só tem sentido com
+	 * volume. Vinte e quatro horas é a janela que o painel mostra.
+	 */
+	static final int LATENCY_WINDOW_HOURS = 24;
+
 	private final NodeObservabilityRepository repository;
 	private final NetworkNodeRepository nodes;
 	private final ContentVersionRepository versions;
@@ -127,7 +134,14 @@ public class NodeObservabilityService {
 		List<LogLine> logs = repository.logs(nodeId, clamp(logLimit, LOG_KEEP));
 		Instant now = clock.instant();
 		return new Panel(nodeId, now, List.copyOf(samples), logs.stream().map(View::of).toList(),
-			summarize(samples), logLevels(logs), freshness(samples, now), health(nodeId, now));
+			summarize(samples), logLevels(logs), freshness(samples, now), health(nodeId, now),
+			latency(nodeId, now));
+	}
+
+	private TaskLatency latency(String nodeId, Instant now) {
+		com.socialcoisa.rede.network.domain.TaskLatency distribution = new com.socialcoisa.rede.network.domain.TaskLatency(
+			repository.latencySamples(nodeId, now, LATENCY_WINDOW_HOURS));
+		return new TaskLatency(distribution.p50Ms(), distribution.p95Ms(), distribution.p99Ms(), distribution.total());
 	}
 
 	/**
@@ -208,7 +222,16 @@ public class NodeObservabilityService {
 
 	/** O que a página do nó desenha. {@code generatedAt} deixa claro que o quadro é do instante. */
 	public record Panel(String nodeId, Instant generatedAt, List<Sample> series, List<View> console,
-			Summary summary, java.util.Map<String, Long> consoleLevels, Freshness freshness, NodeHealth health) {
+			Summary summary, java.util.Map<String, Long> consoleLevels, Freshness freshness, NodeHealth health,
+			TaskLatency latency) {
+	}
+
+	/**
+	 * A distribuição de latência do nó na janela. {@code samplesInWindow} é quantas tarefas entraram
+	 * nos percentis: um p99 sobre 10 tarefas é uma anedota, e o painel precisa poder dizer isso em vez
+	 * de mostrar um número com três algarismos de confiança que não tem.
+	 */
+	public record TaskLatency(Long p50Ms, Long p95Ms, Long p99Ms, long samplesInWindow) {
 	}
 
 	private static Summary summarize(List<Sample> samples) {

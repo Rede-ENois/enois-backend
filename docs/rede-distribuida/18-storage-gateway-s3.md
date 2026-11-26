@@ -2200,11 +2200,19 @@ Ed25519 da config é gerado pelo harness e o privado sobe pelo `--rede.network.c
   contrário;
 - `SUSPENDED` não serve para o ciclo de vida do §25.10/§25.11: ele **revoga as chaves** e o nó não
   voltaria. A pausa é do dono e tem volta (`/resume`).
+- o §25.10 mede uma **transição**, não um estado: antes da pausa a cópia do nó tem de estar
+  confirmada (`OK`) e a varredura sem lacuna; depois, a lacuna daquele objeto. O laço do §25.7 só
+  garante "pelo menos o alvo", e com `rede.storage.replicas: 2` (padrão: réplica 0 do CP + uma cópia
+  de nó) o objeto fica abaixo do alvo enquanto a cópia do nó ainda não confirmou — a asserção passava
+  ou falhava pelo tempo do executor, não pela pausa. O §25.11 devolve o nó ao ar **antes** da cura, e
+  repete a cura com folga: uma designação pode cair num nó que ainda não voltou a operar.
 
-**Verificação:** `storage-acceptance.sh` **PASS 14 | FAIL 0**, rodado em série com os outros 13
-harnesses (**14/14**). Mutações no próprio harness, cada uma derrubando a asserção que ela mede:
+**Verificação:** `storage-acceptance.sh` **PASS 15 | FAIL 0** (ciclo 160), quatro rodadas seguidas —
+antes eram 14 asserções e o §25.10 falhava em cerca de uma em três rodadas. Rodado em série com os
+outros harnesses. Mutações no próprio harness, cada uma derrubando a asserção que ela mede:
 assinar o caminho do servidor (`/s3/…`) em vez do do protocolo (§25.3); executar a tarefa sem
-confirmar a réplica (§25.7/§25.11); não pausar o nó (§25.10); não retomar (§25.11); não executar a
+confirmar a réplica (§25.7/§25.11); não pausar o nó (§25.10 — com a varredura fingindo objeto
+completo, a asserção da lacuna cai); não retomar (§25.11); não executar a
 cura (§25.11); digest do arquivo do nó trocado (§25.8). Uma sobreviveu e foi **corrigida como
 asserção** (ver §4.70): o executor que não confere o que baixou — o Control Plane mede de novo e
 recusa, então a garantia vale de qualquer jeito; a conferência do nó é a primeira linha, não a
