@@ -131,4 +131,12 @@ public interface UserProfileRepository {
 	List<UserProfile> findAdmins();
 
 	List<UserProfile> searchByQuery(String query);
+
+	/**
+	 * A página de contas reais para a retrospectiva anual (Énóis Wrapped): e-mail verificado, não
+	 * administradora, não removida (username {@code removed-*}) e não excluída (e-mail anonimizado).
+	 * Devolve id, a reputação materializada e a data de criação — só o que a fila precisa, sem
+	 * carregar o perfil. Ordem estável por id; nulo começa do início.
+	 */
+	List<WrappedAccount> wrappedAccounts(String afterId, int limit);
 }
