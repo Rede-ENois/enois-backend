@@ -123,6 +123,19 @@ public interface NetworkTaskRepository {
 
 	long countByStatus(TaskStatus status);
 
+	/**
+	 * Quantas tarefas de cada tipo estão em cada estado (brief §8.2, "DLQ por fila").
+	 *
+	 * <p>Uma consulta agrupada, não uma contagem por tipo: o painel pede o quadro inteiro de uma vez, e
+	 * nove tipos × sete estados seriam 63 idas ao banco a cada abertura da tela. Tipo ou estado sem
+	 * tarefa não aparece — quem lê decide que ausência é zero, e a porta não inventa linha.</p>
+	 */
+	List<QueueCount> countByQueueAndStatus();
+
+	/** Uma célula do quadro: tipo (fila), estado e quantas tarefas. */
+	record QueueCount(TaskType taskType, TaskStatus status, long tasks) {
+	}
+
 	/** Tarefas terminais recentes, para o painel mostrar a DLQ e o histórico. */
 	List<NetworkTask> listRecent(int limit);
 }

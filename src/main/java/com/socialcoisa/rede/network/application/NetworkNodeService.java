@@ -2,6 +2,7 @@ package com.socialcoisa.rede.network.application;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
@@ -267,12 +268,40 @@ public class NetworkNodeService {
 		if (beat.observedIp() != null && !beat.observedIp().isBlank()) {
 			nodes.observeIp(authenticated.id(), beat.observedIp(), now);
 		}
-		nodes.touch(authenticated.id(), beat.runtimeVersion(), beat.cpuPercent(), beat.memoryMb(),
-			beat.runningTasks(), beat.diskFreeMb(), beat.diskTotalMb(), beat.contentUsedMb(), beat.bytesInMb(),
-			beat.bytesOutMb(), now);
+		// A memória tem duas medidas e uma coluna de uso. `memoryMb` é uso desde a V381; runtime anterior
+		// manda só o disponível e o uso é derivado do teto cedido, aqui — antes de gravar, para que o
+		// banco nunca guarde "disponível" na coluna de "uso" (era o que fazia: 7900 MB livres viravam
+		// "7900 em uso" e o nó saía do balanceamento com a máquina ociosa). A mesma derivação vive em
+		// `NetworkNode.usageFrom`, para valer também para quem lê o nó já gravado.
+		Integer uso = beat.memoryMb();
+		Integer disponivel = beat.memoryAvailableMb();
+		if (disponivel == null && uso != null && uso == 0) {
+			// Runtime antigo com `/proc/meminfo` ilegível: zero não é disponível possível, e derivar
+			// diria "tudo em uso" sobre uma leitura que falhou.
+			uso = null;
+		}
+		if (disponivel == null && uso != null) {
+			disponivel = uso;
+			uso = NetworkNode.usageFrom(null, disponivel, authenticated.declaredMemoryMb());
+		}
+		// O disco segue a mesma régua da memória: medida fisicamente impossível não vira medida. O
+		// runtime do ciclo 158 já bloqueia retrocesso de contador e não manda negativo, mas a rota
+		// não pode depender do medidor para isso — um corpo forjado com a chave do nó, um runtime
+		// divergente ou uma reescrita futura do `awk` passariam IOPS -42,5 e latência -1,0 ms para
+		// o quadro e para a série, que é pior que não medir.
+		Double iops = naoNegativo(beat.diskIops());
+		Double latencia = naoNegativo(beat.diskLatencyMs());
+		nodes.touch(authenticated.id(), beat.runtimeVersion(), beat.cpuPercent(), uso, disponivel,
+			beat.runningTasks(), beat.diskFreeMb(), beat.diskTotalMb(), iops, latencia,
+			beat.temperatureC(), beat.contentUsedMb(), beat.bytesInMb(), beat.bytesOutMb(), now);
 		NetworkNode updated = require(authenticated.id());
 		quarantineOnTermConflict(updated, beat.observedTerm(), now);
 		return require(authenticated.id());
+	}
+
+	/** Medida que não pode existir (negativa ou não numérica) é "não medido", nunca um número. */
+	private static Double naoNegativo(Double value) {
+		return value == null || value.isNaN() || value.isInfinite() || value < 0 ? null : value;
 	}
 
 	/**
@@ -623,8 +652,9 @@ public class NetworkNodeService {
 	}
 
 	public record HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
-			Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Long bytesInMb,
-			Long bytesOutMb, Integer observedTerm, String observedIp) {
+			Integer memoryAvailableMb, Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Double diskIops,
+			Double diskLatencyMs, BigDecimal temperatureC, Long contentUsedMb, Long bytesInMb, Long bytesOutMb,
+			Integer observedTerm, String observedIp) {
 
 		/**
 		 * Heartbeat de runtime anterior ao tráfego medido (V345): os dois contadores ficam nulos.
@@ -635,8 +665,8 @@ public class NetworkNodeService {
 		 */
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Integer observedTerm) {
-			this(runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, diskTotalMb, contentUsedMb, null,
-				null, observedTerm, null);
+			this(runtimeVersion, cpuPercent, memoryMb, null, runningTasks, diskFreeMb, diskTotalMb, null, null,
+				null, contentUsedMb, null, null, observedTerm, null);
 		}
 
 		/**
@@ -648,20 +678,22 @@ public class NetworkNodeService {
 		 */
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Integer observedTerm) {
-			this(runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, diskTotalMb, null, null, null,
-				observedTerm, null);
+			this(runtimeVersion, cpuPercent, memoryMb, null, runningTasks, diskFreeMb, diskTotalMb, null, null,
+				null, null, null, null, observedTerm, null);
 		}
 
 		/**
-		 * Heartbeat de runtime que também não mede o uso do conteúdo (anterior à V344).
+		 * Heartbeat de runtime que também não mede o uso do conteúdo nem o I/O de disco (anterior à
+		 * V344/V381).
 		 *
 		 * <p>O uso fica desconhecido e o painel diz isso; o teto e o livre continuam valendo para
-		 * todas as decisões que já os usavam.</p>
+		 * todas as decisões que já os usavam. Sem I/O medido, IOPS e latência ficam nulos — e não
+		 * zero, que afirmaria um disco parado.</p>
 		 */
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Integer observedTerm) {
-			this(runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, null, null, null, null,
-				observedTerm, null);
+			this(runtimeVersion, cpuPercent, memoryMb, null, runningTasks, diskFreeMb, null, null, null,
+				null, null, null, null, observedTerm, null);
 		}
 	}
 }

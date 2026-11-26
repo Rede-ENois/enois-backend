@@ -50,12 +50,33 @@ public final class TestDatabase {
 	}
 
 	/**
+	 * Identidade verificada (a reputação só é contada para quem verificou). Mesmo formato do registro
+	 * que o provedor grava quando aprova a verificação.
+	 */
+	public static void markIdentityVerified(String userId, Instant at) {
+		require().update("delete from identity_verifications where user_id = ?", userId);
+		require().update("""
+			insert into identity_verifications (id, user_id, provider, state, attempt_id, completed_at, updated_at)
+			values (?, ?, 'didit', 'VERIFIED', ?, ?, ?)
+			""", "verif-figurinha-" + userId, userId, "sessao-figurinha", java.sql.Timestamp.from(at),
+			java.sql.Timestamp.from(at));
+	}
+
+	/**
 	 * Data de cadastro da conta ({@code users.created_at}). O cadastro de teste nasce agora; cenario
 	 * de conta antiga precisa do perfil registrado numa data anterior.
 	 */
 	public static void setCreatedAt(String userId, java.time.LocalDate at) {
 		require().update("update users set created_at = ? where id = ?", java.sql.Timestamp.from(
 			at.atStartOfDay(java.time.ZoneId.of("America/Sao_Paulo")).toInstant()), userId);
+	}
+
+	/**
+	 * A credibilidade materializada ({@code users.reputation}) — o job do ranking a escreve em
+	 * produção; aqui o cenário a fixa para priorizar a fila do Énóis Wrapped sem depender do job.
+	 */
+	public static void updateReputation(String userId, int reputation) {
+		require().update("update users set reputation = ? where id = ?", reputation, userId);
 	}
 
 	/** Liga um segundo fator sem passar pelo fluxo, para cenarios que so precisam do estado final. */

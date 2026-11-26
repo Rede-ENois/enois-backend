@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import com.socialcoisa.rede.documentos.domain.DocumentoTipo;
 import com.socialcoisa.rede.identity.application.port.in.ChangeEmailUseCase;
 import com.socialcoisa.rede.identity.application.port.in.ChangePasswordUseCase;
 import com.socialcoisa.rede.identity.application.port.in.DeleteAccountUseCase;
@@ -81,6 +82,7 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 
 	private final org.springframework.jdbc.core.JdbcTemplate jdbc;
 	private final com.socialcoisa.rede.shared.security.IpRateLimiter rateLimiter;
+	private final com.socialcoisa.rede.documentos.application.DocumentosLegaisService documentosLegais;
 	private final SecureRandom secureRandom = new SecureRandom();
 
 	public AuthService(UserProfileRepository userProfileRepository, CredentialRepository credentialRepository,
@@ -92,7 +94,9 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
                        PasswordHasher passwordHasher, EmailService emailService, Clock clock,
                        EmissorSessaoService emissorSessao,
                        org.springframework.jdbc.core.JdbcTemplate jdbc,
-                       com.socialcoisa.rede.shared.security.IpRateLimiter rateLimiter) {
+                       com.socialcoisa.rede.shared.security.IpRateLimiter rateLimiter,
+                       com.socialcoisa.rede.documentos.application.DocumentosLegaisService documentosLegais) {
+		this.documentosLegais = documentosLegais;
 		this.emissorSessao = emissorSessao;
 		this.userProfileRepository = userProfileRepository;
 		this.credentialRepository = credentialRepository;
@@ -297,6 +301,9 @@ public class AuthService implements SignupUseCase, LoginUseCase, LogoutUseCase, 
 			userProfileRepository.save(profile);
 			credentialRepository.save(userId, signup.email(), signup.passwordHash());
 			pendingSignups.deleteByEmail(signup.email());
+			// A caixa do cadastro é o aceite dos Termos: registra a versão que estava em vigor
+			// neste instante. Sem texto em vigor, nada é gravado.
+			documentosLegais.registrarAceiteDoCadastro(userId, DocumentoTipo.TERMOS_DE_USO);
 			return createResponse(profile, null);
 		}
 		EmailVerificationToken verification = emailVerificationTokenRepository.findByToken(tokenHash)

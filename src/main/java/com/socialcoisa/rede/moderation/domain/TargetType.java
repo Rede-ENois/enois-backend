@@ -38,5 +38,10 @@ public enum TargetType {
 	/** Desafio do Explorar (o convite cai do feed próprio junto com as participações). */
 	DESAFIO_POST,
 	/** Participação (resultado publicado) num desafio. */
-	DESAFIO_PARTICIPACAO
+	DESAFIO_PARTICIPACAO,
+	/**
+	 * Figurinha da comunidade. A denúncia sozinha não tira do catálogo; a penalidade humana (ou a
+	 * aprovação) desativa, e a figurinha continua gravada com o motivo para auditoria.
+	 */
+	FIGURINHA_COMUNIDADE
 }

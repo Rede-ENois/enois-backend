@@ -1,6 +1,10 @@
 package com.socialcoisa.rede.network.adapters.out.persistence;
 
+import java.math.BigDecimal;
 import java.time.Instant;
+
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NodeProfile;
@@ -49,6 +53,10 @@ class NetworkNodeJpaEntity {
 	@Column(name = "observed_memory_mb")
 	private Integer observedMemoryMb;
 
+	/** {@code null} em nó cujo runtime só manda o uso (ou que ainda não bateu coração). */
+	@Column(name = "observed_memory_available_mb")
+	private Integer observedMemoryAvailableMb;
+
 	@Column(name = "observed_running_tasks")
 	private Integer observedRunningTasks;
 
@@ -60,6 +68,26 @@ class NetworkNodeJpaEntity {
 
 	@Column(name = "observed_disk_total_mb")
 	private Long observedDiskTotalMb;
+
+	/** IOPS medido entre dois heartbeats (brief §8.2); {@code null} = não medido, diferente de 0. */
+	@Column(name = "observed_disk_iops")
+	private Double observedDiskIops;
+
+	/** Latência média por operação de disco no último intervalo; {@code null} = não medido. */
+	@Column(name = "observed_disk_latency_ms")
+	private Double observedDiskLatencyMs;
+
+	/**
+	 * Maior temperatura entre os sensores da máquina, em graus (brief §8.2); {@code null} = a máquina
+	 * não tem sensor legível, que é "não disponível" e não uma temperatura medida.
+	 *
+	 * <p>Sem o {@code JdbcTypeCode}, o {@link BigDecimal} mapeia para {@code decimal(38,2)} e o
+	 * Dialect do MariaDB recusa contra a coluna {@code double} da V382; como {@code double}, ele espera
+	 * {@code Types.DOUBLE} — o tipo da coluna nos dois bancos (H2 e MariaDB).</p>
+	 */
+	@Column(name = "observed_temperature_c")
+	@JdbcTypeCode(SqlTypes.DOUBLE)
+	private BigDecimal observedTemperatureC;
 
 	@Column(name = "observed_content_used_mb")
 	private Long observedContentUsedMb;
@@ -150,10 +178,12 @@ class NetworkNodeJpaEntity {
 	NetworkNode toDomain() {
 		return new NetworkNode(id, displayName, ownerUserId, NodeStatus.valueOf(status),
 			NodeProfilesCsv.parse(profiles), region, country, runtimeVersion, lastSeenAt, declaredCpuCores,
-			declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent, observedMemoryMb,
-			observedRunningTasks, observedLatencyMs, observedDiskFreeMb, observedDiskTotalMb, observedContentUsedMb,
-			observedBytesInMb, observedBytesOutMb, consecutiveFailures,
-			quarantinedUntil, quarantineReason);
+			declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
+			NetworkNode.usageFrom(observedMemoryMb, observedMemoryAvailableMb, declaredMemoryMb),
+			observedMemoryAvailableMb, observedRunningTasks, observedLatencyMs, observedDiskFreeMb,
+			observedDiskTotalMb, observedDiskIops, observedDiskLatencyMs, observedContentUsedMb,
+			observedBytesInMb, observedBytesOutMb, consecutiveFailures, quarantinedUntil, quarantineReason,
+			observedTemperatureC);
 	}
 
 	String status() {

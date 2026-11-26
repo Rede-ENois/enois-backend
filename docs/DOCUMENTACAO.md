@@ -57,6 +57,7 @@
 | Tema | Doc | Estado |
 |------|-----|--------|
 | Agenda central (compromissos, convites, recorrência, `.ics`, lembretes) | `CALENDAR.md` | ✅ |
+| Portfólio profissional (página HTML sanitizada + peças, rascunho/publicado) | `PORTFOLIO.md` | ✅ (fase 1: modelo e API) |
 | Processo seletivo (etapas, board, notas internas) | `SELECTION_PROCESS.md` | ✅ |
 | Gitflow (feature → qa → main) | `GITFLOW.md` | ✅ |
 | Concurrency and hot rows (isolation level, counters, lock order) | `CONCURRENCY.md` | ✅ |

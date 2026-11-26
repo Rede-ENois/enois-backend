@@ -44,6 +44,13 @@ public class NodeObservabilityService {
 	/** Mesma janela de "vivo" do scheduler, do painel e da cobertura: 180 s. */
 	static final long ALIVE_SECONDS = 180;
 
+	/**
+	 * Janela do histograma de latência (brief §8.2). A série de amostras é do minuto; a latência é
+	 * lida em horas porque um p99 sobre 60 amostras é o próprio máximo, e a cauda só tem sentido com
+	 * volume. Vinte e quatro horas é a janela que o painel mostra.
+	 */
+	static final int LATENCY_WINDOW_HOURS = 24;
+
 	private final NodeObservabilityRepository repository;
 	private final NetworkNodeRepository nodes;
 	private final ContentVersionRepository versions;
@@ -64,14 +71,40 @@ public class NodeObservabilityService {
 	 *
 	 * <p>Valores ausentes continuam ausentes: um nó que não reportou CPU não vira "0% usado" no
 	 * gráfico — nulo e zero são coisas diferentes, como no disco livre.</p>
+	 *
+	 * <p>{@code memoryMb} é o <b>uso</b>, já derivado pelo serviço do nó (runtime antigo manda o
+	 * disponível em {@code memoryMb}, e a amostra sem a derivação registraria a máquina ociosa com
+	 * "7,9 GB em uso").</p>
 	 */
 	@Transactional
 	public void record(NetworkNode node, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
 			Integer runningTasks) {
+		record(node, cpuPercent, memoryMb, diskFreeMb, runningTasks, null, null);
+	}
+
+	/**
+	 * A amostra com o I/O de disco medido (brief §8.2). Separada da assinatura acima pelo mesmo
+	 * motivo dos outros contratos deste módulo: os chamadores que não medem disco continuam vendo o
+	 * nó "sem medição", e não "com 0 IOPS".
+	 */
+	@Transactional
+	public void record(NetworkNode node, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
+			Integer runningTasks, Double diskIops, Double diskLatencyMs) {
+		record(node, cpuPercent, memoryMb, diskFreeMb, runningTasks, diskIops, diskLatencyMs, null);
+	}
+
+	/**
+	 * A amostra com a temperatura da máquina (brief §8.2, "quando disponível"). O nó sem sensor
+	 * legível manda nulo, e o ponto do minuto fica sem temperatura — o gráfico mostra a lacuna em vez
+	 * de uma linha em 0 °C que ninguém mediu.
+	 */
+	@Transactional
+	public void record(NetworkNode node, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
+			Integer runningTasks, Double diskIops, Double diskLatencyMs, java.math.BigDecimal temperatureC) {
 		Instant now = clock.instant();
 		Instant minute = now.truncatedTo(java.time.temporal.ChronoUnit.MINUTES);
 		repository.saveSample(new Sample(node.id(), minute, cpuPercent, memoryMb, diskFreeMb, runningTasks, null,
-			node.status().name(), null));
+			node.status().name(), null, diskIops, diskLatencyMs, temperatureC));
 		repository.trimSamples(node.id(), SAMPLE_KEEP);
 	}
 
@@ -101,7 +134,14 @@ public class NodeObservabilityService {
 		List<LogLine> logs = repository.logs(nodeId, clamp(logLimit, LOG_KEEP));
 		Instant now = clock.instant();
 		return new Panel(nodeId, now, List.copyOf(samples), logs.stream().map(View::of).toList(),
-			summarize(samples), logLevels(logs), freshness(samples, now), health(nodeId, now));
+			summarize(samples), logLevels(logs), freshness(samples, now), health(nodeId, now),
+			latency(nodeId, now));
+	}
+
+	private TaskLatency latency(String nodeId, Instant now) {
+		com.socialcoisa.rede.network.domain.TaskLatency distribution = new com.socialcoisa.rede.network.domain.TaskLatency(
+			repository.latencySamples(nodeId, now, LATENCY_WINDOW_HOURS));
+		return new TaskLatency(distribution.p50Ms(), distribution.p95Ms(), distribution.p99Ms(), distribution.total());
 	}
 
 	/**
@@ -170,7 +210,8 @@ public class NodeObservabilityService {
 	 * disco não pode ter a média puxada para baixo por zeros que ninguém mediu.
 	 */
 	record Summary(Double cpuAvgPercent, Double cpuMaxPercent, Integer memoryMbLatest, Long diskFreeMbLatest,
-			Integer runningTasksLatest, int sampleCount) {
+			Integer runningTasksLatest, int sampleCount, Double diskIopsLatest, Double diskLatencyMsLatest,
+			java.math.BigDecimal temperatureCLatest) {
 	}
 
 	record View(String id, String at, String level, String message) {
@@ -181,7 +222,16 @@ public class NodeObservabilityService {
 
 	/** O que a página do nó desenha. {@code generatedAt} deixa claro que o quadro é do instante. */
 	public record Panel(String nodeId, Instant generatedAt, List<Sample> series, List<View> console,
-			Summary summary, java.util.Map<String, Long> consoleLevels, Freshness freshness, NodeHealth health) {
+			Summary summary, java.util.Map<String, Long> consoleLevels, Freshness freshness, NodeHealth health,
+			TaskLatency latency) {
+	}
+
+	/**
+	 * A distribuição de latência do nó na janela. {@code samplesInWindow} é quantas tarefas entraram
+	 * nos percentis: um p99 sobre 10 tarefas é uma anedota, e o painel precisa poder dizer isso em vez
+	 * de mostrar um número com três algarismos de confiança que não tem.
+	 */
+	public record TaskLatency(Long p50Ms, Long p95Ms, Long p99Ms, long samplesInWindow) {
 	}
 
 	private static Summary summarize(List<Sample> samples) {
@@ -192,7 +242,8 @@ public class NodeObservabilityService {
 		return new Summary(avg == null ? null : Math.round(avg * 10) / 10.0,
 			max == null ? null : Math.round(max * 10) / 10.0, latest == null ? null : latest.memoryMb(),
 			latest == null ? null : latest.diskFreeMb(), latest == null ? null : latest.runningTasks(),
-			samples.size());
+			samples.size(), latest == null ? null : latest.diskIops(),
+			latest == null ? null : latest.diskLatencyMs(), latest == null ? null : latest.temperatureC());
 	}
 
 	private static java.util.Map<String, Long> logLevels(List<LogLine> logs) {

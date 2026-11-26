@@ -5,9 +5,13 @@ import java.util.Optional;
 import org.springframework.stereotype.Component;
 
 import com.socialcoisa.rede.colagem.application.port.out.ColagemRepository;
+import com.socialcoisa.rede.confessionario.application.port.out.ConfessionarioRepository;
+import com.socialcoisa.rede.desabafos.application.port.out.DesabafosRepository;
 import com.socialcoisa.rede.feed.application.port.out.CommentRepository;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.PostId;
+import com.socialcoisa.rede.figurinhas.application.port.out.FigurinhasComunidadeRepository;
+import com.socialcoisa.rede.figurinhas.domain.FigurinhaComunidade;
 import com.socialcoisa.rede.groups.application.port.out.GroupContentRepository;
 import com.socialcoisa.rede.groups.domain.GroupComment;
 import com.socialcoisa.rede.groups.domain.GroupPost;
@@ -31,16 +35,23 @@ class ReportedContentAuthorAdapter implements ReportedContentAuthorReader {
 	private final CallReportContextRepository callReports;
 	private final ColagemRepository colagem;
 	private final MuraisRepository murais;
+	private final FigurinhasComunidadeRepository figurinhas;
+	private final DesabafosRepository desabafos;
+	private final ConfessionarioRepository confessionario;
 
 	ReportedContentAuthorAdapter(PostRepository posts, CommentRepository comments,
 			GroupContentRepository groupContent, CallReportContextRepository callReports, ColagemRepository colagem,
-			MuraisRepository murais) {
+			MuraisRepository murais, DesabafosRepository desabafos, ConfessionarioRepository confessionario,
+			FigurinhasComunidadeRepository figurinhas) {
 		this.posts = posts;
 		this.comments = comments;
 		this.groupContent = groupContent;
 		this.callReports = callReports;
 		this.colagem = colagem;
 		this.murais = murais;
+		this.desabafos = desabafos;
+		this.confessionario = confessionario;
+		this.figurinhas = figurinhas;
 	}
 
 	/**
@@ -71,6 +82,16 @@ class ReportedContentAuthorAdapter implements ReportedContentAuthorReader {
 			case "COLLAGEM_POST" -> colagem.findPostById(targetId).map(p -> p.authorId().value());
 			case "COLLAGEM_COMMENT" -> colagem.findCommentById(targetId).map(c -> c.authorId().value());
 			case "MURAL" -> murais.findMuralById(targetId).map(m -> m.ownerId().value());
+			// Desabafos e Confessionário: o anonimato é do contrato público, não um apagamento. O
+			// vínculo autor-conteúdo continua gravado para a moderação responsabilizar quem quebra
+			// a regra; sem ele o alvo caía em "sem autor" e a punição ficava impossível.
+			case "DESABAFO_POST" -> desabafos.findPostById(targetId).map(p -> p.authorId().value());
+			case "DESABAFO_COMMENT" -> desabafos.findCommentById(targetId).map(c -> c.authorId().value());
+			case "CONFESSIONARIO_POST" -> confessionario.findPostById(targetId).map(p -> p.authorId().value());
+			case "CONFESSIONARIO_COMMENT" -> confessionario.findCommentById(targetId).map(c -> c.authorId().value());
+			// Quem cadastrou a figurinha: a penalidade humana recai sobre essa conta, e é ela que
+			// tira a figurinha do índice (a linha fica para a auditoria).
+			case "FIGURINHA_COMUNIDADE" -> figurinhas.findById(targetId).map(FigurinhaComunidade::autorId);
 			default -> Optional.empty();
 		};
 	}

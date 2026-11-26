@@ -1,7 +1,9 @@
 package com.socialcoisa.rede.network.adapters.in.web;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -15,6 +17,7 @@ import com.socialcoisa.rede.network.application.NetworkModeService;
 import com.socialcoisa.rede.network.application.NetworkTaskService;
 import com.socialcoisa.rede.network.domain.NetworkTask;
 import com.socialcoisa.rede.network.domain.TaskStatus;
+import com.socialcoisa.rede.network.domain.TaskType;
 import com.socialcoisa.rede.shared.web.AdminGuard;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
@@ -66,7 +69,8 @@ class AdminNetworkTaskController {
 	 * evacuação e não vê que havia trabalho na mão da região até o scheduler rodar.
 	 */
 	record OverviewView(String mode, long pending, long dispatched, long done, long failed, long dead,
-			long cancelled, long awaitingDrain, long awaitingEvacuation) {
+			long cancelled, long awaitingDrain, long awaitingEvacuation,
+			java.util.Map<String, java.util.Map<String, Long>> deadByQueue) {
 	}
 
 	@GetMapping
@@ -77,11 +81,16 @@ class AdminNetworkTaskController {
 	}
 
 	/**
-	 * Contadores por estado e o modo vigente: é o que a tela mostra no topo.
+	 * Contadores por estado, o modo vigente e a DLQ por fila: é o que a tela mostra no topo.
 	 *
 	 * <p>{@code awaitingDrain} é quanto do {@code dispatched} está preso a nó fora de operação. É
 	 * aditivo: a tela antiga ignora o campo, e o número existe porque a drenagem só roda na
 	 * varredura — entre a suspensão e o ciclo seguinte o admin precisa ver que há trabalho parado.</p>
+	 *
+	 * <p>{@code deadByQueue} é a DLQ aberta por tipo de tarefa (brief §8.2): {@code dead} diz que há
+	 * tarefa esgotada, este diz em qual fila. Só os estados terminais sem sucesso entram — {@code DEAD},
+	 * {@code FAILED} e {@code CANCELLED} —, porque é deles que o operador precisa saber a origem; o
+	 * resto da distribuição já está nos contadores acima.</p>
 	 */
 	@GetMapping("/overview")
 	OverviewView overview(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
@@ -90,7 +99,25 @@ class AdminNetworkTaskController {
 			tasks.countByStatus(TaskStatus.DISPATCHED), tasks.countByStatus(TaskStatus.DONE),
 			tasks.countByStatus(TaskStatus.FAILED), tasks.countByStatus(TaskStatus.DEAD),
 			tasks.countByStatus(TaskStatus.CANCELLED), tasks.countOnNonOperatingNodes(),
-			tasks.countOnEvacuatedRegions());
+			tasks.countOnEvacuatedRegions(),
+			deadByQueue(tasks.queues(TaskStatus.DEAD, TaskStatus.FAILED, TaskStatus.CANCELLED)));
+	}
+
+	/**
+	 * A DLQ por fila em nomes de contrato: o JSON não conhece enum, e tipo sem tarefa terminal sem
+	 * sucesso não entra — o quadro vazio é a resposta quando não há nada morto, não 63 chaves zeradas.
+	 */
+	private static Map<String, Map<String, Long>> deadByQueue(Map<TaskType, Map<TaskStatus, Long>> queues) {
+		Map<String, Map<String, Long>> porFila = new LinkedHashMap<>();
+		queues.forEach((tipo, estados) -> {
+			if (estados.isEmpty()) {
+				return;
+			}
+			Map<String, Long> celulas = new LinkedHashMap<>();
+			estados.forEach((estado, quantas) -> celulas.put(estado.name(), quantas));
+			porFila.put(tipo.name(), celulas);
+		});
+		return porFila;
 	}
 
 	@GetMapping("/{id}")

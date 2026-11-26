@@ -54,6 +54,20 @@ EVENTS_MAX=20
 # apagar a linha que ainda não subiu). O arquivo é do nó, fica em 0600 junto da chave e é esvaziado
 # assim que o heartbeat leva as linhas.
 EVENTS_FILE="$NODE_HOME/pending-events"
+# Contadores do disco no fim do ciclo ANTERIOR (`/proc/diskstats`), para o I/O do intervalo. O
+# intervalo é entre heartbeats e não pode estar em memória: `cycle` roda num processo por volta.
+DISKSTATE_FILE="$NODE_HOME/disk-prev"
+# O arquivo de contadores do kernel lido pela medição de I/O do ciclo. Variável e não caminho fixo
+# para o harness poder servir contadores conhecidos; em produção o padrão é o do kernel.
+DISKSTATS_FILE="${DISKSTATS_FILE:-/proc/diskstats}"
+# Sensores de temperatura lidos pela mesma razão: caminho fixo em produção, sobreponível no harness
+# (e no container, quando o `/sys` do host é montado em outro ponto).
+THERMAL_HWMON_DIR="${THERMAL_HWMON_DIR:-/sys/class/hwmon}"
+THERMAL_ZONE_DIR="${THERMAL_ZONE_DIR:-/sys/class/thermal}"
+# Acima disto a leitura é descartada: nenhum componente em operação normal passa de 110 °C, e o que
+# passa é sensor de ponto de critério ou sensor quebrado.
+THERMAL_MAX_C="${THERMAL_MAX_C:-110}"
+
 event() {
   # event <nivel> <mensagem>: guarda para o próximo heartbeat.
   local level="$1" message="$2"
@@ -1342,9 +1356,45 @@ exec_api_request() {
 
 cycle() {
   # 1. heartbeat: estado, modo e se pode pedir tarefa.
-  local hb mode accept_tasks observed_cpu observed_mem observed_disk observed_term term_part disk_part
+  local hb mode accept_tasks observed_cpu observed_mem observed_avail mem_swap mem_pressure observed_disk observed_term term_part disk_part mem_part
+  local disk_now disk_prev disk_prev_at disk_now_ns d_reads d_writes d_ms p_reads p_writes p_ms ops disk_io_iops disk_io_latency disk_io_part=
+  local temp_part temp_max_c temp_max_raw temp_file temp_raw temp_c
   observed_cpu=$(awk 'NR==1 {printf "%.1f", $1}' /proc/loadavg 2>/dev/null || echo 0)
-  observed_mem=$(awk '/MemAvailable/ {printf "%d", ($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+  # Memória em DUAS medidas, como o Control Plane lê desde a V378: `memoryMb` é o USO e
+  # `memoryAvailableMb` o DISPONÍVEL. Antes o runtime media só `MemAvailable` e o mandava como
+  # `memoryMb`, que o Control Plane compara com o teto cedido — um nó com 7,9 GB livres de 8 GB
+  # declarados saía do balanceamento como "teto atingido", com a máquina ociosa. O uso é
+  # `MemTotal - MemAvailable` (a definição que o próprio relatório do sistema usa); swap é
+  # `SwapUsed` (o DEFAULT do kernel já é `SwapTotal - SwapFree`). Sem `/proc/meminfo` a medida não
+  # vai: ausente é "não medido", e 0 seria "máquina ociosa" para o que ninguém leu.
+  mem_part=''
+  if [[ -r /proc/meminfo ]]; then
+    mem_medido=$(awk '
+      /^MemTotal:/ {total = $2}
+      /^MemAvailable:/ {avail = $2}
+      /^SwapTotal:/ {stotal = $2}
+      /^SwapFree:/ {sfree = $2}
+      END {
+        if (avail == "" || total == "") exit 1
+        printf "%d %d", int((total - avail) / 1024), int(avail / 1024)
+        if (stotal != "") printf " %d", int((stotal - sfree) / 1024)
+      }' /proc/meminfo 2>/dev/null) || mem_medido=''
+    if [[ -n "$mem_medido" ]]; then
+      read -r observed_mem observed_avail mem_swap <<<"$mem_medido"
+      mem_part="\"memoryMb\":$observed_mem,\"memoryAvailableMb\":$observed_avail"
+      [[ "${mem_swap:-}" =~ ^[0-9]+$ ]] && mem_part="$mem_part,\"swapUsedMb\":$mem_swap"
+    fi
+  fi
+  # Pressão de memória (brief §8.2, "pressão de memória"): o PSI do kernel mede o tempo em que
+  # tarefas ficaram paradas esperando memória — o número que diz "o nó está sofrendo" antes de o
+  # uso chegar ao teto. Média de 300 s, em porcentagem; sem o arquivo (kernel anterior a 4.20, ou
+  # PSI desligado no boot) o campo NÃO vai.
+  if [[ -r /proc/pressure/memory ]]; then
+    mem_pressure=$(awk '
+      /^some/ {for (i = 1; i <= NF; i++) if ($i ~ /^avg300=/) {v = $i; sub(/^avg300=/, "", v); printf "%.1f", v}}
+    ' /proc/pressure/memory 2>/dev/null)
+    [[ -n "$mem_pressure" ]] && mem_part="$mem_part,\"memoryPressurePercent\":$mem_pressure"
+  fi
   # Disco livre MEDIDO no diretório de estado do nó — é este que o Control Plane mostra ao lado do
   # `declared_disk_mb` do enroll e que a capacidade do Storage leva em conta. O declarado é o que o
   # participante prometeu; este é o que existe. Sem a medida, um nó que perdeu disco continua sendo
@@ -1355,6 +1405,111 @@ cycle() {
   # linha para nomes com espaço.
   observed_disk=$(df -P -m "$NODE_HOME" 2>/dev/null | awk 'NR==2 {print $4}')
   [[ "$observed_disk" =~ ^[0-9]+$ ]] || observed_disk=''
+  # IOPS e latência de disco (brief §8.2), medidos como DELTA entre este ciclo e o anterior em
+  # `/proc/diskstats` — o arquivo apontado por `DISKSTATS_FILE`, que em produção é o do kernel. Ler o
+  # contador absoluto e mandar o total seria inútil: os campos são taxa e tempo por operação.
+  #
+  # O denominador é o intervalo desde a MEDIDA anterior, gravado em NANOSSEGUNDOS neste mesmo
+  # arquivo de estado. Tempo de arquivo (`stat -c %Y`) seria mais barato, mas a precisão dele varia
+  # com o sistema de arquivos da máquina do participante — e num intervalo de 5 s, 1 s de erro
+  # vira 20% de IOPS. O relógio do runtime é a única fonte que tem a mesma resolução no `/tmp`, em
+  # tmpfs e em qualquer volume.
+  #
+  # O que conta como disco: `sd*`, `nvme*n1`, `vd*`, `xvd*` e `hd*` — os nomes que o kernel dá aos
+  # discos físicos e virtuais. Ficam de fora partições (`sda1`) e dispositivos de bloco que não são
+  # disco (loop, ram, dm, md): o I/O deles já aparece no disco de baixo, e somar os dois contaria
+  # em dobro. Contadores não numéricos (disco removido) são ignorados.
+  #
+  # SEM MEDIDA no primeiro ciclo (não há anterior para subtrair) e sem amostra válida quando o
+  # intervalo é zero ou algum contador retrocedeu (disco trocado, contador de 32 bits reiniciado):
+  # nesses casos o campo NÃO vai. Retrocesso por campo é o que impede uma taxa falsa e enorme de
+  # virar o "IOPS" do nó no painel.
+  # Temperatura (brief §8.2, "quando disponível"). Vai a MAIOR leitura dentre as fontes: é a que
+  # decide risco de limiar, e uma média esconderia o componente que está cozinhando. Fontes: tudo
+  # que pendura em `/sys/class/hwmon/hwmon*/temp<N>_input` (CPU, GPU, NVMe, placa) e as zonas
+  # térmicas ACPI. O kernel publica milésimos de grau; o heartbeat manda graus com uma casa.
+  #
+  # Ausência é normal, não defeito: máquina virtual, container sem `--device`, kernel sem sensores e
+  # sessão sem permissão de leitura simplesmente não têm o arquivo — e então o campo NÃO vai. Mandar
+  # 0 °C seria afirmar uma medida que ninguém fez. Também não passa leitura fora da faixa de
+  # OPERAÇÃO (-40 a 110 °C): sensor quebrado e sensor de ponto de critério (~115-125 °C) devolveriam
+  # 120+ e virariam alarme. Variável `THERMAL_MAX_C` para máquina cujo limiar real é outro.
+  temp_part=''
+  temp_max_c=''
+  temp_max_raw=''
+  for temp_file in "$THERMAL_HWMON_DIR"/hwmon*/temp*_input "$THERMAL_ZONE_DIR"/thermal_zone*/temp; do
+    [[ -r "$temp_file" ]] || continue
+    read -r temp_raw < "$temp_file" 2>/dev/null || continue
+    [[ "$temp_raw" =~ ^-?[0-9]+$ ]] || continue
+    # A divisão do shell é INTEIRA: `39625 / 1000` é 39, e a fração do sensor morre antes de
+    # existir — a casa decimal que o Control Plane guarda (`BigDecimal` de uma casa) nunca seria
+    # exercitada pelo runtime, e dois sensores a 39,9 e 39,1 empatariam na escolha da maior. Em
+    # `awk`, como CPU, memória e I/O: o valor real compara (milésimos, inteiros) e o maior sai
+    # com uma casa.
+    temp_c=$(awk -v t="$temp_raw" 'BEGIN { printf "%.1f", t / 1000 }')
+    if awk -v t="$temp_raw" -v min=-40 -v max="$THERMAL_MAX_C" 'BEGIN { exit !(t / 1000 >= min && t / 1000 <= max) }'; then
+      if [[ -z "$temp_max_raw" ]] || (( temp_raw > temp_max_raw )); then
+        temp_max_raw=$temp_raw
+        temp_max_c=$temp_c
+      fi
+    fi
+  done
+  if [[ -n "$temp_max_raw" ]]; then
+    temp_part="\"temperatureC\":$temp_max_c"
+  fi
+  disk_io_part=''
+  if [[ -r "$DISKSTATS_FILE" ]]; then
+    disk_now=$(awk '
+      {
+        name = $3
+        if (name !~ /^(sd[a-z]+|nvme[0-9]+n[0-9]+|vd[a-z]+|xvd[a-z]+|hd[a-z]+)$/) next
+        # Layout do kernel: 4 = leituras concluídas, 6 = setores lidos, 7 = ms lendo,
+        # 8 = escritas concluídas, 10 = setores escritos, 11 = ms escrevendo. As colunas de
+        # SETORES (6 e 10) não são tempo: usar 6/10 para latência daria sempre 0 ms.
+        if (NF < 11) next
+        reads += $4; writes += $8
+        ms += ($7 ~ /^[0-9]+$/ ? $7 : 0) + ($11 ~ /^[0-9]+$/ ? $11 : 0)
+        seen = 1
+      }
+      END {
+        if (!seen) exit 0
+        printf "%d %d %d", reads, writes, ms
+      }' "$DISKSTATS_FILE") || disk_now=''
+    if [[ -n "$disk_now" ]]; then
+      disk_prev_at=''
+      disk_prev=''
+      if [[ -r "$DISKSTATE_FILE" ]]; then
+        read -r disk_prev_at disk_prev < "$DISKSTATE_FILE" 2>/dev/null || true
+      fi
+      if [[ "$disk_now" =~ ^[0-9]+\ [0-9]+\ [0-9]+$ && "$disk_prev" =~ ^[0-9]+\ [0-9]+\ [0-9]+$ \
+            && "$disk_prev_at" =~ ^[0-9]+$ ]]; then
+        disk_now_ns=$(date +%s%N)
+        if [[ "$disk_now_ns" =~ ^[0-9]+$ ]] && (( disk_now_ns > disk_prev_at )); then
+          read -r d_reads d_writes d_ms <<<"$disk_now"
+          read -r p_reads p_writes p_ms <<<"$disk_prev"
+          if (( d_reads >= p_reads && d_writes >= p_writes && d_ms >= p_ms )); then
+            ops=$(( (d_reads - p_reads) + (d_writes - p_writes) ))
+            disk_io_iops=$(awk -v o="$ops" -v ns="$(( disk_now_ns - disk_prev_at ))" \
+              'BEGIN {printf "%.2f", o / (ns / 1000000000)}')
+            disk_io_part="\"diskIops\":$disk_io_iops"
+            # Latência só faz sentido com operação concluída: sem I/O o tempo total é zero, e dividir
+            # afirmaria "0 ms", que não mede coisa nenhuma.
+            if (( ops > 0 )); then
+              disk_io_latency=$(awk -v ms="$(( d_ms - p_ms ))" -v o="$ops" 'BEGIN {printf "%.2f", ms / o}')
+              disk_io_part="$disk_io_part,\"diskLatencyMs\":$disk_io_latency"
+            fi
+          fi
+        fi
+      fi
+      # O estado do próximo ciclo é o de AGORA — mesmo quando esta rodada não mediu: se o arquivo
+      # não avançasse, um contador reiniciado deixaria o nó sem I/O até o processo reiniciar.
+      disk_now_ns=$(date +%s%N)
+      if [[ "$disk_now_ns" =~ ^[0-9]+$ ]]; then
+        printf '%s %s\n' "$disk_now_ns" "$disk_now" > "$DISKSTATE_FILE" 2>/dev/null \
+          && chmod 600 "$DISKSTATE_FILE" 2>/dev/null || true
+      fi
+    fi
+  fi
   # Tamanho do volume medido na MESMA chamada do livre: os dois saem da mesma linha do `df`, então
   # um não pode estar descrevendo um sistema de arquivos diferente do outro. É o que permite ao
   # Control Plane separar "espaço reservado pelo participante" (total - declarado) do "oferecido"
@@ -1398,7 +1553,7 @@ cycle() {
   events=$(events_json)
   [[ -n "$events" ]] && logs_part=",\"logs\":[$events]"
   hb=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
-    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"memoryMb\":$observed_mem,\"runningTasks\":0$disk_part$net_part}$term_part$logs_part}" \
+    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"runningTasks\":0$mem_part$temp_part$disk_io_part$disk_part$net_part}$term_part$logs_part}" \
     "$CONTROL_PLANE/network/nodes/heartbeat") || { printf '[executor] heartbeat falhou\n' >&2; return 1; }
   : > "$EVENTS_FILE" 2>/dev/null || true
   mode=$(json_field "$hb" mode)

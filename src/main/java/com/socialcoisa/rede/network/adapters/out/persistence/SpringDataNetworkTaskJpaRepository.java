@@ -119,6 +119,20 @@ interface SpringDataNetworkTaskJpaRepository extends JpaRepository<NetworkTaskJp
 
 	long countByStatus(String status);
 
+	/** Contagem agrupada por tipo e estado: a origem do quadro de filas do painel. */
+	@Query("select t.taskType as taskType, t.status as status, count(t) as tasks "
+			+ "from NetworkTaskJpaEntity t group by t.taskType, t.status")
+	List<QueueCountRow> countGroupedByQueueAndStatus();
+
+	/** Projeção da consulta acima; os nomes dos acessores são os aliases do `select`. */
+	interface QueueCountRow {
+		String getTaskType();
+
+		String getStatus();
+
+		long getTasks();
+	}
+
 	java.util.Optional<NetworkTaskJpaEntity> findByIdempotencyKey(String idempotencyKey);
 
 	/**

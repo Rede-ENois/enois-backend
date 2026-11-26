@@ -316,19 +316,29 @@ public class PapoAssuntoExtractor {
 	 * na ordem em que apareceram. Serve para quem monta as falas na mão (tag declarada, leitura
 	 * de teste) na mesma ordem em que a extração as grava.
 	 */
+	/**
+	 * O assunto da publicação, decidido na extração: só a expressão COM CONTEXTO (duas ou mais
+	 * palavras, como "inteligencia artificial", "mercado de trabalho", "meetup de rust") vira
+	 * assunto. A palavra solta ("rust", "praia", "trabalho") não é conversa: é vocabulário comum
+	 * da rede e, sozinha, produz alta de ruído. Foi o bug das palavras soltas no ranking.
+	 *
+	 * <p>A expressão composta continua vindo primeiro (a ordem de {@link #expressoes} já garante
+	 * isso); o filtro só mantém o que tem contexto. Se o texto não tiver nenhum par, ele não gera
+	 * assunto nenhum — a publicação entra nas contagens, não na lista de assuntos.</p>
+	 */
 	public static List<String> assuntos(List<Fala> falas) {
 		List<String> assuntos = new ArrayList<>();
 		for (Fala fala : falas) {
-			if (composta(fala.expressao())) {
-				assuntos.add(fala.expressao());
-			}
-		}
-		for (Fala fala : falas) {
-			if (!composta(fala.expressao())) {
+			if (temContexto(fala.expressao())) {
 				assuntos.add(fala.expressao());
 			}
 		}
 		return List.copyOf(new LinkedHashSet<>(assuntos));
+	}
+
+	/** A expressão nomeia uma conversa com contexto? Só o composto (2+ palavras) passa. */
+	public static boolean temContexto(String expressao) {
+		return composta(expressao);
 	}
 
 	/**

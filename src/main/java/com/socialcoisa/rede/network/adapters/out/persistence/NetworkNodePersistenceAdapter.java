@@ -1,5 +1,6 @@
 package com.socialcoisa.rede.network.adapters.out.persistence;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -87,10 +88,12 @@ class NetworkNodePersistenceAdapter implements NetworkNodeRepository {
 	}
 
 	@Override
-	public void touch(String id, String runtimeVersion, Double cpuPercent, Integer memoryMb, Integer runningTasks,
-			Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Long bytesInMb, Long bytesOutMb, Instant now) {
-		repository.heartbeat(id, runtimeVersion, cpuPercent, memoryMb, runningTasks, diskFreeMb, diskTotalMb,
-			contentUsedMb, bytesInMb, bytesOutMb, now);
+	public void touch(String id, String runtimeVersion, Double cpuPercent, Integer memoryMb,
+			Integer memoryAvailableMb, Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Double diskIops,
+			Double diskLatencyMs, BigDecimal temperatureC, Long contentUsedMb, Long bytesInMb, Long bytesOutMb,
+			Instant now) {
+		repository.heartbeat(id, runtimeVersion, cpuPercent, memoryMb, memoryAvailableMb, runningTasks, diskFreeMb,
+			diskTotalMb, diskIops, diskLatencyMs, temperatureC, contentUsedMb, bytesInMb, bytesOutMb, now);
 	}
 
 	@Override

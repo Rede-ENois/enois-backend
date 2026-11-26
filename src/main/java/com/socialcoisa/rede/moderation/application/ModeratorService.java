@@ -354,6 +354,13 @@ public class ModeratorService {
 						cleanReason, Instant.now(clock));
 				});
 			sanctionService.banAuthor(sanction, target.id(), adminId, sessions);
+			// Punição direta do painel: não há denúncia por trás, então a justificativa é o motivo
+			// escrito pelo administrador. Sem trecho citado — nada aqui é conteúdo denunciado.
+			notifications.create(target.id(), "SANCAO", adminId, "Conta banida",
+				SanctionService.notificacaoDireta(
+					"Sua conta foi banida por decisao de um administrador. Voce nao podera entrar nem publicar",
+					cleanReason),
+				"/api/penalidades", "Ver");
 		}
 		else {
 			if (active.isPresent() && active.get().isBlocked()) {

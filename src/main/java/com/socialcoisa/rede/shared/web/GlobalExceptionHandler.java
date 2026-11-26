@@ -8,17 +8,17 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.http.ResponseEntity;
-import org.springframework.util.StringUtils;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.http.converter.HttpMessageNotWritableException;
+import org.springframework.util.StringUtils;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
-import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
@@ -71,6 +71,9 @@ public class GlobalExceptionHandler {
 		if (exception.retryAfterSeconds() > 0) {
 			resposta.header(org.springframework.http.HttpHeaders.RETRY_AFTER,
 				Long.toString(exception.retryAfterSeconds()));
+		}
+		if (exception.etag() != null && !exception.etag().isBlank()) {
+			resposta.header(org.springframework.http.HttpHeaders.ETAG, exception.etag());
 		}
 		return resposta
 			.body(exception.toXml(request == null ? null
@@ -209,6 +212,12 @@ public class GlobalExceptionHandler {
 		if (text.contains("check constraint")) {
 			return "CONFLICT_CHECK_CONSTRAINT";
 		}
+		// Coluna de texto num charset legado: o MariaDB devolve "Incorrect string value:
+		// '\xE2\xB8\xBB' for column ..." e, sem este caso, a resposta virava o 409 generico —
+		// ninguem sabia o que houve nem por que (2026-11-25, texto de artigo barrado assim).
+		if (text.contains("incorrect string value")) {
+			return "CONFLICT_UNSUPPORTED_CHARACTERS";
+		}
 		return "CONFLICT";
 	}
 
@@ -220,6 +229,8 @@ public class GlobalExceptionHandler {
 			case "CONFLICT_VALUE_TOO_LARGE" -> "Valor maior do que o permitido.";
 			case "CONFLICT_MISSING_VALUE" -> "Faltou um dado obrigatorio.";
 			case "CONFLICT_CHECK_CONSTRAINT" -> "Valor fora das regras aceitas.";
+			case "CONFLICT_UNSUPPORTED_CHARACTERS" ->
+				"O texto tem caracteres que nao podem ser salvos. Remova emojis ou simbolos e tente de novo.";
 			default -> "Operacao conflita com o estado atual dos dados.";
 		};
 	}

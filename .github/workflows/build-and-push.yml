@@ -216,10 +216,21 @@ jobs:
           SPRING_DATASOURCE_USERNAME: enois
           SPRING_DATASOURCE_PASSWORD: schema-check
           SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT: org.hibernate.dialect.MariaDBDialect
-        run: ./mvnw -B -q -Dtest=RedeApplicationTests test
+        # O boot de servlet real entra aqui de proposito: filtro de servlet nasce antes do contexto
+        # completar, e um filtro que puxe no construtor uma cadeia ate o EntityManager derruba o
+        # container no deploy (2026-11-24, a QA ficou na imagem antiga). O MOCK web environment do
+        # RedeApplicationTests nao ve esse caso; o S3OptionsFilterBootTests sobe um Tomcat de
+        # verdade, como o deploy.
+        run: ./mvnw -B -q -Dtest=RedeApplicationTests,S3OptionsFilterBootTests test
 
       - name: 🧪 Upgrade do HTML de projetos em schema legado
         run: python3 scripts/tests/user-project-html-migration-test.py
+
+      - name: 🧪 Upgrade do texto livre do feed em schema legado
+        run: python3 scripts/tests/feed-texto-utf8mb4-migration-test.py
+
+      - name: 🧪 Upgrade do texto das vagas externas em schema legado
+        run: python3 scripts/tests/external-jobs-texto-utf8mb4-migration-test.py
 
   # ===========================================================================
   # Build + Push para Harbor (push/workflow_dispatch em main ou qa, hosted runner)

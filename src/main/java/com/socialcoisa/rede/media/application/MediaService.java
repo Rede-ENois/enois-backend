@@ -52,9 +52,15 @@ public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseC
 	 * aos poucos pelo Range. Decisão de produto (issue #656): rígida, sem degradação.
 	 */
 	public static final long MAX_VIDEO_BYTES = 10L * 1024L * 1024L;
+	/**
+	 * Teto de uma figurinha da comunidade: 512KB. Um emoji de 400x400 em qualquer formato aceito
+	 * (PNG, JPG, GIF animado, SVG) cabe com folga; o teto próprio impede que o catálogo comunitário
+	 * herde os 500MB da mídia comum.
+	 */
+	public static final long MAX_FIGURINHA_BYTES = 512L * 1024L;
 	/** Teto por propósito de upload; ausente = o teto geral. */
 	private static final java.util.Map<String, Long> MAX_BYTES_BY_PURPOSE =
-		java.util.Map.of("BADGE", MAX_BADGE_BYTES);
+		java.util.Map.of("BADGE", MAX_BADGE_BYTES, "FIGURINHA", MAX_FIGURINHA_BYTES);
 	/**
 	 * Teto por tipo quando o tipo é mais estreito que qualquer propósito: vídeo de qualquer
 	 * propósito cai aqui (o front manda vídeo de post até como POST_IMAGE, então o corte tem de
@@ -87,12 +93,21 @@ public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseC
 	 * checagem de imagem pública e só é servida a quem modera.
 	 */
 	public static final String REPORT_CAPTURE_PURPOSE = "REPORT_CAPTURE";
+	/**
+	 * Figurinha da comunidade: PNG/JPG/GIF/SVG conferidos e gravados pelo próprio serviço das figurinhas
+	 * ({@code /figurinhas/envios/{mediaId}}), nunca pela subida genérica — a subida genérica recusa
+	 * este propósito, porque é ela que deixaria passar arquivo não conferido para o catálogo.
+	 */
+	public static final String FIGURINHA_PURPOSE = "FIGURINHA";
+	/** Tipos aceitos pela figurinha (os mesmos da regra do catálogo: PNG, JPG, GIF animado, SVG). */
+	private static final java.util.Set<String> FIGURINHA_MIME_TYPES = java.util.Set.of("image/png", "image/jpeg",
+		"image/gif", "image/svg+xml");
 	/** Upload kinds narrower than the general list; any other purpose (posts, messages) uses the full list. */
 	private static final java.util.Map<String, java.util.Set<String>> MIME_TYPES_BY_PURPOSE = java.util.Map.of(
 		"AVATAR", IMAGE_MIME_TYPES, "BANNER", IMAGE_MIME_TYPES, "COVER", IMAGE_MIME_TYPES,
 		"BADGE", IMAGE_MIME_TYPES, "GAME_ICON", IMAGE_MIME_TYPES, "GAME_BANNER", IMAGE_MIME_TYPES,
 		"MENTOR_BANNER", IMAGE_MIME_TYPES, REPORT_CAPTURE_PURPOSE, IMAGE_MIME_TYPES,
-		"RESUME", java.util.Set.of("application/pdf"));
+		"RESUME", java.util.Set.of("application/pdf"), FIGURINHA_PURPOSE, FIGURINHA_MIME_TYPES);
 
 	private final MediaAssetRepository mediaAssetRepository;
 	private final MediaDeletionJobRepository mediaDeletionJobRepository;
@@ -102,18 +117,20 @@ public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseC
 	/** Só existe com a migração ligada; presente aqui para a leitura agendar a cópia oportunista. */
 	private final org.springframework.beans.factory.ObjectProvider<LazyMediaCopyTrigger> lazyCopy;
 	private final ReportAttachments reportAttachments;
+	private final MediaMetadataSanitizer sanitizer;
 	private final Clock clock;
 
 	public MediaService(MediaAssetRepository mediaAssetRepository, MediaDeletionJobRepository mediaDeletionJobRepository,
 			StorageUrlFactory storageUrlFactory, java.util.Optional<MediaUploadSigner> uploadSigner,
 			org.springframework.beans.factory.ObjectProvider<LazyMediaCopyTrigger> lazyCopy,
-			ReportAttachments reportAttachments, Clock clock) {
+			ReportAttachments reportAttachments, MediaMetadataSanitizer sanitizer, Clock clock) {
 		this.mediaAssetRepository = mediaAssetRepository;
 		this.mediaDeletionJobRepository = mediaDeletionJobRepository;
 		this.storageUrlFactory = storageUrlFactory;
 		this.uploadSigner = uploadSigner;
 		this.lazyCopy = lazyCopy;
 		this.reportAttachments = reportAttachments;
+		this.sanitizer = sanitizer;
 		this.clock = clock;
 	}
 
@@ -235,6 +252,22 @@ public class MediaService implements CreateMediaUploadUseCase, GetMediaAssetUseC
 		}
 		mediaDeletionJobRepository.request(newId("media_deletion_job"), asset.id(), postId, asset.ownerId(),
 			clock.instant());
+	}
+
+	/**
+	 * Limpa metadados de um arquivo em memória (a figurinha já conferida, antes de ir ao bucket).
+	 * Disco do pod indisponível vira 503 nomeado: não é o arquivo da pessoa que falhou.
+	 */
+	public byte[] limparMetadados(byte[] bytes, String mimeType, String nomeArquivo) {
+		try {
+			return sanitizer.sanitize(bytes, mimeType, nomeArquivo);
+		}
+		catch (MediaTemporaryFiles.UnavailableException falha) {
+			LOG.error("media_sanitize_temp_unavailable mime={} bytes={} cause={}", mimeType, bytes.length,
+				falha.getClass().getName());
+			throw new ApiException(503, "MEDIA_UPLOAD_UNAVAILABLE",
+				"Não foi possível processar o arquivo agora. Tente novamente em instantes.", falha);
+		}
 	}
 
 	private MediaAsset findMedia(String mediaId) {

@@ -13,6 +13,27 @@ O modelo de dados já era S3-shaped desde o V319: `bucket` + `object_key` único
 sem normalização, índice para listagem por prefixo. O gateway **reusa** esse catálogo; não há segundo
 Storage.
 
+## 1.1 Escopo congelado do Storage v1 (ciclo 155)
+
+O Storage v1 está **fechado** contra os doze critérios do §25 do brief, verificados pela sequência
+real em `scripts/tests/storage-acceptance.sh` (§4.69). A conformidade S3 não tem fim — o que fica
+de fora do v1 não é lacuna escondida, é recusa declarada:
+
+| o que o S3 tem e aqui não | resposta | por quê |
+|---|---|---|
+| `GET ?torrent` | `501 NotImplemented` | não há camada BitTorrent; quem quer torrent usa o cliente |
+| `GET ?partNumber` | `501 NotImplemented` | parte só existe dentro de um upload em andamento |
+| `DELETE ?versionId` | `501 NotImplemented` | apagar versão mexe no histórico e na colocação das cópias; o caminho é `copyTo` a partir da versão (§4.68) |
+| object-lock / retention | `501 NotImplemented` | retenção exige relógio confiável por objeto e política de custódia fora do escopo do v1 |
+| ACL, tagging, bucket policy | `GET ?acl` do bucket é lido; **escrever** ACL/tagging/policy → `501 NotImplemented` (ou `400` no XML inválido) | a autoridade é a credencial do dono e o bucket dele; um segundo modelo de permissão seria um segundo sistema |
+| STS (`X-Amz-Security-Token`) | credencial fixa | credenciais temporárias exigem um emissor de tokens; a credencial por dono cobre o v1 |
+
+Estas recusas são **decisão**, não pendência: mudar qualquer linha acima é um ciclo novo com o
+brief do lado. O que fica para o roadmap não é o protocolo — são as **fases 3–6 do brief**
+(erasure coding, CDN de borda, painel do participante), que o v1 não promete.
+
+O raciocínio completo, e o que o v1 de fato entrega, estão no §6 ("O que NÃO está entregue").
+
 ## 2. Credencial: separada da chave de nó, de propósito
 
 `network_storage_s3_credentials` (V357) tem Access Key, segredo e **escopo**:
@@ -73,8 +94,10 @@ contra o vetor externo é o que separa "implementei" de "assinei comigo mesmo e 
 
 **Não implementado**, e o brief manda não anunciar como se existisse:
 
-- **ACL**, **tagging**, **`versionId`**, **bucket policy**, **`POST` de formulário** — sem suporte e
-  não anunciados (o `PUT` que os gravaria responde `501` e não altera o objeto — §4.21).
+- **ACL**, **tagging**, **bucket policy**, **`POST` de formulário** — sem suporte e não anunciados (o
+  `PUT` que os gravaria responde `501` e não altera o objeto — §4.21). `versionId` é exceção: o
+  `GET`/`HEAD` com `?versionId=` serve a versão pedida (§4.68); apagar uma versão (`DELETE
+  ?versionId=`) continua `501`, e copiar a partir de uma versão também.
 - **Regiões múltiplas**, **classes de armazenamento na resposta** (sempre `STANDARD`; a classe real é a
   da §8 e não é escolhida por requisição).
 
@@ -736,7 +759,8 @@ quem não caía para o caminho lento falhava no item, e quem caía gastava a ban
 - **Condições da origem:** `x-amz-copy-source-if-match` e `-if-none-match` são conferidos contra o
   ETag; divergência é `412 PreconditionFailed` e nada é gravado. As condições por data respondem `501`
   em vez de serem ignoradas — uma condição aceita e não aplicada seria uma resposta errada com cara de
-  certa. `?versionId=` também é `501`: a versão corrente é a única que o gateway endereça.
+  certa. `?versionId=` na origem também é `501`: copiar a partir de uma versão específica não entra
+  por aqui — quem serve a versão é o `GET`/`HEAD` (§4.68).
 - **Donos:** a origem tem de ser do dono da credencial (mesma regra do destino). Origem de outra conta
   é `403 AccessDenied` **sem** reservar a chave de destino; origem inexistente é `404 NoSuchKey`
   (o código do S3, não o interno `STORAGE_NOT_FOUND`).
@@ -1110,10 +1134,10 @@ ignorar o `prefix` — **2 de 2 derrubam**.
 | `?versions&prefix=p` | só as chaves que começam com `p` (`%`, `_`, `\` escapados) |
 | versão de outra conta no mesmo bucket | omitida |
 
-`StorageCatalogService.versionsNoBucket(bucket, prefix)` →
-`StorageCatalogRepository.versionsNoBucket` (ordem `object_key asc, version asc`, teto de 10 000
-linhas). Versão só existe em bucket com `versioning` ligado — sem ele, reescrever a chave é `409` e
-o histórico tem uma linha só.
+`StorageCatalogService.versionsNoBucket(bucket, prefix, keyMarker, versionMarker, maxKeys)` →
+`StorageCatalogRepository.paginaDeVersoes` (ordem `object_key asc, version desc`, teto de 1000,
+marcadores; a ordem e os marcadores em §4.67). Versão só existe em bucket com `versioning` ligado —
+sem ele, reescrever a chave é `409` e o histórico tem uma linha só.
 
 **Verificação:** `S3GatewayTests` **+1** (`listar_versoes_do_bucket`: duas versões da chave
 reescrita e uma da outra, todas com `VersionId`; uma linha de outra conta **plantada no mesmo
@@ -1749,7 +1773,7 @@ valores de `max-parts`, cada um conferindo o `<MaxParts>` ecoado **e** que a pá
 partes do que ele diz; e a página com marcador. Vermelho antes: `MaxParts 0` com 3 partes. Mutações
 **4/4**: ecoando o pedido cru; sem o teto de 1000; sem o piso de zero/negativo; página cortada em 1000
 com o eco dizendo outro número.
-## 4.58 `continuation-token` é opaco e assinado (ciclo 143)
+## 4.60 `continuation-token` é opaco e assinado (ciclo 143)
 
 O token era o **último nome emitido**, em claro, usado como posição sem conferência:
 
@@ -1793,7 +1817,7 @@ tokens inválidos → `400 InvalidArgument`; paginação de três páginas com `
 Dois testes existentes usavam o nome como token e foram atualizados para o contrato novo. Vermelho antes:
 `200` em `lixo`. Mutações **4/4**: sem verificar a assinatura; emitindo o nome em claro; assinatura que
 não amarra o bucket; conferindo só a forma hexadecimal da assinatura.
-## 4.58 A chave gravada é o nome declarado, não a forma da URI (ciclo 142)
+## 4.61 A chave gravada é o nome declarado, não a forma da URI (ciclo 142)
 
 A chave era gravada **como vinha na URI**, percent-encoded:
 
@@ -1834,6 +1858,440 @@ coluna `object_key` tem exatamente os sete nomes declarados (inclusive `%` e `+`
 mesmo nome com `&amp;`/`&lt;` só como XML; o `GET` com a chave listada devolve o corpo. Vermelho antes:
 as linhas com `%C3%A9`, `%20` e `%3C`. Mutações **4/4**: sem decodificar; `+` virando espaço;
 decodificar duas vezes (`%25`→`%`→outra coisa); `%25` único tratado à parte.
+
+## 4.62 `OPTIONS` autentica e o verbo errado é XML (ciclo 149)
+
+O `OPTIONS` nunca chegava ao gateway:
+
+```
+OPTIONS /s3/<b>/x.txt   (sem credencial)   → 200   Allow: PUT,GET,HEAD,DELETE,POST,OPTIONS
+OPTIONS /s3/<b>/x.txt   (credencial só de leitura) → 200   Allow: PUT,GET,HEAD,DELETE,POST,OPTIONS
+PATCH   /s3/<b>/x.txt                      → 405 {"code":"METHOD_NOT_ALLOWED"}   ← JSON
+```
+
+O preflight de CORS do Control Plane responder todo `OPTIONS` é correto para a API do app, mas no
+gateway S3 a lista é a do **servidor**: uma credencial que só lê ouvindo que pode `PUT`/`DELETE` é o
+cliente montando a estratégia de upload errada. Quando aquele filtro não respondia, o
+`DispatcherServlet` montava o `Allow` com os métodos mapeados — inclusive `TRACE` e `PATCH`, que
+nenhuma rota atende.
+
+### Agora
+
+| pedido | antes | agora |
+|---|---|---|
+| `OPTIONS` sem assinatura | `200` com a lista do servidor | `403 AccessDenied` em XML, sem `Allow` |
+| `OPTIONS` com credencial de leitura | `Allow` com `PUT, DELETE` | `200`, `Allow: GET, HEAD, OPTIONS` |
+| `OPTIONS` com credencial completa | igual | `200`, `Allow: GET, HEAD, PUT, DELETE, OPTIONS` |
+| `OPTIONS` de navegador (`Origin` + `Access-Control-Request-Method`) | CORS | CORS (o navegador pergunta antes de ter credencial) |
+| `PATCH`, `TRACE` | `405` JSON | `405 MethodNotAllowed` em XML, com `Allow` da rota |
+
+- O `S3OptionsFilter` intercepta `OPTIONS` (sem preflight) e os verbos desconhecidos em `/s3/**`,
+  **antes** do `DispatcherServlet` — que responderia o `OPTIONS` sozinho. Ele chama a autenticação
+  do gateway, então a regra de credencial, dono do bucket e chave existente é a mesma dos outros
+  verbos.
+- `LIST` no escopo da credencial não vira método HTTP (é operação de bucket); `GET` vira `GET` e
+  `HEAD`, porque `HEAD` é o `GET` sem corpo.
+
+**Verificação:** `S3GatewayTests` **+1** (`options_autentica_e_o_verbo_invalido_e_xml`): `OPTIONS`
+sem credencial → `403` XML sem `Allow`; com credencial só de leitura → `200` e o `Allow` **sem**
+`PUT`/`DELETE`/`POST`; com a completa → com `GET`/`PUT`/`DELETE` e sem `LIST`/`POST`; preflight com
+`Origin` real → `< 300`; `PATCH` e `TRACE` → `405` XML com `Allow`. Mutações **4/4**: sem a isenção
+de origem; `Allow` da lista do servidor (sobreviveu até o teste diferenciar a credencial de leitura);
+`Allow` de leitura sem `HEAD`; 405 em JSON.
+
+## 4.63 `If-Match` no `GET` e no `HEAD` (ciclo 147)
+
+O `GET` avaliava `If-None-Match` e `If-Modified-Since`; `If-Match` era **ignorado** (só o `PUT` o
+conferia, §4.29):
+
+```
+GET /s3/<b>/x.txt   If-Match: "velho"                          → 200 com o objeto
+GET /s3/<b>/x.txt   If-Match: "velho"   Range: bytes=0-3       → 206 com o pedaço da versão NOVA
+HEAD /s3/<b>/x.txt  If-Match: "velho"                          → 200
+```
+
+O segundo caso é o pior: é o download condicional do S3 (`If-Match: <etag>` + `Range`), e o cliente
+remontava o arquivo com metade de cada versão — o mesmo defeito que o `If-Range` (§4.47) foi criado
+para evitar, por outra porta.
+
+### Agora
+
+| pedido | antes | agora |
+|---|---|---|
+| `If-Match` com o ETag atual | `200` | `200` (fluxo normal) |
+| `If-Match` com `"velho"`, `W/"velho"` ou lista sem o atual | `200` / `206` | `412 PreconditionFailed`, XML (`<Code>PreconditionFailed</Code>`), com `ETag` |
+| `If-Match` com `W/<etag atual>` (validador fraco) | `200` / `206` | `412 PreconditionFailed` (comparação forte) |
+| `If-Match: *` | `200` | `200` (o objeto existe) |
+| `If-Match` com lista que **contém** o atual | `200` | `200` |
+| `If-Match` atual + `If-None-Match` atual | `200` | `304` (o `If-Match` não engole o 304) |
+| `HEAD` com `If-Match` divergente | `200` | `412` |
+
+- A ordem é a do HTTP: `If-Match` antes de `If-None-Match`, e antes de abrir a cópia — o `412` leva
+  só o XML do erro, sem abrir a cópia, e um objeto sem cópia registrada responde `412` antes de `409`.
+- Vale no `GET` e no `HEAD`. A comparação do `If-Match` é a **forte** (RFC 9110 §13.1.1), em
+  `StorageContentService.matchesForte`: o `W/<etag atual>` não casa — validador fraco não é o da
+  representação — e a lista separada por vírgula casa quando qualquer item casa. O `If-None-Match`
+  continua com a comparação fraca, que é a dele (`StorageContentService.matches`).
+- `If-Range` continua com a semântica dele (§4.47): sem casar, o corpo inteiro sai com `200`.
+
+**Verificação:** `S3GatewayTests` **+1** (`get_e_head_com_if_match_divergente_sao_412`): cinco
+divergentes × com e sem `Range`, no `GET` e no `HEAD` → `412` com o `ETag` e XML (`<Code>PreconditionFailed</Code>`) — o quinto é o
+`W/<etag atual>`, que a comparação forte recusa; três formas que casam (ETag, `*`, lista com o atual)
+→ `200` com o corpo; `If-Match` + `Range` válido → `206`; `If-Match` atual + `If-None-Match` atual →
+`304`. Vermelho antes: `200` em `"velho"`. Mutações **6/6**: `GET` sem a condição; `HEAD` sem a
+condição; `GET` sem repassar o cabeçalho; `HEAD` sem repassar; aceitando qualquer ETag "parecido";
+aceitando o validador fraco do ETag atual.
+
+## 4.64 `ListMultipartUploads` honra `max-uploads` e pagina (ciclo 151)
+
+A rota listava **todos** os uploads abertos do dono e respondia `IsTruncated=false` sempre:
+
+```
+GET /s3/<b>?uploads&max-uploads=1     (três uploads abertos)
+→ 200 <IsTruncated>false</IsTruncated>
+      <Upload>zeta.bin</Upload><Upload>alfa.bin</Upload><Upload>meio.bin</Upload>
+      (sem <MaxUploads>, sem <NextKeyMarker>)
+```
+
+Dois defeitos de uma vez. O teto não era honrado — quem pediu 1 não tem como saber que a resposta
+veio maior —, e o `IsTruncated` fixo em `false` mentia sobre a completude. Como o `<NextKeyMarker>`
+nunca existia, um cliente que pagina por ele **nunca** tem próxima página e conclui que viu tudo. O
+`aws s3api list-multipart-uploads`, que é a ferramenta de quem vai limpar uploads abortados, não
+conseguia varrer um bucket com muitos.
+
+### Agora
+
+| parâmetro | antes | agora |
+|---|---|---|
+| `max-uploads=1` (três abertos) | os três, `IsTruncated=false` | um, `IsTruncated=true`, `NextKeyMarker`/`NextUploadIdMarker` |
+| `max-uploads=0`, `-1`, `abc` | os três | os três (teto 1000), `<MaxUploads>1000</MaxUploads>` |
+| sem `max-uploads` | os três, sem `<MaxUploads>` | os três, `<MaxUploads>1000</MaxUploads>` |
+| `key-marker` + `upload-id-marker` | ignorados | posição na ordem `(key, upload_id)` |
+| `prefix` | filtrava | filtra (igual) |
+
+- O teto é 1000, como o do `ListParts` (§4.54), e o `<MaxUploads>` ecoa o **valor aplicado**, não o
+  pedido — a mesma regra do `<MaxParts>`.
+- A paginação é na ordem do S3, `(key, upload_id)`: no marcador de uma chave, a próxima página traz o
+  resto das chaves maiores e, na mesma chave, só os uploads com id maior. Paginar com
+  `max-uploads=1` viu os três, sem repetir e sem perder.
+- O banco faz `limit teto + 1` para saber se há próxima página sem uma segunda contagem.
+
+**Verificação:** `S3GatewayTests` **+1** (`list_multipart_uploads_honra_max_uploads_e_pagina`): sem
+parâmetro → três, `<MaxUploads>1000</MaxUploads>` e sem marcador; `max-uploads=1` paginando até o fim
+→ uma linha por página, `IsTruncated=true` com marcador, e as três chaves na ordem `alfa`,
+`meio`, `zeta`; `max-uploads=0/-1/abc` → três e `<MaxUploads>1000</MaxUploads>`. Vermelho antes: sem
+`<MaxUploads>` e os três com `max-uploads=1`. Mutações **5/5**: teto ignorado (o bug);
+`IsTruncated` fixo em `false`; sem os marcadores; marcador só pela chave; `max-uploads=0` cortando
+tudo em vez de cair no teto.
+
+## 4.65 `HeadBucket` usa a mesma régua de dono do resto do gateway (ciclo 150)
+
+O `HeadBucket` perguntava só ao **criador registrado** (`donoDoBucketRegistrado`), enquanto o `GET` do
+bucket, o `?location`, o `?list-type=2` e o `PUT` usavam a régua do dono do gateway — `bucketsOf`
+(objetos vivos) **ou** `bucketHasObjectsOf` (vivo ou lápide). No bucket que nasceu do primeiro upload
+(sem `CreateBucket`) e perdeu o último objeto, as duas respostas divergiam para a **mesma**
+credencial:
+
+```
+DELETE /s3/<b>/unico.txt   → 204   (só a lápide fica)
+HEAD    /s3/<b>              → 404   ← "esse bucket não é seu"
+GET     /s3/<b>?list-type=2  → 200
+GET     /s3/<b>?location     → 200
+```
+
+O `HeadBucket` é a sonda de existência do cliente (`aws s3 ls` e `rclone` perguntam antes de listar).
+Que ele diga "não existe" para o dono que acabou de apagar o último objeto faz o cliente recriar o
+bucket ou parar de sincronizar — a régua do gateway é uma só, e a lápide conta (§4.23).
+
+### Agora
+
+| situação | `HEAD /b` | `GET /b` |
+|---|---|---|
+| bucket do dono com objeto vivo | `200` | `200` |
+| bucket do dono com só a lápide (último objeto apagado) | `200` | `200` |
+| bucket criado por `CreateBucket`, ainda sem objeto | `200` | `200` |
+| bucket de outra conta | `404` (não revela existência) | `403` |
+
+- O `HEAD` é a única rota de bucket em que "não é seu" é `404`, de propósito: `HEAD` existe para não
+  revelar existência. As demais concordam com o `GET` em `403`.
+- A régua é a mesma função do gateway; não há uma segunda lista de donos para manter.
+
+**Verificação:** `S3GatewayTests` **+1** (`head_bucket_concorda_com_o_get_do_mesmo_bucket`): `HEAD`
+`200` com objeto vivo, `HEAD` `200` com só a lápide (conferindo `state = 'DELETED'` no catálogo)
+concordando com `?list-type=2` e `?location` em `200`, e bucket de outra conta em `404`. Vermelho
+antes: `404` no `HEAD` com a lápide. Mutações **3/3**: só o criador registrado (o bug); aceitando
+qualquer bucket (revela existência); régua sem a lápide.
+
+## 4.66 Recusa do `CompleteMultipartUpload` também é XML (ciclo 148)
+
+O `CompleteMultipartUpload` era a única rota do multipart que chamava o serviço sem traduzir a recusa:
+
+```
+POST /s3/<b>/mp.bin?uploadId=...   (parte 1 com 5 bytes, parte 2 com 5 bytes)
+→ 400 {"code":"EntityTooSmall","message":"A parte 1 tem menos de 5 MiB; ..."}   ← JSON do Control Plane
+```
+
+`CreateMultipartUpload`, `UploadPart`, `UploadPartCopy`, `Abort` e `ListParts` já saíam em XML. O
+`Complete` é a recusa que o cliente vê **depois de ter enviado todos os bytes** — e a mais comum dele é
+o `EntityTooSmall`, que o SDK reconhece no `<Code>` para dizer "reescreva as partes". Em JSON ele trata
+como corpo que não sabe ler, e o cliente refaz o upload inteiro.
+
+### Agora
+
+| recusa do `Complete` | antes | agora |
+|---|---|---|
+| `EntityTooSmall` (parte < 5 MiB que não é a última) | `400` JSON | `400` XML `<Code>EntityTooSmall</Code>` |
+| `InvalidPart` (ETag que não é de nenhuma parte) | XML (do próprio serviço) | XML, `Code` preservado |
+| `NoSuchUpload` (uploadId inexistente) | XML | XML |
+| `MalformedXML` (corpo que não é o XML) | XML | XML |
+| `MalformedXML` (`PartNumber` que não é número) | `400` JSON | `400` XML `<Code>MalformedXML</Code>` |
+
+- A tradução é o mesmo `noVocabularioDoS3` das outras rotas; o `Code` do S3 é preservado. Todos os
+  `4xx` do fluxo agora têm `Content-Type` de XML e `<RequestId>`.
+- O `PartNumber` ilegível é XML malformado, e a recusa sai no vocabulário do S3 também: o parser
+  traduz o `NumberFormatException` para `MalformedXML` — sem isso, o handler global devolveria o
+  `ErrorResponse` JSON do Control Plane num gateway S3 (§4.66).
+
+**Verificação:** `S3GatewayTests` **+1** (`complete_multipart_recusa_em_xml_e_nao_em_json`):
+`EntityTooSmall`, `InvalidPart`, `NoSuchUpload` e `MalformedXML` (corpo que não é o XML **e**
+`PartNumber` que não é número), cada um conferindo `Content-Type` de XML, começo `<?xml`, `<Code>` e a
+**ausência** de `"code"` JSON. Vermelho antes: `Content-Type: application/json` no `EntityTooSmall` e
+no `PartNumber` não numérico. Mutações **4/4**: sem a tradução; traduzindo só o `EntityTooSmall` (as
+outras vazam); traduzindo para o código errado (`InternalError`); sem a tradução do parser.
+
+
+
+
+## 4.67 `ListObjectVersions` honra `max-keys`, pagina e lista a versão nova primeiro (ciclo 152)
+
+A rota lia até 10000 linhas do banco e **sempre** respondia `IsTruncated=false` com
+`MaxKeys=1000`; `max-keys`, `key-marker` e `version-id-marker` eram ignorados, e a ordem era a da
+consulta (`object_key asc, version asc`) — a versão **mais antiga** primeiro:
+
+```
+GET /s3/<b>?versions&max-keys=1     (a.txt com v1, v2, v3 e b.txt)
+→ 200  IsTruncated=false, MaxKeys=1000
+       <Version>a.txt v1</Version> … v2 … v3 … b.txt
+```
+
+Três defeitos de uma vez. O teto não era honrado — quem pediu 1 recebe as quatro. O `IsTruncated`
+fixo em `false` com o `MaxKeys` ecoando 1000 que ninguém pediu mente duas vezes sobre a completude.
+E a ordem é a inversa do S3, que devolve a versão mais nova de cada chave primeiro: quem lê só a
+primeira versão de cada chave — é o que faz quem procura "o que existe hoje" no histórico — lê a
+**mais antiga**, que no versionamento é a resposta errada. Os marcadores não existiam, então quem
+pagina nunca teria a próxima página.
+
+### Agora
+
+| situação | antes | agora |
+|---|---|---|
+| `max-keys=1` (4 versões) | as quatro, `IsTruncated=false` | uma, `IsTruncated=true`, `NextKeyMarker`/`NextVersionIdMarker` |
+| ordem | `a v1, v2, v3, b` | `a v3, v2, v1, b` (chave asc, versão desc) |
+| `max-keys=0`, `-1`, `abc` | as quatro | as quatro (teto 1000), `<MaxKeys>1000</MaxKeys>` |
+| `max-keys=5000` | as quatro, `MaxKeys=1000` fixo | as quatro, `<MaxKeys>1000</MaxKeys>` (o teto aplicado) |
+| `key-marker` + `version-id-marker` | ignorados | posição na ordem `(chave, versão desc)` |
+| `key-marker` sozinho | ignorado | recomeça **depois da chave inteira** (as versões dela não voltam) |
+| `version-id-marker` não numérico | ignorado | `400 InvalidArgument` |
+| `prefix` | filtrava | filtra (igual) |
+
+- Teto de 1000 como o `ListObjectsV2` e o `ListParts`, aplicado no banco com `limit teto + 1`.
+- O `<MaxKeys>` ecoa o **valor aplicado**, a mesma regra do `<MaxParts>` (§4.59) e do `<MaxUploads>` (§4.64).
+- O marcador de versão é o número da versão (`VersionId`), que é o que a própria resposta emite.
+- `key-marker` **sem** `version-id-marker` pula a chave inteira, como no S3: recomeçar nela
+  reentregaria versões que o cliente já recebeu.
+
+**Verificação:** `S3GatewayTests` **+1** (`list_object_versions_honra_max_keys_pagina_e_lista_a_versao_nova_primeiro`):
+sem parâmetro → as quatro na ordem `a/3, a/2, a/1, b/1`, `IsTruncated=false`, `<MaxKeys>1000</MaxKeys>`
+e `IsLatest=true` na v3; `max-keys=1` paginando até o fim → uma por página, `IsTruncated=true` com
+marcadores, as quatro na ordem do S3 sem repetir; `max-keys=0/-1/abc` → as quatro e
+`<MaxKeys>1000</MaxKeys>`; `max-keys=5000` → `<MaxKeys>1000</MaxKeys>` (o teto aplicado, não o
+pedido); `key-marker=a.txt` sem `version-id-marker` → só `b.txt/1`. Vermelho antes:
+`["a.txt/1","a.txt/2","a.txt/3","b.txt/1"]` contra
+`["a.txt/3","a.txt/2","a.txt/1","b.txt/1"]`. Mutações **6/6**: versão ascendente (o bug da ordem);
+teto ignorado; `IsTruncated` fixo; sem os marcadores; marcador só pela chave; `<MaxKeys>` ecoando o
+pedido. As duas conferências novas cobrem os defeitos que a revisão apontou depois: eco do `<MaxKeys>`
+acima do teto e marcador recomeçando dentro da própria chave.
+
+## 4.68 `GET`/`HEAD` com `?versionId=` servem a versão pedida (ciclo 153)
+
+O gateway **guarda** o histórico: com `?versioning Enabled` o segundo `PUT` de uma chave deixa a
+primeira versão `STORED` e servível, e o `?versions` lista as duas com `<VersionId>`. Mas o
+`versionId` estava na lista de leituras "não endereçadas" e a leitura respondia `501`:
+
+```
+PUT /s3/<b>/a.txt  "primeira"   → 200 (v1)
+PUT /s3/<b>/a.txt  "segunda"    → 200 (v2)
+GET /s3/<b>?versions            → 200  v1 e v2, com <VersionId>1 e <VersionId>2
+GET /s3/<b>/a.txt?versionId=1   → 501 NotImplemented   ← o furo
+```
+
+O histórico só tem uso se a versão antiga for recuperável. O grande motivo de manter versões — "o
+arquivo de ontem" — passa por esse endereço, e restaurar por `copyTo` exige abrir a origem. Dizer
+`501` para uma versão que está gravada e conferida é recusar o dado que se tem.
+
+### Agora
+
+| pedido | antes | agora |
+|---|---|---|
+| `GET /b/a.txt?versionId=1` | `501` | `200` com o corpo e o `ETag` da v1 |
+| `HEAD /b/a.txt?versionId=1` | `501` | `200` com `Content-Length`/`ETag` da v1 |
+| `GET /b/a.txt` (sem `versionId`) | `200`, corrente | corrente (igual) |
+| `?versionId=9` (não existe) | `501` | `404 NoSuchVersion` |
+| `?versionId=` da lápide | `501` | `404 NoSuchVersion` (o conteúdo foi removido) |
+| `?versionId=abc` | `501` | `400 InvalidArgument` |
+
+- A régua de serventia é a da corrente: estado servível e cópia conferida. Versão **substituída** é
+  servível de propósito — é o que o histórico existe para guardar.
+- O `DeleteObject` não cria versão nova: a corrente vira `<DeleteMarker>` com o mesmo número, e essa
+  versão deixa de ser servível.
+- O `DELETE ?versionId=` continua `501`: remover uma versão é uma decisão à parte, que mexe no
+  histórico, e não entra por esta rota.
+- A versão é do **dono da credencial**, como todo objeto no gateway: a linha de outra conta no mesmo
+  bucket — o estado que o `ListObjectVersions` filtra — não é servida nem pela versão nem pela
+  corrente. A resposta é `403 AccessDenied`, a mesma do `DELETE` e do `CopyObject`, e não revela que a
+  chave existe.
+
+**Verificação:** `S3GatewayTests` **+1** (`get_com_version_id_serve_a_versao_pedida_e_nao_a_corrente`):
+sem `versionId` a corrente; `versionId=1` e `=2` com cada corpo; o `ETag` da v1 é o digest de v1 e
+difere do da v2; `HEAD ?versionId=1` com `Content-Length` da v1; `versionId=9` → `NoSuchVersion`;
+`versionId=abc` → `InvalidArgument`; depois do `DELETE`, o catálogo tem `v1 STORED` e
+`v2 DELETED`, `?versionId=2` → `NoSuchVersion`, a corrente → `NoSuchKey` e a v1 **continua** sendo
+servida; e a linha de outra conta plantada no bucket → `AccessDenied` pela versão e pela corrente.
+Vermelho antes: `501` no `versionId=1`. Mutações **4/4**: ignorar o `versionId` e servir a corrente (o
+comportamento de antes); versão inexistente virando a corrente; apagar versão sem cópia servível (a
+lápide); `versionId` não numérico virando a corrente. A conferência do dono tem o próprio caso: sem
+ela, as duas asserções da linha alheia ficam vermelhas.
+
+## 4.69 A aceitação do §25 roda como harness (ciclo 155)
+
+O brief do Storage (§25) pede doze critérios de aceitação escritos como comportamento de um
+sistema vivo — "um participante instala e vincula o servidor", "a indisponibilidade de um nó não
+compromete arquivos com redundância saudável". Cada peça tinha teste; o que nunca existia era a
+**sequência**, com o Control Plane de verdade, banco MariaDB 11.4 real e um cliente S3 assinando.
+
+Agora existe: `scripts/tests/storage-acceptance.sh` sobe um MariaDB efêmero (container com nome
+aleatório, destruído no fim) e o app em porta livre, e percorre o §25 pela API:
+
+| item | o que o harness prova |
+|---|---|
+| §25.1 | o admin gera a chave de provisionamento (`POST /admin/network/nodes/provision-token`) |
+| §25.2 | dois participantes se vinculam com a chave: `enroll` → aprovação → `keys` → `heartbeat` |
+| §25.3 | grava e lê pela API S3 com **SigV4 real** (`scripts/tests/s3client.py`), byte a byte |
+| §25.7 | o objeto é distribuído: réplica 0 do Control Plane + cópia de nó (alvo lido do próprio scrub) |
+| §25.8 | o catálogo e o **arquivo no disco do nó** têm o sha-256 do que o cliente gravou |
+| §25.10 | com um nó pausado, o objeto continua sendo lido e a varredura aponta a lacuna |
+| §25.11 | o nó retoma, a cura despacha e o nó repõe a cópia até a durabilidade voltar ao alvo |
+| §25.12 | o nó revogado não opera mais (`NODE_KEY_INVALID`), não recebe chave nova (`NODE_REVOKED`) e o objeto continua servível |
+
+O executor do participante é `scripts/tests/node-executor.py`: o mesmo caminho do
+`deploy/node-runtime/node-runtime.sh` (config assinada conferida contra o pino → `tasks/next` →
+baixa → mede → `POST .../replica` → `tasks/{id}/result`), limitado ao que o cenário usa. O par
+Ed25519 da config é gerado pelo harness e o privado sobe pelo `--rede.network.config.signing-key`
+— a config que o nó aceita é assinada de verdade, não um "signed:true" de mentira.
+
+**O que o harness mostrou de operação** (e ficou declarado no próprio script):
+
+- o `PUT` grava no Control Plane e **designa** a cópia; quem **enfileira** a tarefa é o despacho
+  (`POST /admin/network/nodes/storage/objects/{id}/dispatch`). Sem ele, a colocação fica
+  `PENDING_REMOTE` e o nó não tem o que executar — é o desenho (o operador decide o tráfego de
+  corpo), e o harness segue a ordem que o operador seguiria;
+- a pausa do participante (`POST /network/participant/nodes/{id}/pause`) é observada pelo Control
+  Plane no pedido seguinte, não no mesmo instante — o harness espera a janela em vez de afirmar o
+  contrário;
+- `SUSPENDED` não serve para o ciclo de vida do §25.10/§25.11: ele **revoga as chaves** e o nó não
+  voltaria. A pausa é do dono e tem volta (`/resume`).
+- o §25.10 mede uma **transição**, não um estado: antes da pausa a cópia do nó tem de estar
+  confirmada (`OK`) e a varredura sem lacuna; depois, a lacuna daquele objeto. O laço do §25.7 só
+  garante "pelo menos o alvo", e com `rede.storage.replicas: 2` (padrão: réplica 0 do CP + uma cópia
+  de nó) o objeto fica abaixo do alvo enquanto a cópia do nó ainda não confirmou — a asserção passava
+  ou falhava pelo tempo do executor, não pela pausa. O §25.11 devolve o nó ao ar **antes** da cura, e
+  repete a cura com folga: uma designação pode cair num nó que ainda não voltou a operar.
+
+**Verificação:** `storage-acceptance.sh` **PASS 15 | FAIL 0** (ciclo 160), quatro rodadas seguidas —
+antes eram 14 asserções e o §25.10 falhava em cerca de uma em três rodadas. Rodado em série com os
+outros harnesses. Mutações no próprio harness, cada uma derrubando a asserção que ela mede:
+assinar o caminho do servidor (`/s3/…`) em vez do do protocolo (§25.3); executar a tarefa sem
+confirmar a réplica (§25.7/§25.11); não pausar o nó (§25.10 — com a varredura fingindo objeto
+completo, a asserção da lacuna cai); não retomar (§25.11); não executar a
+cura (§25.11); digest do arquivo do nó trocado (§25.8). Uma sobreviveu e foi **corrigida como
+asserção** (ver §4.70): o executor que não confere o que baixou — o Control Plane mede de novo e
+recusa, então a garantia vale de qualquer jeito; a conferência do nó é a primeira linha, não a
+única.
+
+## 4.70 O teste que proibia `"abc"` media a sorte do bucket (ciclo 155)
+
+`S3GatewayTests.assinatura_de_outro_servico_ou_regiao_e_recusada` fechava cada caso com
+`doesNotContain("abc")`, pensando no conteúdo do objeto. O `<Resource>` da resposta de erro ecoa o
+caminho (`GET /s3/<bucket>/x.txt`), e o bucket é sorteado com o prefixo `sc` — um sorteio que caia
+em `scabc…` deixava o teste vermelho **sem que nada vazasse**. Foi o que aconteceu na suíte do
+ciclo 155 (uma falha em 4620), e a sonda confirmou: bucket fixo `scabc1234` → falha; o mesmo teste
+com qualquer outro bucket → verde.
+
+**Agora:** o bucket do teste nasce com prefixo `bkt`, e a garantia que importa — o segredo não
+aparece na resposta — fica onde ela pode falhar: em `assinatura_com_segredo_errado_e_recusada`, que
+passa por `verify()` de verdade (`doesNotContain(SECRET)`). Os casos de escopo continuam proibindo
+`"abc"`, porque ali a recusa acontece **antes** da verificação e o segredo nunca entra em cena.
+
+**Verificação:** a mutação que ecoa o segredo na mensagem de recusa (`"A assinatura nao confere: " +
+secret`) derruba o teste da assinatura errada e **não** derruba os de escopo — o que mostra que a
+asserção nova mede o que diz medir. Com o código restaurado, os dois verdes. Suíte
+**4620/0/0/1**.
+
+## 4.71 `DELETE /{bucket}?acl` apagava o bucket (ciclo 155)
+
+O §4.38 declarou as 17 entradas de `SUBRECURSOS_DE_BUCKET_NAO_IMPLEMENTADOS` recusadas com `501` e
+registrou um teste que percorria a lista inteira. O teste nunca entrou no repositório (não há
+`delete_de_subrecurso_nao_apaga_o_bucket_e_o_dono_esvaziado_pode_apagar`), e a lista tinha um nome a
+menos do que o que o gateway conhece: **`acl`**.
+
+| antes | agora |
+|---|---|
+| `DELETE /{bucket}?acl` (bucket com objeto vivo) → `409 BucketNotEmpty` | `501 NotImplemented` |
+| `DELETE /{bucket}?acl` (bucket esvaziado) → `204` e o **bucket some** | `501 NotImplemented`, nada alterado |
+
+O `?acl` é lido de propósito (`GET /{bucket}?acl` responde `<AccessControlPolicy>`, §4.32); apagá-lo
+não existe e não podia virar `DeleteBucket`.
+
+**Verificação:** `S3GatewayTests` **+1** (`delete_de_bucket_com_cada_subrecurso_recusa_e_nao_apaga_o_bucket`),
+que percorre a lista inteira e depois apaga o bucket de verdade (`204`, some de `ListBuckets`) — a
+recusa é do subrecurso, não da rota. Vermelho antes: `?acl` respondia `204`/`409`; mutação que tira
+`acl` da lista derruba o teste, restaurada fica verde.
+
+**A lista ainda tinha outros cinco nomes de fora** (`location`, `versioning`, `lifecycle`, `uploads`,
+`versions`, medido: o `DELETE` de cada um respondia `204` e apagava o bucket) — e o teste percorria a
+mesma constante da guarda, então não podia vê-los. A correção e o teste que deriva os nomes da rota
+estão no **§4.72**.
+
+## 4.72 `DELETE /{bucket}?<subrecurso>` não é `DeleteBucket` — a lista fechou de verdade (ciclo 155)
+
+O §4.71 acrescentou `acl` à guarda e um teste que **percorria a própria lista** — código e teste
+concordando por construção, então nenhum dos dois podia ver o que faltava.
+
+Medido no head anterior, com o bucket de lápide do dono:
+
+```
+DELETE /s3/<b>?location   → 204   DELETE /s3/<b>?versioning → 204   DELETE /s3/<b>?lifecycle → 204
+DELETE /s3/<b>?uploads    → 204   DELETE /s3/<b>?versions   → 204   bucket ainda existe? false
+```
+
+`?versioning` é o pior dos cinco: o `PUT` do mesmo subrecurso **age** (grava a política), então
+"desligue o versionamento" **destruía o bucket**. `?lifecycle` é a política do varredor (§4.36);
+`?uploads` e `?versions` são listagens, e quem tentasse "cancelar" ou "limpar" esvaziava o bucket.
+
+**Agora:**
+
+- Os cinco nomes entram na guarda: `location`, `versioning`, `lifecycle`, `uploads`, `versions`.
+  `DELETE` em qualquer um deles responde `501 NotImplemented` e o bucket fica.
+- O teste **deriva a lista da rota**, não da constante: lê os `params` dos mapeamentos `/{bucket}` do
+  controlador, descarta os que têm `DELETE` próprio e os que não são verbo próprio de subrecurso
+  (`?delete` é o `DeleteObjects`, que aqui só existe em `POST`), e exige `501` para cada um. Um
+  subrecurso novo que ganhe `GET` e fique fora da guarda passa a derrubar o teste — é o único teste
+  que fecha a família, e não só o nome da vez.
+
+**Verificação:** `S3GatewayTests` **89/89**; o teste do `DELETE` percorre os nomes derivados e cada
+um responde `501 <Code>NotImplemented</Code>` com o bucket intacto, que depois é apagado de verdade
+(`204`) e some de `ListBuckets`. Vermelho antes: com a guarda parada em `acl`, o teste falha em
+`DELETE ?lifecycle`.
 
 ## 5. Erros
 
@@ -1966,3 +2424,36 @@ trocado por `403`; e ritmo só no caminho do cabeçalho.
   (`rede.storage.max-bytes-per-owner`, doc 12 §2.3): o upload que estoura responde `507 QuotaExceeded`
   no XML do S3, com o número na mensagem. Duas credenciais do mesmo dono dividem a mesma cota.
   O **rate limiting por credencial existe** desde o ciclo 74 (§5.2).
+
+## 4.72 `DELETE /{bucket}?<subrecurso>` não é `DeleteBucket` — a lista fechou de verdade (ciclo 155)
+
+O §4.38 dizia que `DELETE /{bucket}?cors` (e os vizinhos) respondia `501` e não apagava o bucket. A
+guarda `SUBRECURSOS_DE_BUCKET_NAO_IMPLEMENTADOS` recusava 17 nomes, e o `?acl` tinha ficado de fora.
+A primeira correção acrescentou `acl` e criou um teste que **percorria a própria lista** — código e
+teste concordando por construção, então nenhum dos dois podia ver o que faltava.
+
+Medido no head anterior, com o bucket de lápide do dono:
+
+```
+DELETE /s3/<b>?location   → 204   DELETE /s3/<b>?versioning → 204   DELETE /s3/<b>?lifecycle → 204
+DELETE /s3/<b>?uploads    → 204   DELETE /s3/<b>?versions   → 204   bucket ainda existe? false
+```
+
+`?versioning` é o pior dos cinco: o `PUT` do mesmo subrecurso **age** (grava a política), então "desligue
+o versionamento" **destruía o bucket**. `?lifecycle` é a política do varredor (§4.36); `?uploads` e
+`?versions` são listagens, e quem tentasse "cancelar" ou "limpar" esvaziava o bucket.
+
+### Agora
+
+- Os cinco nomes entram na guarda: `location`, `versioning`, `lifecycle`, `uploads`, `versions`.
+  `DELETE` em qualquer um deles responde `501 NotImplemented` e o bucket fica.
+- O teste **deriva a lista da rota**, não da constante: lê os `params` dos mapeamentos `/{bucket}` do
+  controlador, descarta os que têm `DELETE` próprio e os que não são `POST` de subrecurso (`?delete` é
+  o verbo do `DeleteObjects`, não subrecurso de bucket), e exige `501` para cada um. Um subrecurso
+  novo que ganhe `GET` e fique fora da guarda passa a derrubar o teste — é o único teste que fecha a
+  família, e não só o nome da vez.
+
+**Verificação:** `S3GatewayTests` **89/89**; o teste do `DELETE` percorre os nomes derivados (19) e
+cada um responde `501 <Code>NotImplemented</Code>` com o bucket intacto, que depois é apagado de
+verdade (`204`) e some de `ListBuckets`. Vermelho antes: com a guarda parada em `acl`, o teste falha
+em `DELETE ?lifecycle`. Harness `s3client.py`/`node-executor` do §25 segue verde (14 PASS, 6 mutações).

@@ -247,6 +247,93 @@ class StorageDurabilityTests {
 		assertThat(report.underReplicated()).singleElement().satisfies(g -> assertThat(g.confirmed()).isEqualTo(1));
 	}
 
+	/**
+	 * O §25.11 pede que "a indisponibilidade de um nó não comprometa arquivos com redundância
+	 * saudável" — e o nó SUSPENSO é indisponível: o placement não designa cópia nova nele
+	 * (`storageReady` exige {@code ACTIVE}); a varredura só descartava o {@code REVOKED}.
+	 */
+	@Test
+	void copiaEmNoSuspensoNaoContaComoDurabilidade() {
+		StorageObject objeto = StorageObject.current("sob_1", "fotos", "a.jpg", "image/jpeg", 10L, "abc",
+			StorageObjectState.STORED, "user_1", NOW, NOW, null);
+		when(catalog.listAll(any(), any(), anyInt())).thenReturn(List.of(objeto));
+		when(catalog.copies("sob_1")).thenReturn(List.of(copia(0, "nd_ctrl"), copia(1, "nd_a")));
+		regiao("nd_ctrl", null);
+		when(nodes.findById("nd_a")).thenReturn(Optional.of(noComStatus("nd_a", "sul", NodeStatus.SUSPENDED)));
+
+		StorageScrubber.Report report = scrubber.scan(null, 10);
+
+		assertThat(report.underReplicated()).singleElement().satisfies(g -> {
+			assertThat(g.confirmed()).as("cópia em nó suspenso não serve").isEqualTo(1);
+			assertThat(g.missing()).isEqualTo(2);
+		});
+		assertThat(report.byDurability()).containsExactly(entry("SINGLE_DOMAIN", 1L));
+	}
+
+	/**
+	 * A réplica 0 é o corpo do Control Plane, e o CP não precisa de nó operável para servir. A linha
+	 * dela aponta para o nó que hospeda o CP, que pode estar suspenso enquanto o processo serve — se a
+	 * régua de status valesse para ela, todo objeto desta instalação perdia a cópia do CP quando o nó
+	 * dela fosse suspenso, e o healing pediria cópia nova para tudo.
+	 */
+	@Test
+	void aReplicaZeroDoControlPlaneNaoSaiDaContaQuandoONoDelaNaoOpera() {
+		StorageObject objeto = StorageObject.current("sob_1", "fotos", "a.jpg", "image/jpeg", 10L, "abc",
+			StorageObjectState.STORED, "user_1", NOW, NOW, null);
+		when(catalog.listAll(any(), any(), anyInt())).thenReturn(List.of(objeto));
+		when(catalog.copies("sob_1")).thenReturn(List.of(copia(0, "nd_ctrl"), copia(1, "nd_a")));
+		regiao("nd_a", "sul");
+		when(nodes.findById("nd_ctrl")).thenReturn(Optional.of(noComStatus("nd_ctrl", null, NodeStatus.SUSPENDED)));
+		when(nodes.findById("nd_a")).thenReturn(Optional.of(noComStatus("nd_a", "sul", NodeStatus.ACTIVE)));
+
+		StorageScrubber.Report report = scrubber.scan(null, 10);
+
+		assertThat(report.underReplicated()).as("alvo 3: réplica 0 + o nó ativo").singleElement()
+			.satisfies(g -> assertThat(g.confirmed()).isEqualTo(2));
+		assertThat(report.onRevokedNode()).isEmpty();
+	}
+
+	/**
+	 * Nó fora do cadastro é <b>desconhecido</b>, não "não serve": o catálogo ainda aponta a cópia e a
+	 * rede não sabe se ela está viva. Dizer "saiu da conta" abriria lacuna falsa e o healing pediria
+	 * uma cópia nova de um objeto inteiro — caro e sem motivo. A distinção só aparece com o objeto
+	 * tendo outra cópia: com uma só, os dois critérios dão o mesmo número.
+	 */
+	@Test
+	void noForaDoCadastroContinuaContandoComoDurabilidadeAoContrarioDoSuspenso() {
+		StorageObject objeto = StorageObject.current("sob_1", "fotos", "a.jpg", "image/jpeg", 10L, "abc",
+			StorageObjectState.STORED, "user_1", NOW, NOW, null);
+		when(catalog.listAll(any(), any(), anyInt())).thenReturn(List.of(objeto));
+		when(catalog.copies("sob_1"))
+			.thenReturn(List.of(copia(0, "nd_ctrl"), copia(1, "nd_a"), copia(2, "nd_fantasma")));
+		regiao("nd_ctrl", null);
+		when(nodes.findById("nd_a")).thenReturn(Optional.of(noComStatus("nd_a", "sul", NodeStatus.SUSPENDED)));
+		when(nodes.findById("nd_fantasma")).thenReturn(Optional.empty());
+
+		StorageScrubber.Report report = scrubber.scan(null, 10);
+
+		// Alvo 3: a réplica 0 e o nó desconhecido contam (2); só o suspenso sai da conta.
+		assertThat(report.underReplicated()).singleElement().satisfies(g -> {
+			assertThat(g.confirmed()).isEqualTo(2);
+			assertThat(g.missing()).isEqualTo(1);
+		});
+	}
+
+	/** Em quarentena é a mesma régua: isolado é indisponível, e a durabilidade não pode contar com ele. */
+	@Test
+	void copiaEmNoEmQuarentenaNaoContaComoDurabilidade() {
+		StorageObject objeto = StorageObject.current("sob_1", "fotos", "a.jpg", "image/jpeg", 10L, "abc",
+			StorageObjectState.STORED, "user_1", NOW, NOW, null);
+		when(catalog.listAll(any(), any(), anyInt())).thenReturn(List.of(objeto));
+		when(catalog.copies("sob_1")).thenReturn(List.of(copia(0, "nd_ctrl"), copia(1, "nd_a")));
+		regiao("nd_ctrl", null);
+		when(nodes.findById("nd_a")).thenReturn(Optional.of(noComStatus("nd_a", "sul", NodeStatus.QUARANTINED)));
+
+		StorageScrubber.Report report = scrubber.scan(null, 10);
+
+		assertThat(report.underReplicated()).singleElement().satisfies(g -> assertThat(g.confirmed()).isEqualTo(1));
+	}
+
 	private static NetworkNode noComStatus(String id, String region, NodeStatus status) {
 		return new NetworkNode(id, id, "owner", status, Set.of(NodeProfile.NODE_STORAGE), region, "BR",
 			"0.1.0", NOW, 4, 8192, 102400, 100, null, null, null, null, 40960L, null, null, 0, null, null);

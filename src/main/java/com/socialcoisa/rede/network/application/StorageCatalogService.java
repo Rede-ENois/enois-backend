@@ -24,6 +24,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository;
+import com.socialcoisa.rede.network.application.port.out.StorageCatalogRepository.PaginaDeVersoes;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.ObjectMetadata;
 import com.socialcoisa.rede.network.domain.NodeStatus;
@@ -888,9 +889,10 @@ public class StorageCatalogService {
 	 * {@code ListObjects}, que ignora o subrecurso, e o cliente recebia os objetos correntes com
 	 * {@code 200} — nem erro, nem versão.</p>
 	 */
-	public List<StorageObject> versionsNoBucket(String bucket, String prefix) {
+	public PaginaDeVersoes versionsNoBucket(String bucket, String prefix, String keyMarker, Long versionMarker,
+			int maxKeys) {
 		validateBucket(bucket);
-		return catalog.versionsNoBucket(bucket, prefix);
+		return catalog.paginaDeVersoes(bucket, prefix, keyMarker, versionMarker, maxKeys);
 	}
 
 	/** O histórico da chave, da versão mais antiga para a mais nova. */
@@ -1251,6 +1253,45 @@ public class StorageCatalogService {
 			conta(operacao, resultadoDe(recusado), inicio);
 			throw recusado;
 		}
+	}
+
+	/**
+	 * A versão pedida de uma chave, para o {@code GET}/{@code HEAD} com {@code ?versionId=} (§4.68).
+	 *
+	 * <p>Vale a mesma régua da corrente: estado servível e cópia conferida. Uma versão
+	 * <b>substituída</b> é servível de propósito — é o que o histórico existe para guardar. Lápide,
+	 * versão vencida e versão inexistente respondem {@code 404} como objeto inexistente.</p>
+	 */
+	public StorageObject requireVersion(String bucket, String key, long versao, String operacao) {
+		long inicio = System.nanoTime();
+		try {
+			StorageObject object = doRequireVersao(bucket, key, versao);
+			conta(operacao, StorageOperationMetrics.Resultado.OK, inicio);
+			return object;
+		}
+		catch (RuntimeException recusado) {
+			conta(operacao, resultadoDe(recusado), inicio);
+			throw recusado;
+		}
+	}
+
+	/**
+	 * A linha da versão pedida, com a régua de serventia da corrente.
+	 *
+	 * <p>{@code catalog.versions} devolve o histórico da chave — inclusive linhas de outras contas no
+	 * mesmo bucket —; aqui a escolha é pela versão. Não filtra por dono porque não conhece a
+	 * credencial: quem confere é o chamador, em
+	 * {@code S3GatewayController.objetoPedido}, que recusa com {@code 403 AccessDenied} (§4.68).</p>
+	 */
+	private StorageObject doRequireVersao(String bucket, String key, long versao) {
+		StorageObject object = catalog.versions(bucket, key).stream()
+			.filter(o -> o.version() == versao).findFirst()
+			.orElseThrow(() -> new ApiException(404, "NoSuchVersion",
+				"Esta chave nao tem a versao pedida."));
+		if (!object.servable() || object.expired(clock.instant())) {
+			throw new ApiException(404, "NoSuchVersion", "Esta chave nao tem a versao pedida.");
+		}
+		return object;
 	}
 
 	private StorageObject doRequireDownloadable(String bucket, String key) {

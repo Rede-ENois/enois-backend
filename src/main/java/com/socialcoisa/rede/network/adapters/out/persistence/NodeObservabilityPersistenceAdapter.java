@@ -24,15 +24,17 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 	 */
 	private static final String UPSERT_SAMPLE = """
 		insert into network_node_samples (node_id, sampled_at, cpu_percent, memory_mb, disk_free_mb,
-		  running_tasks, queue_depth, mode, activity)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		  disk_iops, disk_latency_ms, temperature_c, running_tasks, queue_depth, mode, activity)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		on duplicate key update cpu_percent = values(cpu_percent), memory_mb = values(memory_mb),
-		  disk_free_mb = values(disk_free_mb), running_tasks = values(running_tasks),
+		  disk_free_mb = values(disk_free_mb), disk_iops = values(disk_iops),
+		  disk_latency_ms = values(disk_latency_ms), temperature_c = values(temperature_c),
+		  running_tasks = values(running_tasks),
 		  queue_depth = values(queue_depth), mode = values(mode), activity = values(activity)
 		""";
 
 	private static final String SAMPLE_COLUMNS = "node_id, sampled_at, cpu_percent, memory_mb, disk_free_mb, "
-		+ "running_tasks, queue_depth, mode, activity";
+		+ "disk_iops, disk_latency_ms, temperature_c, running_tasks, queue_depth, mode, activity";
 
 	private static final String LIST_SAMPLES = "select " + SAMPLE_COLUMNS
 		+ " from network_node_samples where node_id = ? order by sampled_at desc limit ?";
@@ -45,6 +47,19 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 		  ) keep_rows
 		)
 		""";
+
+	/**
+	 * Soma na faixa da hora corrente. O instante é truncado em hora: é a régua da coluna, e truncar
+	 * aqui (e não confiar no chamador) garante que duas tarefas do mesmo minuto caem na MESMA linha.
+	 */
+	private static final String UPSERT_LATENCY = """
+		insert into network_task_latency_buckets (node_id, metrics_hour, bucket_upper_ms, samples)
+		values (?, ?, ?, 1)
+		on duplicate key update samples = samples + 1
+		""";
+
+	private static final String SUM_LATENCY = "select bucket_upper_ms, sum(samples) from network_task_latency_buckets "
+		+ "where node_id = ? and metrics_hour >= ? and metrics_hour <= ? group by bucket_upper_ms";
 
 	private static final String INSERT_LOG = "insert into network_node_logs (id, node_id, logged_at, level, message) "
 		+ "values (?, ?, ?, ?, ?)";
@@ -63,7 +78,8 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 	private static final RowMapper<Sample> SAMPLE_MAPPER = (rs, row) -> new Sample(rs.getString("node_id"),
 		rs.getTimestamp("sampled_at").toInstant(), nullableDouble(rs, "cpu_percent"), nullableInt(rs, "memory_mb"),
 		nullableLong(rs, "disk_free_mb"), nullableInt(rs, "running_tasks"), nullableInt(rs, "queue_depth"),
-		rs.getString("mode"), rs.getString("activity"));
+		rs.getString("mode"), rs.getString("activity"), nullableDouble(rs, "disk_iops"),
+		nullableDouble(rs, "disk_latency_ms"), rs.getBigDecimal("temperature_c"));
 
 	private static final RowMapper<LogLine> LOG_MAPPER = (rs, row) -> new LogLine(rs.getString("id"),
 		rs.getString("node_id"), rs.getTimestamp("logged_at").toInstant(), rs.getString("level"),
@@ -78,8 +94,9 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 	@Override
 	public void saveSample(Sample sample) {
 		jdbc.update(UPSERT_SAMPLE, sample.nodeId(), Timestamp.from(sample.sampledAt()), sample.cpuPercent(),
-			sample.memoryMb(), sample.diskFreeMb(), sample.runningTasks(), sample.queueDepth(), sample.mode(),
-			sample.activity());
+			sample.memoryMb(), sample.diskFreeMb(), sample.diskIops(), sample.diskLatencyMs(), sample.temperatureC(),
+			sample.runningTasks(),
+			sample.queueDepth(), sample.mode(), sample.activity());
 	}
 
 	@Override
@@ -93,6 +110,22 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 		// recentes) e a lista volta invertida.
 		List<Sample> newestFirst = jdbc.query(LIST_SAMPLES, SAMPLE_MAPPER, nodeId, limit);
 		return newestFirst.reversed();
+	}
+
+	@Override
+	public void addLatencySample(String nodeId, Instant at, int bucketUpperMs) {
+		jdbc.update(UPSERT_LATENCY, nodeId, Timestamp.from(at.truncatedTo(java.time.temporal.ChronoUnit.HOURS)),
+			bucketUpperMs);
+	}
+
+	@Override
+	public java.util.Map<Integer, Integer> latencySamples(String nodeId, Instant now, int hours) {
+		Instant from = now.minusSeconds(hours * 3600L).truncatedTo(java.time.temporal.ChronoUnit.HOURS);
+		java.util.Map<Integer, Integer> samples = new java.util.TreeMap<>();
+		jdbc.query(SUM_LATENCY, rs -> {
+			samples.put(rs.getInt(1), rs.getInt(2));
+		}, nodeId, Timestamp.from(from), Timestamp.from(now));
+		return samples;
 	}
 
 	@Override

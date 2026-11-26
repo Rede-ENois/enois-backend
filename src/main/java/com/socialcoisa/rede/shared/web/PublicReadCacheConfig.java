@@ -37,7 +37,7 @@ class PublicReadCacheConfig implements WebMvcConfigurer {
 	private static final String[] PUBLIC_READ_PATHS = {
 		"/feed", "/feed/posts/*", "/users/*", "/users/by-id/*", "/ranking", "/profile/ranking",
 		"/communities", "/communities/*", "/events", "/events/*", "/jobs", "/jobs/*",
-		"/stats/community"
+		"/stats/community", "/documentos", "/documentos/*", "/documentos/*/historico"
 	};
 
 	@Override

@@ -49,7 +49,11 @@ class ExternalJobImportServiceTests {
 						// A fonte publica a descrição em HTML: ela é guardada como texto legível.
 						new ExternalJob("ext-5", "Vaga Com Descrição", "Empresa Z", "Remoto",
 							"<p>Buscamos <b>dev</b> backend.</p><ul><li>Java</li><li>Spring</li></ul>",
-							null, null, "https://exemplo.test/vaga/5", "https://exemplo.test/vaga/5", name(), null));
+							null, null, "https://exemplo.test/vaga/5", "https://exemplo.test/vaga/5", name(), null),
+						// Anúncio alemão como vem da fonte: espaço fino (U+202F) na faixa salarial.
+						new ExternalJob("ext-6", "Entwickler\u00A0In (m/w/d)", "Caf\u00E9 GmbH", "M\u00FCnchen",
+							"<p>12\u202F000 \u20AC pro Jahr \u2014 ab sofort.</p>", null, null,
+							"https://exemplo.test/vaga/6", "https://exemplo.test/vaga/6", name(), null));
 				}
 			};
 		}
@@ -63,7 +67,7 @@ class ExternalJobImportServiceTests {
 
 	@Test
 	void importsIntoItsOwnTableAndDoesNotDuplicateOnRerun() {
-		assertThat(importService.refresh()).isGreaterThanOrEqualTo(5);
+		assertThat(importService.refresh()).isGreaterThanOrEqualTo(6);
 
 		var imported = repository.findBySource("StubSource", "ext-1");
 		assertThat(imported).isPresent();
@@ -77,7 +81,7 @@ class ExternalJobImportServiceTests {
 		// O banco de teste e compartilhado: conta so as vagas DESTA fonte (o stub), nao o total.
 		long fromStub = repository.findRecent(200).stream()
 			.filter(j -> "StubSource".equals(j.platform())).count();
-		assertThat(fromStub).isEqualTo(5);
+		assertThat(fromStub).isEqualTo(6);
 	}
 
 	@Test
@@ -113,5 +117,18 @@ class ExternalJobImportServiceTests {
 		assertThat(job.location()).hasSizeLessThanOrEqualTo(ExternalJobImportService.TEXT_MAX)
 			.startsWith("Argentina, Brazil").endsWith("…");
 		assertThat(repository.findBySource("StubSource", "ext-1")).isPresent();
+	}
+
+	@Test
+	void storesTheAnnouncementWithTheCharactersTheSourcePublished() {
+		importService.refresh();
+
+		var job = repository.findBySource("StubSource", "ext-6").orElseThrow();
+		// O espaço entre as duas palavras é o ESPAÇO DURO (U+00A0) que a fonte publica — o mesmo
+		// trabalho de não deixar o texto perder o caractere que veio da origem.
+		assertThat(job.title()).isEqualTo("Entwickler\u00A0In (m/w/d)");
+		assertThat(job.company()).isEqualTo("Caf\u00E9 GmbH");
+		assertThat(job.location()).isEqualTo("M\u00FCnchen");
+		assertThat(job.description()).isEqualTo("12\u202F000 \u20AC pro Jahr \u2014 ab sofort.");
 	}
 }

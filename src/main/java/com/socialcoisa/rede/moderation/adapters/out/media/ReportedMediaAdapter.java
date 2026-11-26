@@ -21,6 +21,7 @@ import com.socialcoisa.rede.colagem.application.port.out.ColagemRepository;
 import com.socialcoisa.rede.feed.application.port.out.CommentRepository;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.PostId;
+import com.socialcoisa.rede.figurinhas.application.port.out.FigurinhasComunidadeRepository;
 import com.socialcoisa.rede.media.application.ImageDecoding;
 import com.socialcoisa.rede.media.application.port.out.MediaAssetRepository;
 import com.socialcoisa.rede.media.application.port.out.MediaSourceDownloader;
@@ -65,17 +66,20 @@ class ReportedMediaAdapter implements ReportedMediaReader,
 	private final ObjectProvider<MediaSourceDownloader> downloader;
 	/** A captura de uma denúncia de chamada pertence à DENÚNCIA, não à sala. */
 	private final com.socialcoisa.rede.moderation.application.port.out.CallReportContextRepository callReports;
+	/** A imagem de uma figurinha denunciada é o próprio asset do cadastro dela. */
+	private final FigurinhasComunidadeRepository figurinhas;
 
 	ReportedMediaAdapter(PostRepository posts, CommentRepository comments, MediaAssetRepository assets,
 			ObjectProvider<MediaSourceDownloader> downloader,
 			com.socialcoisa.rede.moderation.application.port.out.CallReportContextRepository callReports,
-			ColagemRepository colagem) {
+			ColagemRepository colagem, FigurinhasComunidadeRepository figurinhas) {
 		this.posts = posts;
 		this.comments = comments;
 		this.assets = assets;
 		this.downloader = downloader;
 		this.callReports = callReports;
 		this.colagem = colagem;
+		this.figurinhas = figurinhas;
 	}
 
 	@Override
@@ -164,6 +168,8 @@ class ReportedMediaAdapter implements ReportedMediaReader,
 			case "MEDIA" -> List.of(targetId);
 			case "POST" -> posts.findById(new PostId(targetId)).map(post -> post.mediaIds()).orElse(List.of());
 			case "COMMENT" -> comments.findById(targetId).map(comment -> comment.mediaIds()).orElse(List.of());
+			case "FIGURINHA_COMUNIDADE" -> figurinhas.findById(targetId).map(figurinha -> List.of(figurinha.mediaId()))
+				.orElse(List.of());
 			default -> List.of();
 		};
 	}

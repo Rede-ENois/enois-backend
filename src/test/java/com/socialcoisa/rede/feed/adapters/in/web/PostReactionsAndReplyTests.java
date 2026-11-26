@@ -61,6 +61,31 @@ class PostReactionsAndReplyTests {
 	}
 
 	@Test
+	void oCoracaoRoxoEUmTipoDeReacaoComoQualquerOutro() throws Exception {
+		// O coração roxo entrou no pacote depois das 76 expressões: a API tem de aceitar o tipo e
+		// responder com ele, como as reações de antes.
+		var author = auth.authenticate("user_react_heart_author");
+		var reactor = auth.authenticate("user_react_heart_actor");
+		String postId = publish(author, "Purple heart reaction must go through.");
+
+		assertThat(react(reactor, postId, "HEART_PURPLE", "r-heart-1")).isEqualTo(1);
+		assertThat(react(reactor, postId, "LOVE", "r-heart-2")).isEqualTo(1);
+
+		JsonNode leitura = objectMapper.readTree(mockMvc
+			.perform(get("/feed/posts/" + postId).header("X-Session-Token", reactor.token()))
+			.andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+		assertThat(leitura.get("reactionSummary").get("LOVE").asInt()).isEqualTo(1);
+		assertThat(leitura.get("currentUserReaction").asText()).isEqualTo("LOVE");
+
+		assertThat(react(reactor, postId, "HEART_PURPLE", "r-heart-3")).isEqualTo(1);
+		JsonNode outro = objectMapper.readTree(mockMvc
+			.perform(get("/feed/posts/" + postId).header("X-Session-Token", reactor.token()))
+			.andReturn().getResponse().getContentAsString());
+		assertThat(outro.get("currentUserReaction").asText()).isEqualTo("HEART_PURPLE");
+		assertThat(removeReaction(reactor, postId, "r-heart-4")).isZero();
+	}
+
+	@Test
 	void repeatingTheSameReactionTogglesItOffWithoutDrift() throws Exception {
 		var author = auth.authenticate("user_react_author2");
 		var reactor = auth.authenticate("user_react_actor2");

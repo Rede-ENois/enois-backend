@@ -13,11 +13,12 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
-import com.socialcoisa.rede.network.domain.ByteRange;
 import com.socialcoisa.rede.network.domain.CachePolicy;
 import com.socialcoisa.rede.network.domain.StorageObject;
 import com.socialcoisa.rede.network.domain.StoragePlacement;
+import com.socialcoisa.rede.network.domain.ByteRange;
 import com.socialcoisa.rede.shared.web.ApiException;
+
 
 /**
  * A resposta HTTP de um objeto do catálogo, com {@code ETag}, {@code Last-Modified}, {@code
@@ -87,6 +88,12 @@ public class StorageContentService {
 		return respond(object, rangeHeader, ifNoneMatch, ifModifiedSince, null);
 	}
 
+	/** O {@code GET} com {@code If-Match} (§4.63). */
+	public ResponseEntity<StreamingResponseBody> respond(StorageObject object, String rangeHeader, String ifNoneMatch,
+			String ifModifiedSince, String ifRange, String ifMatch) {
+		return respond(object, rangeHeader, ifNoneMatch, ifModifiedSince, ifRange, ifMatch, true);
+	}
+
 	/**
 	 * O mesmo GET, com {@code If-Range}.
 	 *
@@ -103,6 +110,31 @@ public class StorageContentService {
 	 */
 	public ResponseEntity<StreamingResponseBody> respond(StorageObject object, String rangeHeader, String ifNoneMatch,
 			String ifModifiedSince, String ifRange) {
+		return respond(object, rangeHeader, ifNoneMatch, ifModifiedSince, ifRange, null, true);
+	}
+
+	/**
+	 * O corpo do {@code GET} com todas as condições.
+	 *
+	 * <p><b>Antes:</b> {@code If-Match} não existia aqui: o cliente que condicionava o download ao
+	 * ETag ({@code If-Match: <etag>} + {@code Range}) recebia {@code 206} com o pedaço da versão nova
+	 * na posição da velha — o arquivo remontado com metade de cada versão, sem erro. O S3 aplica
+	 * {@code If-Match} ao {@code GET} e ao {@code HEAD}.</p>
+	 *
+	 * <p><b>Agora:</b> na ordem do HTTP, {@code If-Match} vem antes de {@code If-None-Match}: o que
+	 * não casa é {@code 412} com o ETag e o XML {@code <Code>PreconditionFailed</Code>}; o que casa deixa
+	 * o resto do fluxo igual (§4.63).
+	 * {@code paraGet=false} é o {@code HEAD}, que não abre a cópia só para o 412.</p>
+	 */
+	private ResponseEntity<StreamingResponseBody> respond(StorageObject object, String rangeHeader, String ifNoneMatch,
+			String ifModifiedSince, String ifRange, String ifMatch, boolean abrirCopia) {
+		// `If-Match` antes de abrir a cópia (§4.63): a pergunta é sobre a versão do catálogo, e o
+		// 412 com o XML do erro, no formato que o SDK lê. O ETag é o mesmo que a resposta devolve.
+		if (ifMatch != null && !ifMatch.isBlank() && !matchesForte(etag(object), ifMatch)) {
+			throw new ApiException(412, "PreconditionFailed",
+				"A pre-condicao If-Match nao confere com o ETag atual.").withEtag(etag(object));
+		}
+
 		List<StoragePlacement> location = storage.location(object.id());
 		if (location.isEmpty()) {
 			throw new ApiException(409, "STORAGE_PLACEMENT_MISSING",
@@ -166,11 +198,23 @@ public class StorageContentService {
 	 * HEAD para decidir se baixa o objeto; 200 sempre é "baixe de novo", mesmo com os bytes em mãos.</p>
 	 */
 	public ResponseEntity<StreamingResponseBody> head(StorageObject object, String ifNoneMatch, String ifModifiedSince) {
+		return head(object, ifNoneMatch, ifModifiedSince, null);
+	}
+
+	/** O {@code HEAD} com {@code If-Match} (§4.63): a mesma pergunta do {@code GET}, sem corpo na resposta. */
+	public ResponseEntity<StreamingResponseBody> head(StorageObject object, String ifNoneMatch, String ifModifiedSince,
+			String ifMatch) {
+		if (ifMatch != null && !ifMatch.isBlank() && !matchesForte(etag(object), ifMatch)) {
+			throw new ApiException(412, "PreconditionFailed",
+				"A pre-condicao If-Match nao confere com o ETag atual.").withEtag(etag(object));
+		}
+
 		List<StoragePlacement> location = storage.location(object.id());
 		if (location.isEmpty()) {
 			throw new ApiException(409, "STORAGE_PLACEMENT_MISSING",
 				"O catalogo diz que o objeto existe, mas nao ha copia registrada em no nenhum.");
 		}
+
 		// Mesma garantia do GET: o `HEAD` só responde 200 se a cópia pode ser aberta. Sem isto, o
 		// cliente que perguntou "existe?" recebia 200 e o `GET` seguinte vinha truncado.
 		fechar(comVocabularioDeRecusa(storage.readBody(object.id())));
@@ -316,6 +360,32 @@ public class StorageContentService {
 		}
 		return !object.updatedAt().truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
 			.isAfter(pedido.truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
+	}
+
+	/**
+	 * {@code If-Match} contra o ETag, na comparação FORTE do RFC 9110 §13.1.1.
+	 *
+	 * <p>A comparação do {@code If-Match} é a forte: o ETag tem de ser o da representação, byte a
+	 * byte — o prefixo {@code W/} (validador fraco) não casa com um ETag forte, e a lista separada
+	 * por vírgula casa quando <b>qualquer</b> item casa. O {@code *} casa porque a representação
+	 * existe. O {@code If-None-Match} é o oposto: o dele é o fraco, e o `matches` continua sendo
+	 * ele.</p>
+	 */
+	static boolean matchesForte(String etag, String ifMatch) {
+		if (ifMatch == null || ifMatch.isBlank()) {
+			return false;
+		}
+		for (String candidate : ifMatch.split(",")) {
+			String item = candidate.trim();
+			if ("*".equals(item)) {
+				return true;
+			}
+			// `W/` não é removido: um validador fraco não casa com o ETag forte da representação.
+			if (!item.startsWith("W/") && item.equals(etag)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** {@code If-None-Match} contra o ETag; {@code *} e a lista separada por vírgula valem. */

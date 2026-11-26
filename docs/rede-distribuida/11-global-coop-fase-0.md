@@ -16,7 +16,7 @@ no commit em que foi escrito — inclusive o que **não** existe e o brief supõ
 | §6 rede como camada única | enroll, API key por nó, config assinada, heartbeat — o Storage vai usar os mesmos | direto |
 | §7 provisionamento sem IP/hostname | token de uso único; o nó só faz chamadas de saída (pull), então funciona atrás de NAT | direto |
 | §9 múltiplos domínios | região declarada por nó + estado de região fora de operação (ADR-015) + cobertura por região (ADR-016) | parcial: região existe, "domínio" com autoridade própria não |
-| §12 modos operacionais | ADR-009 | direto |
+| §12 modos operacionais | ADR-009; desde o ciclo 156 o modo `DEGRADED` também entra por **evidência medida** (captura exigida e parada, divergência de conteúdo), com a transição gravada — doc 06 §1.1 | direto |
 | §13 governança | `AuditTrail` com ator, alvo e motivo; `AdminGuard` | direto |
 | §3.7 / §4.3 divergência e reconciliação | `ContentReconcileService` / `ContentReconcileWorker`: o nó declara o que tem, o Control Plane confere contra a origem e grava `CONTENT_STALE`/`CONTENT_GONE` | direto para o **conteúdo**; não para tabelas arbitrárias |
 | §3 change feed | `network_content_changes` (V283): cada mudança de conteúdo ganha versão e hash na **mesma transação** em que o corpo muda; o nó lê por cursor (`seq`) e recebe ids + versão + hash | é o alicerce real da sincronização entre nós |
@@ -51,7 +51,7 @@ do mantenedor, não efeito colateral de código.
 |---|---|---|
 | §4.1 | captura única por binlog, posição persistente | **inexistente** (ver §2) |
 | §4.3 | aplicação idempotente de eventos de tabela nas réplicas com checkpoint transacional | **inexistente**. O que há é o cursor do change feed de conteúdo, que avança só depois de o corpo estar em disco no nó |
-| §8 | observabilidade distribuída "de todos os nós" | **parcial**: heartbeat e saúde por nó existem (`degraded`, latência EWMA, sequência de falhas, quarentena), e o painel agrega; não há coleta de métricas de host nem do runtime além do que o heartbeat carrega |
+| §8 | observabilidade distribuída "de todos os nós" | **parcial**: heartbeat e saúde por nó existem (`degraded`, latência EWMA, sequência de falhas, quarentena), e o painel agrega; o que o heartbeat carrega do host cresceu (CPU, memória em uso e disponível, disco, tráfego — doc 20 §7; o runtime também mede e envia swap e pressão PSI, mas o Control Plane ainda não os consome); falta IOPS, latência de disco, temperatura, p95/p99 e DLQ |
 | §9 | múltiplos domínios com autoridade própria | **inexistente**. Existe região, que é ordenação de afinidade e estado fora de operação. Um segundo domínio com autoridade necessita de termo e quórum, que a F6 (ADR-013) já esboça para uma autoridade única |
 | §11 | blockchain e consenso | **inexistente** e o brief não exige implementar agora; a autoridade com termo (ADR-013) é o que existe de mais próximo |
 

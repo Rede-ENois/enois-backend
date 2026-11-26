@@ -4,9 +4,12 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
+import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -69,6 +72,12 @@ public class NetworkTaskService {
 	private final org.springframework.beans.factory.ObjectProvider<com.socialcoisa.rede.network.application.port.out.EdgeDeliverVerifier> edgeDeliveries;
 	/** Conferência do OBJECT_PUT: o CP é dono da medida, então a declaração do nó não basta. */
 	private final org.springframework.beans.factory.ObjectProvider<com.socialcoisa.rede.network.application.port.out.StorageResultVerifier> storageResults;
+	/**
+	 * Histograma da latência por nó (brief §8.2). {@code ObjectProvider} porque é observação: um
+	 * contexto sem esta porta (teste de unidade do fluxo de tarefa) continua executando, só não mede.
+	 */
+	private final org.springframework.beans.factory.ObjectProvider<
+			com.socialcoisa.rede.network.application.port.out.NodeObservabilityRepository> observability;
 	private final NetworkModeService modes;
 	private final NetworkRegionService regions;
 	private final AuditTrail audit;
@@ -82,6 +91,8 @@ public class NetworkTaskService {
 	NetworkTaskService(NetworkTaskRepository tasks, NetworkNodeRepository nodes, org.springframework.beans.factory.ObjectProvider<MediaResultVerifier> mediaResults,
 			org.springframework.beans.factory.ObjectProvider<com.socialcoisa.rede.network.application.port.out.EdgeDeliverVerifier> edgeDeliveries,
 			org.springframework.beans.factory.ObjectProvider<com.socialcoisa.rede.network.application.port.out.StorageResultVerifier> storageResults,
+			org.springframework.beans.factory.ObjectProvider<
+				com.socialcoisa.rede.network.application.port.out.NodeObservabilityRepository> observability,
 			NetworkModeService modes, NetworkRegionService regions, AuditTrail audit, Clock clock,
 			@Value("${rede.network.task.claim-ttl-seconds:120}") long claimTtlSeconds,
 			@Value("${rede.network.task.node-stale-seconds:180}") long nodeStaleSeconds,
@@ -93,6 +104,7 @@ public class NetworkTaskService {
 		this.mediaResults = mediaResults;
 		this.edgeDeliveries = edgeDeliveries;
 		this.storageResults = storageResults;
+		this.observability = observability;
 		this.modes = modes;
 		this.regions = regions;
 		this.audit = audit;
@@ -519,6 +531,34 @@ public class NetworkTaskService {
 	}
 
 	/**
+	 * O quadro de filas do painel: por tipo de tarefa, quantas estão em cada estado (brief §8.2, "DLQ
+	 * por fila").
+	 *
+	 * <p>O total de {@code DEAD} diz <i>que</i> há DLQ; não diz <i>qual</i> fila parou de funcionar.
+	 * Com o quadro por tipo, "8 mortas em {@code OBJECT_PUT}" e "8 mortas em {@code MEDIA_THUMBNAIL}"
+	 * viram coisas diferentes — a primeira é replicação, a segunda é encoder —, e é a linha que precisa
+	 * de olho que fica visível sem abrir tarefa por tarefa.</p>
+	 *
+	 * <p>Tipo sem tarefa em estado nenhum aparece com o mapa vazio: a fila existe no contrato, e uma
+	 * fila saudável e vazia é informação. Estado sem tarefa não entra no mapa — ausência é zero, e o
+	 * painel não precisa de 63 chaves para desenhar o quadro.</p>
+	 */
+	public Map<TaskType, Map<TaskStatus, Long>> queues(TaskStatus... statuses) {
+		Set<TaskStatus> wanted = statuses.length == 0 ? EnumSet.allOf(TaskStatus.class)
+			: EnumSet.copyOf(List.of(statuses));
+		Map<TaskType, Map<TaskStatus, Long>> quadro = new EnumMap<>(TaskType.class);
+		for (TaskType tipo : TaskType.values()) {
+			quadro.put(tipo, new EnumMap<>(TaskStatus.class));
+		}
+		for (var celula : tasks.countByQueueAndStatus()) {
+			if (wanted.contains(celula.status())) {
+				quadro.get(celula.taskType()).merge(celula.status(), celula.tasks(), Long::sum);
+			}
+		}
+		return quadro;
+	}
+
+	/**
 	 * Escolhe o nó para a tarefa.
 	 *
 	 * <p>Filtro primeiro (vivo, fora da janela de remoção, perfil cobre o tipo, classe de dado pode
@@ -648,6 +688,13 @@ public class NetworkTaskService {
 		Long latency = success && dispatchedAt != null ? Math.max(0, Duration.between(dispatchedAt, now).toMillis())
 			: null;
 		nodes.recordOutcome(node.id(), success, latency);
+		// A distribuição é o que responde p95/p99: a média móvel acima não. Só o sucesso entra — uma
+		// tarefa que falhou não tem tempo de execução, tem tempo até a falha.
+		var observabilityPort = observability.getIfAvailable();
+		if (latency != null && observabilityPort != null) {
+			observabilityPort.addLatencySample(node.id(), now,
+				com.socialcoisa.rede.network.domain.TaskLatency.bucketOf(latency));
+		}
 		if (success) {
 			return;
 		}

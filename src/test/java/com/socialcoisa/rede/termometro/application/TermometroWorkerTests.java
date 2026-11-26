@@ -344,15 +344,41 @@ class TermometroWorkerTests {
 	}
 
 	@Test
-	void chaoDePessoasDaJanelaMostraIndicador() {
-		for (int pessoa = 1; pessoa <= CorteTermico.MINIMO_PARTICIPANTES; pessoa++) {
-			fonte.publicar("consegui", "autor_" + pessoa, T0.plusSeconds(pessoa));
+	void cincoManifestacoesDePessoasDistintasMostramIndicador() {
+		// A régua nova: cinco manifestações, de pelo menos duas pessoas.
+		for (int i = 1; i <= CorteTermico.MINIMO_MANIFESTACOES; i++) {
+			fonte.publicar("consegui", "autor_" + i, T0.plusSeconds(i));
 		}
 
 		workerNo(T0.plusSeconds(3600)).corte();
 
-		assertThat(corteDe24h().participantes()).isEqualTo(CorteTermico.MINIMO_PARTICIPANTES);
+		assertThat(corteDe24h().manifestacoes()).isEqualTo(CorteTermico.MINIMO_MANIFESTACOES);
+		assertThat(corteDe24h().participantes()).isGreaterThanOrEqualTo(CorteTermico.MINIMO_PARTICIPANTES);
 		assertThat(corteDe24h().temAmoSuficiente()).isTrue();
+	}
+
+	@Test
+	void quatroManifestacoesAindaSaoAmostraPequena() {
+		for (int i = 1; i <= CorteTermico.MINIMO_MANIFESTACOES - 1; i++) {
+			fonte.publicar("consegui", "autor_" + i, T0.plusSeconds(i));
+		}
+
+		workerNo(T0.plusSeconds(3600)).corte();
+
+		assertThat(corteDe24h().temAmoSuficiente()).isFalse();
+	}
+
+	@Test
+	void cincoManifestacoesDeUmaPessoaSoNaoSaoClimaDaRede() {
+		for (int i = 1; i <= CorteTermico.MINIMO_MANIFESTACOES; i++) {
+			fonte.publicar("consegui", "autor_unico", T0.plusSeconds(i));
+		}
+
+		workerNo(T0.plusSeconds(3600)).corte();
+
+		assertThat(corteDe24h().manifestacoes()).isGreaterThanOrEqualTo(CorteTermico.MINIMO_MANIFESTACOES);
+		assertThat(corteDe24h().participantes()).isEqualTo(1);
+		assertThat(corteDe24h().temAmoSuficiente()).isFalse();
 	}
 
 	@Test

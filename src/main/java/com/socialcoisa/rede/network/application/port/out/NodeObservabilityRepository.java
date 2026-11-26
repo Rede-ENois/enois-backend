@@ -14,7 +14,23 @@ public interface NodeObservabilityRepository {
 
 	/** Um ponto do gráfico: um por minuto, por nó. */
 	record Sample(String nodeId, Instant sampledAt, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
-			Integer runningTasks, Integer queueDepth, String mode, String activity) {
+			Integer runningTasks, Integer queueDepth, String mode, String activity, Double diskIops,
+			Double diskLatencyMs, java.math.BigDecimal temperatureC) {
+
+		/** Amostra de runtime anterior à V380: sem o I/O de disco medido. */
+		public Sample(String nodeId, Instant sampledAt, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
+				Integer runningTasks, Integer queueDepth, String mode, String activity) {
+			this(nodeId, sampledAt, cpuPercent, memoryMb, diskFreeMb, runningTasks, queueDepth, mode, activity, null,
+				null, null);
+		}
+
+		/** Amostra de runtime anterior à V382: sem a temperatura da máquina. */
+		public Sample(String nodeId, Instant sampledAt, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
+				Integer runningTasks, Integer queueDepth, String mode, String activity, Double diskIops,
+				Double diskLatencyMs) {
+			this(nodeId, sampledAt, cpuPercent, memoryMb, diskFreeMb, runningTasks, queueDepth, mode, activity,
+				diskIops, diskLatencyMs, null);
+		}
 	}
 
 	/** Uma linha do console do nó. */
@@ -39,4 +55,16 @@ public interface NodeObservabilityRepository {
 
 	/** Console do nó, mais nova primeiro — é a ordem em que o terminal mostra. */
 	List<LogLine> logs(String nodeId, int limit);
+
+	/**
+	 * Soma uma tarefa concluída na faixa de duração da hora de {@code at} (brief §8.2). A soma é
+	 * feita pelo banco ({@code samples = samples + 1}): dois desfechos simultâneos não se perdem.
+	 */
+	void addLatencySample(String nodeId, Instant at, int bucketUpperMs);
+
+	/**
+	 * Contagem por faixa deste nó nas últimas {@code hours} horas, até {@code now}. Faixa sem tarefa
+	 * não aparece: o que não foi medido não é zero.
+	 */
+	java.util.Map<Integer, Integer> latencySamples(String nodeId, Instant now, int hours);
 }

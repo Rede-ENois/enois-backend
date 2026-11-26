@@ -35,6 +35,14 @@ public class MediaDimensionsService {
 	static final int HEAD_BYTES = 1024 * 1024;
 	/** Same window MediaService gives an upload: younger assets may simply not be stored yet. */
 	private static final Duration UPLOAD_WINDOW = Duration.ofMinutes(60);
+	/**
+	 * Tamanhos medidos na própria requisição de envio da figurinha (o arquivo não passa pela subida
+	 * genérica, que é quem grava isto no banco). É a marca de que os bytes daquela figurinha foram
+	 * conferidos: publicar um asset que não está aqui é recusado. Teto para a memória não crescer
+	 * sem fim; passando dele o registro mais antigo sai (o asset ainda é re-medido pela subida).
+	 */
+	static final int MAX_MEDIDAS_NA_MEMORIA = 10_000;
+	private final java.util.Map<String, ImageDecoding.Dimensions> medidasNaMemoria = new java.util.concurrent.ConcurrentHashMap<>();
 
 	private final MediaAssetRepository assets;
 	/** Absent when storage is ImageKit; the backfill then has nothing to read. */
@@ -57,6 +65,23 @@ public class MediaDimensionsService {
 		if (dimensions != null) {
 			assets.recordDimensions(asset.id(), dimensions.width(), dimensions.height());
 		}
+	}
+
+	/** Anota o tamanho do arquivo que acabou de ser conferido e gravado (envio de figurinha). */
+	public void recordarDimensoes(String mediaId, int largura, int altura) {
+		if (mediaId == null || largura <= 0 || altura <= 0) {
+			return;
+		}
+		if (medidasNaMemoria.size() >= MAX_MEDIDAS_NA_MEMORIA) {
+			var primeiro = medidasNaMemoria.keySet().stream().findFirst();
+			primeiro.ifPresent(medidasNaMemoria::remove);
+		}
+		medidasNaMemoria.put(mediaId, new ImageDecoding.Dimensions(largura, altura));
+	}
+
+	/** Tamanho anotado no envio da figurinha, ou null se os bytes nunca foram conferidos. */
+	public ImageDecoding.Dimensions dimensoesEnviadas(String mediaId) {
+		return mediaId == null ? null : medidasNaMemoria.get(mediaId);
 	}
 
 	/** One backfill round; returns how many assets got their size. */

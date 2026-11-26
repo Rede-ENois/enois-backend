@@ -473,8 +473,12 @@ class NetworkTasksTests {
 		}
 		assertThat(modes.evaluate()).isEqualTo(NetworkMode.HIGH_LOAD);
 
-		// A fila esvazia (as tarefas foram designadas): volta a NORMAL pelo número medido.
-		jdbc.update("update network_tasks set status = 'DONE'");
+		// A fila esvazia (as tarefas foram designadas): volta a NORMAL pelo número medido. O filtro é
+		// desta classe: a base H2 é compartilhada entre classes, e um `update` sem `where` marca DONE
+		// as tarefas de outro contexto que ainda as tem em memória — o `attempt` lido antes fica
+		// obsoleto, o resultado do outro teste é descartado (`TASK_ATTEMPT_STALE`) e ele falha por um
+		// efeito que não mediu.
+		jdbc.update("update network_tasks set status = 'DONE' where idempotency_key like 'load-%'");
 		assertThat(modes.evaluate()).isEqualTo(NetworkMode.NORMAL);
 	}
 
@@ -536,7 +540,8 @@ class NetworkTasksTests {
 			.perform(post("/network/nodes/heartbeat").header("X-Node-Id", node.id())
 				.header("X-Node-Key", node.key()).contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("runtimeVersion", "0.1.0", "observed",
-					Map.of("cpuPercent", cpuPercent, "memoryMb", 1024, "runningTasks", runningTasks)))))
+					Map.of("cpuPercent", cpuPercent, "memoryMb", 1024, "memoryAvailableMb", 7168,
+						"runningTasks", runningTasks)))))
 			.andExpect(status().isOk());
 	}
 
@@ -546,7 +551,8 @@ class NetworkTasksTests {
 			.perform(post("/network/nodes/heartbeat").header("X-Node-Id", node.id())
 				.header("X-Node-Key", node.key()).contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(Map.of("runtimeVersion", "0.1.0", "observed",
-					Map.of("cpuPercent", cpuPercent, "memoryMb", memoryMb, "runningTasks", runningTasks)))))
+					Map.of("cpuPercent", cpuPercent, "memoryMb", memoryMb,
+						"memoryAvailableMb", Math.max(0, 8192 - memoryMb), "runningTasks", runningTasks)))))
 			.andExpect(status().isOk());
 	}
 

@@ -163,6 +163,12 @@ class MediaStorageProxyController {
 		if (!asset.objectKey().equals(objectKey)) {
 			throw new ApiException(400, "MEDIA_KEY_MISMATCH", "Chave de midia invalida.");
 		}
+		// Figurinha tem rota própria, que confere assinatura/dimensões/integridade antes de gravar.
+		// A subida genérica limpa metadados mas não confere o arquivo: por aqui passaria um poliglota.
+		if (com.socialcoisa.rede.media.application.MediaService.FIGURINHA_PURPOSE.equals(asset.purpose())) {
+			throw new ApiException(409, "MEDIA_USE_FIGURINHA_UPLOAD",
+				"Figurinhas são enviadas pelo cadastro de figurinhas.");
+		}
 		long length = request.getContentLengthLong();
 		if (length <= 0) {
 			throw new ApiException(411, "MEDIA_LENGTH_REQUIRED", "Informe o tamanho do arquivo.");
