@@ -61,6 +61,13 @@ public interface NetworkNodeRepository {
 	 */
 	void observeIp(String id, String ip, Instant now);
 
+	/**
+	 * O que o nó declarou conseguir executar das tarefas que a config autoriza (brief §8.2,
+	 * "Health checks"). Lista vazia é "declarou não conseguir nada"; nulo é "não declarou" e não é
+	 * gravado — o despacho não pode confundir "não subiu depois da atualização" com "não consegue".
+	 */
+	void observeExecutorTaskTypes(String id, java.util.List<String> taskTypes, Instant now);
+
 	/** Heartbeat: capacidade observada, versão do runtime e último contato. */
 	void touch(String id, String runtimeVersion, Double cpuPercent, Integer memoryMb,
 			Integer memoryAvailableMb, Integer runningTasks, Long diskFreeMb, Long diskTotalMb,

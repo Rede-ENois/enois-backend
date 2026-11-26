@@ -93,6 +93,10 @@ interface SpringDataNetworkNodeJpaRepository extends JpaRepository<NetworkNodeJp
 	int setObservedIp(@Param("id") String id, @Param("ip") String ip);
 
 	@Modifying(clearAutomatically = true, flushAutomatically = true)
+	@Query("update NetworkNodeJpaEntity n set n.executorTaskTypes = :tipos where n.id = :id")
+	int setExecutorTaskTypes(@Param("id") String id, @Param("tipos") String tipos);
+
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
 	@Query("update NetworkNodeJpaEntity n set n.runtimeVersion = :version, n.observedCpuPercent = :cpu, "
 			+ "n.observedMemoryMb = :memory, n.observedMemoryAvailableMb = :memoryAvailable, "
 			+ "n.observedRunningTasks = :tasks, n.observedDiskFreeMb = :diskFree, "

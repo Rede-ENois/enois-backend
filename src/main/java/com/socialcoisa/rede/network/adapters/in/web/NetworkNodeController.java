@@ -305,6 +305,33 @@ class NetworkNodeController {
 		return configs.forNode(keys.authenticate(nodeId, nodeKey));
 	}
 
+	/**
+	 * O que este nó consegue EXECUTAR das tarefas que a config dele autoriza (brief §8.2,
+	 * "Health checks"). O runtime publica depois de ler a config, e relembra de tempos em tempos —
+	 * a máquina pode ganhar (ou perder) o executor sem trocar de perfil.
+	 *
+	 * <p>Não é a permissão: a config assinada continua sendo a única fonte dela. É capacidade, e o
+	 * despacho usa para não mandar trabalho que esta máquina não consegue fazer — o nó que tenta e
+	 * falha gasta uma tentativa a cada ciclo.</p>
+	 */
+	@PostMapping("/nodes/me/executor-capabilities")
+	ExecutorCapabilitiesResponse declareExecutorCapabilities(
+			@RequestHeader(value = "X-Node-Id", required = false) String nodeId,
+			@RequestHeader(value = "X-Node-Key", required = false) String nodeKey, @RequestBody ExecutorCapabilities body) {
+		NetworkNode node = keys.authenticate(nodeId, nodeKey);
+		NetworkNode updated = nodes.declareExecutorCapabilities(node,
+			body == null ? null : body.enabledTaskTypes());
+		return new ExecutorCapabilitiesResponse(updated.id(), updated.executorTaskTypes());
+	}
+
+	/** O que o runtime declara: os tipos autorizados pela config que a máquina consegue rodar. */
+	record ExecutorCapabilities(List<String> enabledTaskTypes) {
+	}
+
+	/** O que ficou gravado — só tipos que a config autoriza, e já sem duplicatas. */
+	record ExecutorCapabilitiesResponse(String nodeId, List<String> enabledTaskTypes) {
+	}
+
 	/** Instante do runtime; ausente ou ilegível cai no relógio do Control Plane. */
 	private static java.time.Instant parseInstant(String raw) {
 		if (raw == null || raw.isBlank()) {

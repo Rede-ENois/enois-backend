@@ -71,6 +71,10 @@ class WriteRouteInterceptor implements HandlerInterceptor {
 		// Renovação do certificado mTLS do nó (brief §10): mesmo credencial de nó, e o nó não tem
 		// sessão de navegador. O controller confere X-Node-Id + X-Node-Key antes de assinar.
 		"/network/nodes/me/certificate",
+		// O nó declara o que consegue executar (V390, brief §8.2 "Health checks"). Mesma credencial
+		// de nó, conferida no controller; a config assinada continua sendo a única fonte de
+		// permissão, e o controller recorta a declaração pelos tipos que ela autoriza.
+		"/network/nodes/me/executor-capabilities",
 		// Cópia do banco no nó de reserva (V364): o nó confirma a própria cópia. Mesma credencial
 		// de nó (X-Node-Id + X-Node-Key), conferida no controller; o GET do dump é leitura e não
 		// passa por aqui.

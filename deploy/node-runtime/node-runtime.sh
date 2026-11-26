@@ -71,6 +71,13 @@ THERMAL_MAX_C="${THERMAL_MAX_C:-110}"
 # caminho fixo pelo mesmo motivo dos contadores de disco: o harness serve um diretório conhecido, e
 # em produção é o do kernel.
 PROC_ROOT="${PROC_ROOT:-/proc}"
+# Intervalo do release das habilidades do executor (brief §8.2, "Health checks"). A declaração vai
+# JUNTO da config que o nó já lê e verifica — não há segundo canal: o mesmo GET autenticado leva o
+# que a máquina consegue executar, e a resposta do Control Plane é a config assinada, com ou sem a
+# declaração. O intervalo evita repetir a declaração a cada ciclo; a primeira já sai com a primeira
+# config, porque não há nada publicado ainda.
+RELEASE_EVERY="${RELEASE_EVERY:-5}"
+RELEASE_LAST_FILE="$NODE_HOME/executor-capabilities.json"
 
 event() {
   # event <nivel> <mensagem>: guarda para o próximo heartbeat.
@@ -145,12 +152,24 @@ json_flag() {
 
 # allowedTasks da config assinada — a ÚNICA fonte de permissão de execução.
 allowed_tasks() {
-  local config rc
+  local config rc cache capacity declaracao_body=()
   if [[ ! -s "$NODE_HOME/pinning-key" ]]; then
     notice_once sem-pino 'sem pinning-key — config não verificável; rode --start para pinar a chave'
     return 1
   fi
-  config=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+  # A declaração de capacidade vai JUNTO da leitura da config: é o mesmo GET autenticado que o nó já
+  # faz, e o Control Plane que ainda não conhece o campo o ignora (`--get` porque é leitura). Não há
+  # segundo canal nem segunda credencial — a declaração é dado do pedido que já existe.
+  #
+  # Ela sai sobre a lista que o nó está VIVENDO hoje (o cache verificado, se ainda vale): declarar
+  # sobre uma permissão que ninguém leu seria inventar. Sem cache válido a lista é vazia — nada
+  # autorizado, nada a declarar.
+  cache=$(allowed_tasks_da_cache 2>/dev/null) && cache=$(allowed_tasks_list <<<"$cache")
+  capacity=$(declaracao_de_capacidade "$cache")
+  if declaracao_vencida "$capacity"; then
+    declaracao_body=(--get --data-urlencode "executorTaskTypes=$capacity")
+  fi
+  config=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 "${declaracao_body[@]}" \
     "${auth[@]}" "$CONTROL_PLANE/network/nodes/me/config")
   rc=$?
   if (( rc != 0 )); then
@@ -162,12 +181,18 @@ allowed_tasks() {
       return 1
     fi
     # Queda de transporte: o Control Plane não respondeu. A permissão que ele assinou continua
-    # valendo enquanto o TTL dela não vence (doc 06 §6) — blip de rede não derruba nó sadio.
+    # valendo enquanto o TTL dela não vence (doc 06 §6) — blip de rede não derruba nó sadio. A
+    # declaração também não foi aceita: o instante NÃO é gravado (queda não é publicação).
     allowed_tasks_da_cache
     return $?
   fi
   config_valida "$config" || return 1
   config_cache_guardar "$config"
+  # A resposta veio e conferiu: a config é a resposta a ESTE pedido, e a declaração que viajou com ele
+  # foi aceita. O instante e o corpo ficam para o intervalo.
+  if (( ${#declaracao_body[@]} > 0 )); then
+    printf '%s\n%s' "$(date +%s)" "$capacity" > "$RELEASE_LAST_FILE" 2>/dev/null || true
+  fi
   printf '%s' "$config"
 }
 
@@ -1356,6 +1381,50 @@ exec_api_request() {
   result "$task_id" "$attempt" DONE \
     "{\"route\":\"$route\",\"status\":$status,\"bytes\":$bytes,\"digest\":\"$digest\"}" ''
   printf '[executor] rota %s status=%s bytes=%s\n' "$route" "$status" "$bytes"
+}
+
+# O que cada tipo de tarefa EXIGE da máquina além do que o runtime já usa (bash, sed, awk, curl).
+# Só dependência externa entra aqui.
+executor_nao_roda() {
+  # executor_nao_roda <tipo>: 0 quando esta máquina NÃO consegue executar o tipo.
+  case "$1" in
+    MEDIA_TRANSCODE) ! command -v ffmpeg >/dev/null 2>&1 ;;
+    *) return 1 ;;
+  esac
+}
+
+# A declaração de capacidade: dos tipos que a config AUTORIZA, os que esta máquina roda.
+#
+# <autorizados> é só a lista de nomes (como `allowed_tasks_list` a lê), não o JSON da config: misturar
+# os dois embrulharia os colchetes uma segunda vez e o Control Plane recusaria o corpo. Lista VAZIA é
+# declaração honesta ("o único tipo autorizado não roda aqui") e o despacho a respeita; a AUSÊNCIA da
+# declaração é "não declarou", e aí vale a permissão do perfil.
+declaracao_de_capacidade() {
+  local autorizados="${1:-}" tipo lista=''
+  for tipo in $(printf '%s' "$autorizados" | tr ',' ' '); do
+    tipo=$(printf '%s' "$tipo" | tr -d '" ')
+    [[ -n "$tipo" ]] || continue
+    executor_nao_roda "$tipo" && continue
+    lista="$lista${lista:+,}\"$tipo\""
+  done
+  printf '%s' "[$lista]"
+}
+
+# O intervalo: declaração igual à que o Control Plane JÁ RECEBEU e instante recente não se repetem.
+# O arquivo do NODE_HOME guarda o instante na primeira linha e o corpo na segunda. Só a resposta
+# aceita grava — tentativa que não chegou seria dada como publicada até a janela seguinte, e o
+# Control Plane seguiria sem saber que esta máquina perdeu o executor: o caso que a declaração existe
+# para evitar. Declaração DIFERENTE sai na hora (capacidade perdida não espera a janela).
+declaracao_vencida() {
+  # declaracao_vencida <capacidade>: 0 quando há de enviar a declaração neste ciclo.
+  local capacidade="$1" agora ultimo publicado=''
+  [[ -f "$RELEASE_LAST_FILE" ]] || return 0
+  ultimo=$(head -n 1 "$RELEASE_LAST_FILE" 2>/dev/null)
+  publicado=$(sed -n '2,$p' "$RELEASE_LAST_FILE" 2>/dev/null | tr -d '\n')
+  [[ "$ultimo" =~ ^[0-9]+$ ]] || return 0
+  [[ "$publicado" == "$capacidade" ]] || return 0
+  agora=$(date +%s)
+  (( agora - ultimo >= RELEASE_EVERY * ${NODE_POLL_SECONDS:-15} ))
 }
 
 cycle() {

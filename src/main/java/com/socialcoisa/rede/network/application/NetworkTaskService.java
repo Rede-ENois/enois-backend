@@ -609,6 +609,11 @@ public class NetworkTaskService {
 			.filter(node -> node.alive(now, nodeStaleAfter))
 			.filter(node -> !node.quarantined(now))
 			.filter(node -> node.accepts(task.taskType(), task.dataClass()))
+			// Capacidade declarada (brief §8.2, "Health checks"): a permissão do perfil autoriza o
+			// tipo, mas a máquina pode não ter o executor (sem `ffmpeg`, por exemplo). Saber isso
+			// ANTES do claim evita a tentativa queimada — o nó que tenta e falha gasta uma das
+			// `maxAttempts` a cada ciclo. Não declarada, vale a permissão (`NetworkNode.able`).
+			.filter(node -> node.able(task.taskType().name()))
 			.filter(node -> hasRoom(node, reserved))
 			.filter(node -> !node.saturated())
 			.filter(node -> !node.memoryExhausted())

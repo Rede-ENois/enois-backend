@@ -83,6 +83,15 @@ class NetworkNodePersistenceAdapter implements NetworkNodeRepository {
 	}
 
 	@Override
+	public void observeExecutorTaskTypes(String id, java.util.List<String> taskTypes, Instant now) {
+		// JSON array sempre, inclusive vazio: `[]` é "declarou não conseguir nada" e é respeitado
+		// pelo despacho; a coluna fica nula só para quem nunca declarou.
+		repository.setExecutorTaskTypes(id,
+			taskTypes.stream().map(tipo -> "\"" + tipo + "\"").collect(java.util.stream.Collectors.joining(",",
+				"[", "]")));
+	}
+
+	@Override
 	public void touchConfig(String id, Instant now) {
 		repository.touchConfig(id, now);
 	}
