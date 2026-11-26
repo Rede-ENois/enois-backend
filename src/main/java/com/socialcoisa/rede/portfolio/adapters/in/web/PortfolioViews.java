@@ -4,6 +4,7 @@ import java.util.List;
 
 import com.socialcoisa.rede.portfolio.application.PortfolioService.OwnPortfolio;
 import com.socialcoisa.rede.portfolio.application.PortfolioService.PublicPortfolio;
+import com.socialcoisa.rede.portfolio.application.PublishedPortfolioCatalog.PublishedPortfolio;
 import com.socialcoisa.rede.portfolio.domain.PortfolioBlock;
 import com.socialcoisa.rede.portfolio.domain.PortfolioPage;
 
@@ -30,6 +31,19 @@ final class PortfolioViews {
 			return new Mine(page.draftHtml(), page.publishedVersion(),
 				page.publishedAt() == null ? null : page.publishedAt().toString(),
 				portfolio.blocks().stream().map(BlockView::from).toList());
+		}
+	}
+
+	/**
+	 * Uma linha da lista pública: quem é o dono, a versão no ar e o título da página. Sem o HTML e
+	 * sem as peças — quem abre a vitrine pede o retrato inteiro por username.
+	 */
+	record Showcase(String username, String name, String avatarUrl, int version, String publishedAt,
+			String title) {
+
+		static Showcase from(PublishedPortfolio portfolio) {
+			return new Showcase(portfolio.username(), portfolio.name(), portfolio.avatarUrl(),
+				portfolio.version(), portfolio.publishedAt().toString(), portfolio.title());
 		}
 	}
 
