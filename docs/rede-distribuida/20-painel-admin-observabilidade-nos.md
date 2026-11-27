@@ -511,7 +511,7 @@ saudável, o operador abria nó por nó até achar o problema.
 | `byStatus` | quantos em cada status do catálogo |
 | `ok` / `degraded` / `failing` | por dimensão (`HOST`, `RUNTIME`, `APPLICATION`, `NETWORK`), quantos nós em cada estado |
 | `measured` | `false` quando o atraso de sincronização de algum nó do quadro não foi consultado |
-| `alerts` / `alertsTotal` | um alerta por nó com problema, o mais grave primeiro; o total mesmo quando a lista vem cortada |
+| `alerts` / `alertsTotal` | um alerta por nó com problema (ou da rede), o mais grave primeiro — cada um com `severity` de 0 a 4; o total mesmo quando a lista vem cortada |
 
 Decisões:
 
@@ -520,10 +520,12 @@ Decisões:
 - **O atraso de sincronização alimenta a dimensão de aplicação**, e a conta é uma consulta por tipo
   de conteúdo. O quadro consulta até 50 nós por ciclo; acima disso `measured` é `false`, em vez de
   afirmar "em dia" sobre quem ninguém olhou.
-- **A ordem dos alertas é a da urgência e é estável**: o que tira o nó da rede (`NODE_REVOKED`,
-  `NODE_SUSPENDED`, `NODE_SILENT`) antes do que o faz servir pior (`NODE_FAILING`, `NODE_BEHIND`),
-  e depois a carga (`NODE_SATURATED`, `NODE_MEMORY_FULL`, `NODE_FULL`); dentro do mesmo código, pelo
-  id do nó. Sem isso, o recorte exibido dependeria da ordem em que a listagem veio do banco.
+- **A ordem dos alertas é a da urgência e é estável**: incidente de dado da rede (`NETWORK_DIVERGED`,
+  `NETWORK_CAPTURE_NOT_READY`, severidade 4) → carga (`NODE_SATURATED`, `NODE_MEMORY_FULL`,
+  `NODE_FULL`, 3) → servir pior (`NODE_FAILING`, `NODE_BEHIND`, `WORK_NO_TARGET`, 2) → fora por
+  decisão (`NODE_QUARANTINED`, `NODE_NO_WORK`, 1) → nó fora da rede (`NODE_REVOKED`, `NODE_SUSPENDED`,
+  `NODE_SILENT`, 0); dentro do mesmo código, pelo id do nó. O número vem no campo `severity` (§14.2).
+  Sem isso, o recorte exibido dependeria da ordem em que a listagem veio do banco.
 - **Carga antes de vaga.** Um nó em 92% com vaga declarada é `NODE_SATURATED`, não `NODE_FULL`: o
   teto é promessa, a CPU medida é o que está acontecendo — a mesma ordem do modo da rede, em que
   quem está saturado não promete vaga.
@@ -555,6 +557,50 @@ Provas: `NetworkModesTests.trabalhoSemQuemFacaViraAlertaDoPainelEOOperadorSabeQu
 alerta some), `NetworkDashboardHealthTests` (2 casos novos, mais a ordenação com dois alertas de
 rede e o NPE). Mutações: alerta sem exigir fila, alerta para tipo que alguém faz, tipo fora da
 mensagem, contagem da rede no lugar da do tipo e comparador sem nulo — **todas derrubam**.
+
+### 14.2 A causa da rede degradada, dita no painel (ciclo 173)
+
+O §8.8 pede os alertas "divergência de dados" e "falha de captura do MariaDB". O modo medido já os
+tratava — `NetworkModeService#healthSignal` manda a rede para `DEGRADED` quando há agregado divergindo
+ou captura exigida e não pronta —, mas o painel **não dizia a causa**: o operador via `DEGRADED` e ia
+procurar no lado da carga, que não tem nada a ver.
+
+`health.alerts` ganha dois alertas **da rede** (`nodeId`/`nodeName` nulos, dimensão `APPLICATION`):
+
+| código | quando | frase |
+|---|---|---|
+| `NETWORK_DIVERGED` | há agregado onde o nó e a origem discordam | `"3 agregado(s) de conteudo divergem entre o que o no serve e a origem"` |
+| `NETWORK_CAPTURE_NOT_READY` | a instalação **exigiu** captura e o banco não serve para ela | `"a instalacao exige captura de alteracoes e o banco nao esta pronto para ela"` |
+
+Decisões:
+
+- **Uma conta, dois leitores.** A saúde da rede virou {@code NetworkHealth} (domínio, puro): o modo e o
+  painel leem o **mesmo** `signal()`. Antes o painel teria de refazer a conta, e as duas respostas
+  poderiam divergir — divergência no modo e não no alerta, ou o inverso.
+- **"Não sei" não é problema**, a mesma regra do modo: `capture.check()` só é consultado quando a
+  captura é exigida; servidor que não responde fica `READY`? **não** — fica sem medida e sem alerta.
+- **A ordem virou a escala de severidade.** Cada alerta carrega `severity` (0 a 4, maior = mais grave):
+  incidente de dado da rede (4) → carga (3) → servir pior (2) → fora por decisão (1) → nó fora da rede
+  (0). A lista ordena por severidade, depois pelo id do nó, depois pelo código. Antes a ordem era uma
+  lista de códigos em cascata e o alerta da rede não tinha lugar nela.
+  **Mudança de ordem observável:** `WORK_NO_TARGET` (fila sem quem faça) agora vem **acima** de
+  `NODE_SILENT`/`NODE_SUSPENDED`, porque severidade 2 > 0. É a consequência de dizer a gravidade em
+  número; antes os dois grupos dividiam a lista por código e não havia número comparável.
+
+Provas: `NetworkDashboardHealthTests` (18 casos; três novos são da rede — divergência acima de todo
+alerta de nó, captura exigida e não pronta com **leitura real** do servidor em `STATEMENT`, e o caso
+negativo "captura não usada / ROW / sem medida não alerta") e
+`NetworkModesTests.redeDegradadaPorEvidenciaViraAlertaComACausaEDepoisOsAlertasDeNo` pela rota real.
+Mutações derrubadas: rede saudável ainda alerta, alerta sem a causa (sempre `NETWORK_DIVERGED`), lista
+sem a inversão, divergência que não degrada, captura sempre `READY` e captura sempre `NOT_READY` (as
+duas últimas só derrubam porque o teste lê o servidor de verdade — com mock de valor fixo elas
+ficavam verdes). Uma é inobservável: "o modo ignora a evidência" agora e o painel leem a mesma conta,
+e o modo tem teste próprio (`NetworkModesTests`).
+
+**Defeito de isolamento encontrado de verdade:** a divergência gravada por uma classe de teste ficava
+no H2 do contexto e deixava a rede `DEGRADED` em `NetworkModesTests` que rodavam depois. O `setUp`
+passou a limpar `network_content_snapshots` divergentes. É o mesmo padrão do ciclo 172 (`network_tasks`):
+**teste que lê estado GLOBAL tem de limpar o que não é dele.**
 
 **O que este bloco não faz, e por quê.** O §8.8 lista quinze alertas; aqui entram os que derivam de
 dado que o Control Plane **já mede** num ciclo, sem estado novo: silêncio, suspensão/revogação,

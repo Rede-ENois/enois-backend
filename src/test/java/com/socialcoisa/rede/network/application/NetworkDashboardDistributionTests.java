@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 
 import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.application.port.out.NetworkTaskRepository;
+import com.socialcoisa.rede.network.domain.NetworkHealth;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NodeProfile;
 import com.socialcoisa.rede.network.domain.NodeStatus;
@@ -51,6 +52,9 @@ class NetworkDashboardDistributionTests {
 	private final Map<String, Long> failed = new java.util.HashMap<>();
 	private long totalDone;
 	private long totalFailed;
+
+	/** A saúde da rede mockada: a evidência da rede tem teste próprio. */
+	private final NetworkModeService novoModo = mock(NetworkModeService.class);
 
 	@BeforeEach
 	void setUp() {
@@ -96,7 +100,8 @@ class NetworkDashboardDistributionTests {
 			mock(com.socialcoisa.rede.network.application.port.out.ContentVersionRepository.class);
 		when(versions.countBehind(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any(
 			com.socialcoisa.rede.network.domain.ContentKind.class))).thenReturn(0L);
-		service = new NetworkDashboardService(nodes, regions, tasks, samples, versions,
+		when(novoModo.networkHealth()).thenReturn(new NetworkHealth(0, false, "NOT_USED"));
+		service = new NetworkDashboardService(nodes, regions, tasks, samples, versions, novoModo,
 			Clock.fixed(NOW, ZoneOffset.UTC));
 	}
 

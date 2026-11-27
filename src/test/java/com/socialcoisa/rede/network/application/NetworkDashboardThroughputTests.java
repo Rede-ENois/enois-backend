@@ -21,6 +21,7 @@ import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.application.port.out.NetworkTaskRepository;
 import com.socialcoisa.rede.network.application.port.out.NodeObservabilityRepository;
 import com.socialcoisa.rede.network.application.port.out.NodeObservabilityRepository.Sample;
+import com.socialcoisa.rede.network.domain.NetworkHealth;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NodeProfile;
 import com.socialcoisa.rede.network.domain.NodeStatus;
@@ -51,6 +52,9 @@ class NetworkDashboardThroughputTests {
 	private NodeObservabilityRepository samples;
 	private NetworkDashboardService service;
 
+	/** A saúde da rede mockada: a evidência da rede tem teste próprio. */
+	private final NetworkModeService novoModo = mock(NetworkModeService.class);
+
 	@BeforeEach
 	void setUp() {
 		nos = new java.util.ArrayList<>();
@@ -72,7 +76,8 @@ class NetworkDashboardThroughputTests {
 			mock(com.socialcoisa.rede.network.application.port.out.ContentVersionRepository.class);
 		when(versions.countBehind(anyString(), org.mockito.ArgumentMatchers.any(
 			com.socialcoisa.rede.network.domain.ContentKind.class))).thenReturn(0L);
-		service = new NetworkDashboardService(nodes, regions, tasks, samples, versions,
+		when(novoModo.networkHealth()).thenReturn(new NetworkHealth(0, false, "NOT_USED"));
+		service = new NetworkDashboardService(nodes, regions, tasks, samples, versions, novoModo,
 			Clock.fixed(NOW, ZoneOffset.UTC));
 	}
 

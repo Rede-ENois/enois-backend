@@ -188,3 +188,10 @@ fila **e** nenhum nó capaz. É o diagnóstico do §2.2 dado como alerta, e não
 cobertura. "Master sobrecarregado enquanto há réplicas ociosas" (§8.8) continua sem medida: hoje o
 Control Plane não mede a própria carga por serviço (§8.2, "Aplicação"), e medir isso é o passo
 anterior ao alerta — não dá para afirmar "o Master está sobrecarregado" sem a medida.
+
+### §8.8: a causa da rede degradada chegou ao painel (ciclo 173)
+
+Divergência de dados e falha de captura deixam de ser só o modo `DEGRADED`: viraram `NETWORK_DIVERGED`
+e `NETWORK_CAPTURE_NOT_READY` no `health.alerts`, com a mesma conta do modo (`NetworkHealth`) e a
+severidade em número (4, acima de todo sintoma por nó). Detalhes e provas no
+[doc 20 §14.2](20-painel-admin-observabilidade-nos.md).

@@ -17,6 +17,8 @@ import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.application.port.out.NetworkTaskRepository;
 import com.socialcoisa.rede.network.application.port.out.NodeObservabilityRepository;
 import com.socialcoisa.rede.network.domain.ContentKind;
+import com.socialcoisa.rede.network.domain.NetworkHealth;
+import com.socialcoisa.rede.network.domain.NetworkMode;
 import com.socialcoisa.rede.network.domain.NodeHealth;
 import com.socialcoisa.rede.network.domain.TaskStatus;
 import com.socialcoisa.rede.network.domain.NetworkNode;
@@ -52,15 +54,18 @@ public class NetworkDashboardService {
 	private final NetworkTaskRepository tasks;
 	private final NodeObservabilityRepository samples;
 	private final ContentVersionRepository versions;
+	private final NetworkModeService modes;
 	private final Clock clock;
 
 	NetworkDashboardService(NetworkNodeRepository nodes, NetworkRegionService regions, NetworkTaskRepository tasks,
-			NodeObservabilityRepository samples, ContentVersionRepository versions, Clock clock) {
+			NodeObservabilityRepository samples, ContentVersionRepository versions, NetworkModeService modes,
+			Clock clock) {
 		this.nodes = nodes;
 		this.regions = regions;
 		this.tasks = tasks;
 		this.samples = samples;
 		this.versions = versions;
+		this.modes = modes;
 		this.clock = clock;
 	}
 
@@ -337,8 +342,18 @@ public class NetworkDashboardService {
 			NodeHealth.Alert alerta = NodeHealth.alert(painel, node, now, behind == null ? 0 : behind);
 			if (alerta != null) {
 				alertas.add(new HealthAlert(node.id(), node.displayName(), alerta.dimension(), alerta.code(),
-					alerta.reason()));
+					alerta.reason(), severidade(alerta.code())));
 			}
+		}
+		// A causa da degradação medida da REDE (§8.8 "divergência de dados", "falha de captura"): o modo
+		// já a grava, mas o painel mostrava "DEGRADED" sem dizer por quê, e o operador procurava no lado
+		// da carga. Vem primeiro: causa comum da rede não se esconde atrás de sintomas por nó.
+		NetworkHealth rede = modes.networkHealth();
+		if (!rede.healthy()) {
+			String codigo = rede.signal() == NetworkMode.HealthSignal.DATA_DIVERGENCE ? "NETWORK_DIVERGED"
+				: "NETWORK_CAPTURE_NOT_READY";
+			alertas.add(new HealthAlert(null, null, NodeHealth.Dimension.APPLICATION, codigo, rede.reason(),
+				severidade(codigo)));
 		}
 		// O trabalho que o Control Plane enfileira sem que nó nenhum possa executar (§2.2/§8.8): a fila
 		// é o número; o alerta diz QUAL tipo e POR QUE ele fica no Master. Só vale com pendente — sem
@@ -354,12 +369,13 @@ public class NetworkDashboardService {
 			long pendentes = tasks.countByStatus(TaskStatus.PENDING);
 			alertas.add(new HealthAlert(null, null, NodeHealth.Dimension.APPLICATION, "WORK_NO_TARGET",
 				pendentesTipo + " tarefa(s) " + tipo.type() + " pendentes e nenhum nó capaz de executá-las"
-					+ (pendentes > pendentesTipo ? " (" + pendentes + " pendentes na rede)" : "")));
+					+ (pendentes > pendentesTipo ? " (" + pendentes + " pendentes na rede)" : ""),
+				severidade("WORK_NO_TARGET")));
 		}
 		// O alerta da rede não tem nó: um comparador com `HealthAlert::nodeId` estoura em NPE no
 		// primeiro alerta de rede que aparece ao lado de um de nó. O nulo ordena antes, e o desempate
 		// final é o código — dois alertas de rede podem existir (um por tipo sem quem faça).
-		alertas.sort(Comparator.comparingInt((HealthAlert a) -> severidade(a.code()))
+		alertas.sort(Comparator.comparingInt(HealthAlert::severity).reversed()
 			.thenComparing(HealthAlert::nodeId, Comparator.nullsFirst(Comparator.naturalOrder()))
 			.thenComparing(HealthAlert::code));
 		return new HealthGroup(contados, byStatus, ok, degraded, failing, medidos == contados,
@@ -383,16 +399,20 @@ public class NetworkDashboardService {
 	}
 
 	/**
-	 * A urgência do código, para a lista de alertas: o que tira o nó da rede vem antes do que o faz
-	 * servir pior. Código que não está aqui cai no fim, e o teste de ordem obriga a classificá-lo.
+	 * A urgência do código (maior = mais grave), para a lista de alertas: o que tira o nó da rede fica
+	 * no fim, depois do que o faz servir pior, depois da carga — e o incidente de dado da rede no
+	 * topo. Código que não está aqui cai em {@code 0}, e o teste de ordem obriga a classificá-lo.
 	 */
 	static int severidade(String code) {
 		return switch (code) {
-			case "NODE_REVOKED", "NODE_SUSPENDED", "NODE_SILENT" -> 0;
-			case "NODE_QUARANTINED", "NODE_NO_WORK" -> 1;
-			case "NODE_FAILING", "NODE_BEHIND", "WORK_NO_TARGET" -> 2;
+			// A rede divergindo e a captura exigida e parada são o incidente de dado, e é o MAIS grave:
+			// é a causa comum que produz os sintomas por nó, e esconder a causa atrás dos sintomas
+			// manda o operador procurar no lugar errado. Por isso a escala cresce com a urgência.
+			case "NETWORK_DIVERGED", "NETWORK_CAPTURE_NOT_READY" -> 4;
 			case "NODE_SATURATED", "NODE_MEMORY_FULL", "NODE_FULL" -> 3;
-			default -> 4;
+			case "NODE_FAILING", "NODE_BEHIND", "WORK_NO_TARGET" -> 2;
+			case "NODE_QUARANTINED", "NODE_NO_WORK" -> 1;
+			default -> 0;
 		};
 	}
 
@@ -425,9 +445,10 @@ public class NetworkDashboardService {
 	 * @param dimension dimensão da saúde onde o fato aparece
 	 * @param code      código estável ({@code NODE_SILENT}, {@code NODE_SATURATED}, …)
 	 * @param reason    a frase com o número e o porquê
+	 * @param severity  a urgência do código (0 a 4): a tela ordena e colore sem adivinhar pelo nome
 	 */
 	public record HealthAlert(String nodeId, String nodeName, NodeHealth.Dimension dimension, String code,
-			String reason) {
+			String reason, int severity) {
 	}
 
 	/**

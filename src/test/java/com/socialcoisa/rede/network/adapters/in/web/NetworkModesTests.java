@@ -67,6 +67,9 @@ class NetworkModesTests {
 	void setUp() {
 		auth = new TestAuthHelper(mockMvc, objectMapper);
 		jdbc.update("delete from network_tasks");
+		// A divergência de OUTRA classe do mesmo H2 deixaria a rede DEGRADED aqui: modo e painel
+		// passariam a medir o cenário alheio, na ordem em que a suíte rodou.
+		jdbc.update("delete from network_content_snapshots where divergence_reason is not null");
 		jdbc.update("delete from network_state");
 		jdbc.update("delete from network_node_keys");
 		jdbc.update("delete from network_provision_tokens");
@@ -429,6 +432,57 @@ class NetworkModesTests {
 		heartbeat(worker);
 		assertThat(tasks.dispatchPending()).isEqualTo(2);
 		assertThat(dashboard(admin.token()).get("health").get("alertsTotal").asInt()).isZero();
+	}
+
+	// ---------------------------------------------------------------- o alerta diz o mesmo que o modo
+
+	/**
+	 * §8.8 "divergência de dados" e "falha de captura": o modo medido já vai para {@code DEGRADED}
+	 * quando há divergência ou captura exigida e quebrada ({@code NetworkModeService#healthSignal}).
+	 * O painel dizia o modo e NÃO dizia a causa — o operador via "DEGRADED" e ia procurar no lado
+	 * da carga, que não tem nada a ver. O alerta `NETWORK_DEGRADED` carrega a evidência, e ele vem
+	 * ANTES dos alertas de nó: a causa comum da rede não se esconde atrás de sintomas por nó.
+	 */
+	@Test
+	void redeDegradadaPorEvidenciaViraAlertaComACausaEDepoisOsAlertasDeNo() throws Exception {
+		var admin = adminSession();
+
+		// Nenhuma divergência, nenhum nó: o painel não inventa alerta de degradação.
+		assertThat(dashboard(admin.token()).get("health").get("alertsTotal").asInt()).isZero();
+
+		// O cenário que o modo já mede: o nó reportou uma versão e a origem mostra outra — a
+		// divergência que `ContentReconcileService#countDivergent` conta.
+		Node mudo = activeNode(admin.token(), "no-mudo", List.of("NODE_LOCAL"));
+		enqueue("fila", 1);
+		jdbc.update("insert into network_content_snapshots "
+			+ "(node_id, content_type, content_id, source_version, content_hash, synced_at, divergence_reason) "
+			+ "values (?, 'POST', 'conteudo-xyz', 4, 'abc', current_timestamp, 'hash diverge')",
+			mudo.id());
+		assertThat(modes.evaluate()).isEqualTo(NetworkMode.DEGRADED);
+
+		var alertas = dashboard(admin.token()).get("health").get("alerts");
+		assertThat(alertas.get(0).get("code").asString()).isEqualTo("NETWORK_DIVERGED");
+		assertThat(alertas.get(0).get("dimension").asString()).isEqualTo("APPLICATION");
+		assertThat(alertas.get(0).get("reason").asString()).contains("1 agregado").contains("divergem");
+		assertThat(alertas.get(0).get("nodeId").isNull()).isTrue();
+		assertThat(alertas.get(0).get("severity").asInt()).isEqualTo(4);
+
+		// O nó silencioso continua no quadro, atrás do alerta da rede: o painel não troca a causa
+		// pelo sintoma. (Sem ele o teste acima não provaria a ordem.)
+		mockMvc
+			.perform(post("/network/nodes/heartbeat").header("X-Node-Id", mudo.id()).header("X-Node-Key", mudo.key())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("runtimeVersion", "0.1.0",
+					"observed", Map.of("cpuPercent", 5.0, "runningTasks", 0)))))
+			.andExpect(status().isOk());
+		jdbc.update("update network_nodes set last_seen_at = timestampadd(second, -600, current_timestamp) "
+			+ "where id = ?", mudo.id());
+		// A tarefa da fila é limpa: com o nó silencioso ela não despacha, e o alerta dela
+		// (`WORK_NO_TARGET`) é outro fato — este trecho mede a ordem entre a rede e o nó.
+		jdbc.update("delete from network_tasks");
+		alertas = dashboard(admin.token()).get("health").get("alerts");
+		assertThat(alertas.get(0).get("code").asString()).isEqualTo("NETWORK_DIVERGED");
+		assertThat(alertas.get(1).get("code").asString()).isEqualTo("NODE_SILENT");
 	}
 
 	// ---------------------------------------------------------------- helpers

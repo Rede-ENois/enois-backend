@@ -653,6 +653,10 @@ class NetworkNodesTests {
 		assertThat(saude.get("ok").get("NETWORK").asInt()).isEqualTo(1);
 		assertThat(saude.get("degraded").get("NETWORK").asInt()).isEqualTo(1);
 		assertThat(saude.get("failing").get("NETWORK").asInt()).isEqualTo(2);
+		// A fila pode ter sobrado de outra classe no mesmo contexto: um pendente aqui viraria
+		// `WORK_NO_TARGET` e o quadro mediria o cenário alheio. O alerta de trabalho sem alvo tem
+		// teste próprio (`NetworkModesTests`); este cenário é sobre nós.
+		jdbc.update("delete from network_tasks");
 		// Um alerta por nó com problema — e o pendente não gera nenhum (não é incidente). O suspenso
 		// deste cenário é suspenso ANTES do primeiro heartbeat: o fato que se apresenta é o silêncio,
 		// e o alerta diz isso. O caso "suspenso com heartbeat em dia" é do alarme da suspensão, e

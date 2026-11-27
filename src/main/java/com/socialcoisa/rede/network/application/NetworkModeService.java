@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.socialcoisa.rede.network.application.port.out.NetworkNodeRepository;
 import com.socialcoisa.rede.network.application.port.out.NetworkStateRepository;
 import com.socialcoisa.rede.network.application.port.out.NetworkTaskRepository;
+import com.socialcoisa.rede.network.domain.NetworkHealth;
 import com.socialcoisa.rede.network.domain.NetworkMode;
 import com.socialcoisa.rede.network.domain.NetworkNode;
 import com.socialcoisa.rede.network.domain.NetworkRegions;
@@ -169,8 +170,25 @@ public class NetworkModeService {
 	 * painel mostra — duas contas para a mesma divergência seriam duas respostas ao mesmo alerta.</p>
 	 */
 	NetworkMode.HealthSignal healthSignal() {
-		Boolean captureReady = capture.required() ? capture.check().ready() : null;
-		return NetworkMode.HealthSignal.of(captureReady, capture.required(), reconcile.countDivergent() > 0);
+		return networkHealth().signal();
+	}
+
+	/**
+	 * O quadro de saúde medido da rede. Público para o painel: o alerta <b>tem</b> de dizer a mesma
+	 * evidência que levou o modo a {@code DEGRADED} — duas contas seriam duas respostas ao mesmo
+	 * alerta, e a divergência poderia aparecer num lugar e não no outro.
+	 */
+	@Transactional(readOnly = true)
+	public NetworkHealth networkHealth() {
+		return medir(capture, reconcile.countDivergent());
+	}
+
+	/** A conta, sem Spring: usada pelo serviço e testável sozinha (o painel é quem consome). */
+	static NetworkHealth medir(ChangeCaptureReadinessService capture, long divergentes) {
+		boolean required = capture.required();
+		// "Não sei" do banco não vira NOT_READY: só chamamos check() quando a captura é exigida.
+		String captureState = !required ? "NOT_USED" : (capture.check().ready() ? "READY" : "NOT_READY");
+		return new NetworkHealth(divergentes, required, captureState);
 	}
 
 	/** Motivo entra em metadata JSON: aspas e barra do texto humano não podem quebrar o JSON. */
