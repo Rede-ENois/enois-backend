@@ -14,10 +14,11 @@ public interface PortfolioPublicationRepository {
 	Optional<PortfolioPublication> findLatest(String userId);
 
 	/**
-	 * O HTML de cada versão publicada dos donos informados, por dono e por versão. É o que a lista
-	 * pública lê para o título: só o que está no ar, nunca o rascunho privado.
+	 * O HTML de cada versão publicada dos donos informados, por dono e por versão, restrito às
+	 * versões pedidas. É o que a lista pública lê para o título: só o que está no ar, nunca o
+	 * rascunho privado.
 	 */
-	Map<String, Map<Integer, String>> publishedHtml(Collection<String> userIds);
+	Map<String, Map<Integer, String>> publishedHtml(Collection<String> userIds, Collection<Integer> versions);
 
 	PortfolioPublication save(PortfolioPublication publication);
 }
