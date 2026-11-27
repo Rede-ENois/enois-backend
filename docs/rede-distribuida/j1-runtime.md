@@ -42,6 +42,13 @@ o limite e as regras de autenticação do backend legado. A réplica só
 aceita o endereço de ingresso quando recebe a prova do agente pelo túnel.
 Login e renovação mantêm os valores `Set-Cookie` separados.
 
+As rotas de cadastro incluem `GET /auth/config`, `GET /auth/signup-challenge`,
+`POST /auth/signup`, `POST /auth/email/verify` e `POST /auth/email/resend`.
+O serviço de dados aplica as regras de cadastro e os desafios do backend,
+preserva a chave de idempotência e envia a confirmação por SMTP. O ambiente
+distribuído habilita o cadastro depois de configurar o remetente. A réplica
+devolve os cookies de sessão emitidos na confirmação do e-mail.
+
 ## Serviço Java de dados
 
 Para o aceite em staging, veja [MariaDB para o serviço de dados no J6](j6-mariadb.md).

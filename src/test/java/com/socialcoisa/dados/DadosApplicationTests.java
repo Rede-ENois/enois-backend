@@ -83,7 +83,10 @@ class DadosApplicationTests {
 				.flatExtracting(info -> info.getPatternValues())
 				.containsExactlyInAnyOrder("/internal/data/v1/ready", "/internal/data/v1/posts/{postId}",
 					"/internal/data/v1/posts", "/internal/data/v1/session",
-					"/internal/data/v1/browser/{operacao:login|refresh|logout|verify}", "/error", "/error");
+					"/internal/data/v1/browser/{operacao:login|refresh|logout|verify}",
+					"/internal/data/v1/browser/config", "/internal/data/v1/browser/signup-challenge",
+					"/internal/data/v1/browser/signup", "/internal/data/v1/browser/email/verify",
+					"/internal/data/v1/browser/email/resend", "/error", "/error");
 
 			long agora = System.currentTimeMillis();
 			var grant = grant(CHAVE, "enois-backend", "data", 1, agora + 10000);
@@ -91,6 +94,8 @@ class DadosApplicationTests {
 			assertThat(pronto.statusCode()).isEqualTo(204);
 			assertThat(pronto.headers().firstValue("X-Enois-Data-Protocol")).contains("1");
 			assertThat(consultar(cliente, porta, "/internal/data/v1/ready", null).statusCode()).isEqualTo(401);
+			assertThat(consultar(cliente, porta, "/internal/data/v1/browser/signup-challenge", null).statusCode())
+				.isEqualTo(401);
 			for (String recusado : new String[] {
 					grant(CHAVE, "outro-app", "data", 1, agora + 10000),
 					grant(CHAVE, "enois-backend", "tasks", 1, agora + 10000),

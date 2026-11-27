@@ -26,7 +26,7 @@ import com.socialcoisa.rede.shared.web.SessionCookies;
 class ApiReplicaController {
 
 	private static final int CORPO_MAXIMO = 1024 * 1024;
-	private static final Set<Integer> STATUS_PUBLICOS = Set.of(200, 201, 202, 400, 401, 403, 404, 409, 413, 429);
+	private static final Set<Integer> STATUS_PUBLICOS = Set.of(200, 201, 202, 400, 401, 403, 404, 409, 410, 413, 429);
 	private static final int CORPO_SESSAO_MAXIMO = 16 * 1024;
 	private final ClienteDados dados;
 
@@ -59,7 +59,8 @@ class ApiReplicaController {
 		return indisponivel();
 	}
 
-	@PostMapping({"/auth/login", "/auth/refresh", "/auth/logout", "/auth/2fa/verify"})
+	@PostMapping({"/auth/login", "/auth/refresh", "/auth/logout", "/auth/2fa/verify",
+		"/auth/signup", "/auth/email/verify", "/auth/email/resend"})
 	ResponseEntity<?> operarSessao(@RequestHeader(value = "X-Session-Token", required = false) String token,
 			@RequestHeader(value = "Idempotency-Key", required = false) String chave,
 			@RequestHeader(value = "X-CSRF-Protection", required = false) String csrf,
@@ -79,13 +80,33 @@ class ApiReplicaController {
 					.body(new ErrorResponse("PAYLOAD_TOO_LARGE", "Requisição de sessão excede o limite.", Instant.now()));
 			}
 			String caminho = requisicao.getServletPath();
-			String operacao = caminho.substring(caminho.lastIndexOf('/') + 1);
+			String operacao = caminho.startsWith("/auth/email/") ? caminho.substring("/auth/".length())
+				: caminho.substring(caminho.lastIndexOf('/') + 1);
 			return respostaPublica(dados.operarSessao(operacao, corpo, StringUtils.hasText(token) ? token : cookie,
 				refresh, chave, dispositivo, ip, prova), true);
 		} catch (InterruptedException falha) {
 			Thread.currentThread().interrupt();
 		} catch (IOException | IllegalArgumentException ignored) {
 			// O ingresso e o serviço de dados precisam estar disponíveis para operar uma sessão.
+		}
+		return indisponivel();
+	}
+
+	@GetMapping({"/auth/config", "/auth/signup-challenge"})
+	ResponseEntity<?> consultarCadastro(@RequestHeader(value = "X-Session-Token", required = false) String token,
+			@RequestHeader(value = "X-Device-Fingerprint", required = false) String dispositivo,
+			@RequestHeader(value = "X-Enois-Client-IP", required = false) String ip,
+			@RequestHeader(value = "X-Enois-Ingress-Proof", required = false) String prova,
+			@CookieValue(value = SessionCookies.SESSION, required = false) String cookie,
+			HttpServletRequest requisicao) {
+		try {
+			String operacao = requisicao.getServletPath().substring("/auth/".length());
+			return respostaPublica(dados.consultarNavegador(operacao, StringUtils.hasText(token) ? token : cookie,
+				dispositivo, ip, prova));
+		} catch (InterruptedException falha) {
+			Thread.currentThread().interrupt();
+		} catch (IOException | IllegalArgumentException ignored) {
+			// A configuração e o desafio dependem da autoridade de dados.
 		}
 		return indisponivel();
 	}

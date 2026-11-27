@@ -61,14 +61,28 @@ final class ClienteDados implements AutoCloseable {
 	HttpResponse<byte[]> operarSessao(String operacao, byte[] corpo, String sessao, String refresh, String chave,
 			String dispositivo, String ip, String prova) throws IOException, InterruptedException {
 		var atribuicao = contexto.atual();
-		validarIngresso(atribuicao.credencial(), ip, prova);
-		var pedido = HttpRequest.newBuilder(atribuicao.dados().resolve("/internal/data/v1/browser/" + operacao))
-			.header("Content-Type", "application/json").header("X-Enois-Client-IP", ip)
+		var pedido = pedidoNavegador(atribuicao, operacao, dispositivo, ip, prova)
+			.header("Content-Type", "application/json")
 			.POST(HttpRequest.BodyPublishers.ofByteArray(corpo));
 		cabecalho(pedido, "X-Enois-Refresh-Token", refresh);
 		cabecalho(pedido, "Idempotency-Key", chave);
-		cabecalho(pedido, "X-Device-Fingerprint", dispositivo);
 		return consultar(atribuicao, pedido, sessao, 3500);
+	}
+
+	HttpResponse<byte[]> consultarNavegador(String operacao, String sessao, String dispositivo, String ip,
+			String prova) throws IOException, InterruptedException {
+		var atribuicao = contexto.atual();
+		var pedido = pedidoNavegador(atribuicao, operacao, dispositivo, ip, prova).GET();
+		return consultar(atribuicao, pedido, sessao, 2500);
+	}
+
+	private static HttpRequest.Builder pedidoNavegador(ContextoWorkload.Atribuicao atribuicao, String operacao,
+			String dispositivo, String ip, String prova) throws IOException {
+		validarIngresso(atribuicao.credencial(), ip, prova);
+		var pedido = HttpRequest.newBuilder(atribuicao.dados().resolve("/internal/data/v1/browser/" + operacao))
+			.header("X-Enois-Client-IP", ip);
+		cabecalho(pedido, "X-Device-Fingerprint", dispositivo);
+		return pedido;
 	}
 
 	private static void cabecalho(HttpRequest.Builder pedido, String nome, String valor) {

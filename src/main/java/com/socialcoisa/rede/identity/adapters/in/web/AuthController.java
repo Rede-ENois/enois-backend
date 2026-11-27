@@ -19,7 +19,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.identity.application.AuthResponse;
 import com.socialcoisa.rede.identity.application.SignupChallengeService;
-import com.socialcoisa.rede.identity.application.SignupCommand;
 import com.socialcoisa.rede.identity.application.port.in.ChangeEmailUseCase;
 import com.socialcoisa.rede.identity.application.port.in.ChangePasswordUseCase;
 import com.socialcoisa.rede.identity.application.port.in.DeleteAccountUseCase;
@@ -28,7 +27,6 @@ import com.socialcoisa.rede.identity.application.port.in.OAuthStartResponse;
 import com.socialcoisa.rede.identity.application.port.in.OAuthUseCase;
 import com.socialcoisa.rede.identity.application.port.in.RequestPasswordResetUseCase;
 import com.socialcoisa.rede.identity.application.port.in.ResetPasswordUseCase;
-import com.socialcoisa.rede.identity.application.port.in.SignupUseCase;
 import com.socialcoisa.rede.identity.application.port.in.TwoFactorLoginUseCase;
 import com.socialcoisa.rede.identity.application.port.in.TwoFactorUseCase;
 import com.socialcoisa.rede.identity.application.port.in.VerifyEmailUseCase;
@@ -46,7 +44,7 @@ import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 class AuthController {
 
 	private final SessaoHttp sessoes;
-	private final SignupUseCase signupUseCase;
+	private final CadastroHttp cadastro;
 	private final VerifyEmailUseCase verifyEmailUseCase;
 	private final TwoFactorLoginUseCase twoFactorLoginUseCase;
 	private final TwoFactorUseCase twoFactorUseCase;
@@ -58,22 +56,14 @@ class AuthController {
 	private final ChangePasswordUseCase changePasswordUseCase;
 	private final DeleteAccountUseCase deleteAccountUseCase;
 	private final IdempotencyApplicationService idempotency;
-	private final com.socialcoisa.rede.identity.application.AuthThrottle throttle;
 	private final OAuthBrowserReturn oAuthReturn;
 	private final SiteDomains siteDomains;
-	private final com.socialcoisa.rede.identity.adapters.out.TurnstileValidator turnstile;
-	private final com.socialcoisa.rede.identity.application.SignupChallengeService signupCaptcha;
-	private final com.socialcoisa.rede.shared.security.IpBlockReader ipBlockReader;
-	private final com.socialcoisa.rede.shared.security.SignupAttackGuard signupAttackGuard;
 	private final com.socialcoisa.rede.shared.security.ClientIpResolver ipResolver;
-	private final tools.jackson.databind.ObjectMapper objectMapper;
-	/** Cadastros abertos? Desligado, o POST /auth/signup responde 403 SIGNUP_DISABLED. */
-	private final boolean signupEnabled;
 	/** Login social desligável por ambiente (QA sem app OAuth configurado). */
 	private final boolean googleLoginEnabled;
 	private final com.socialcoisa.rede.shared.web.SessionCookies sessionCookies;
 
-	AuthController(SignupUseCase signupUseCase, VerifyEmailUseCase verifyEmailUseCase,
+	AuthController(CadastroHttp cadastro, VerifyEmailUseCase verifyEmailUseCase,
 			TwoFactorLoginUseCase twoFactorLoginUseCase, TwoFactorUseCase twoFactorUseCase,
 			SessaoHttp sessoes,
 			GetAuthenticatedUserUseCase getAuthenticatedUserUseCase,
@@ -85,18 +75,11 @@ class AuthController {
 			DeleteAccountUseCase deleteAccountUseCase,
 			IdempotencyApplicationService idempotency,
 			OAuthBrowserReturn oAuthReturn, SiteDomains siteDomains,
-			com.socialcoisa.rede.identity.application.AuthThrottle throttle,
-			com.socialcoisa.rede.identity.adapters.out.TurnstileValidator turnstile,
-			com.socialcoisa.rede.identity.application.SignupChallengeService signupCaptcha,
-			com.socialcoisa.rede.shared.security.IpBlockReader ipBlockReader,
-			com.socialcoisa.rede.shared.security.SignupAttackGuard signupAttackGuard,
 			com.socialcoisa.rede.shared.security.ClientIpResolver ipResolver,
-			tools.jackson.databind.ObjectMapper objectMapper,
-			@Value("${rede.auth.signup-enabled:true}") boolean signupEnabled,
 			@Value("${rede.oauth.google.enabled:true}") boolean googleLoginEnabled,
 			com.socialcoisa.rede.shared.web.SessionCookies sessionCookies) {
 		this.sessoes = sessoes;
-		this.signupUseCase = signupUseCase;
+		this.cadastro = cadastro;
 		this.verifyEmailUseCase = verifyEmailUseCase;
 		this.twoFactorLoginUseCase = twoFactorLoginUseCase;
 		this.twoFactorUseCase = twoFactorUseCase;
@@ -108,61 +91,23 @@ class AuthController {
 		this.changePasswordUseCase = changePasswordUseCase;
 		this.deleteAccountUseCase = deleteAccountUseCase;
 		this.idempotency = idempotency;
-		this.throttle = throttle;
 		this.oAuthReturn = oAuthReturn;
 		this.siteDomains = siteDomains;
-		this.turnstile = turnstile;
-		this.signupCaptcha = signupCaptcha;
-		this.ipBlockReader = ipBlockReader;
-		this.signupAttackGuard = signupAttackGuard;
 		this.ipResolver = ipResolver;
-		this.objectMapper = objectMapper;
-		this.signupEnabled = signupEnabled;
 		this.googleLoginEnabled = googleLoginEnabled;
 		this.sessionCookies = sessionCookies;
 	}
 
-	/** Bloqueio de IP pela moderacao (V115): nenhum fluxo de autenticacao emite sessao de IP banido. */
-	private void exigeIpNaoBloqueado(String ip) {
-		if (ipBlockReader.blocked(ip)) {
-			throw new ApiException(403, "IP_BLOCKED",
-				"Este endereco de rede esta bloqueado pela moderacao. Fale com o suporte se for um erro.");
-		}
-	}
-
-	/**
-	 * Configuração pública do captcha: o front decide entre o widget do Turnstile e o desafio
-	 * próprio sem precisar de variável VITE_* no build. Só a chave pública do site sai daqui.
-	 */
 	@GetMapping("/config")
-	AuthConfig config() {
-		String mode;
-		String siteKey;
-		if (turnstile.isAvailable()) {
-			mode = "TURNSTILE";
-			siteKey = turnstile.siteKey();
-		}
-		else if (signupCaptcha.isEnabled()) {
-			mode = "CHALLENGE";
-			siteKey = null;
-		}
-		else {
-			mode = "NONE";
-			siteKey = null;
-		}
-		return new AuthConfig(mode, siteKey, googleLoginEnabled);
+	CadastroHttp.Configuracao config() {
+		return cadastro.configuracao(googleLoginEnabled);
 	}
 
-	/**
-	 * Desafio de soma para o cadastro (usado quando não há Turnstile configurado). O desafio nasce
-	 * preso à sessão e ao aparelho que o pediu — quem resolve num navegador não consegue usá-lo em
-	 * outro. O teto de emissão é do filtro de identidade, não daqui.
-	 */
 	@GetMapping("/signup-challenge")
 	SignupChallengeService.Challenge signupChallenge(
 			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
 			@RequestHeader(value = "X-Device-Fingerprint", required = false) String deviceFingerprint) {
-		return signupCaptcha.issue(sessionToken, deviceFingerprint);
+		return cadastro.desafio(sessionToken, deviceFingerprint);
 	}
 
 	@PostMapping("/signup")
@@ -172,41 +117,7 @@ class AuthController {
 			@RequestHeader(value = "X-Device-Fingerprint", required = false) String deviceFingerprint,
 			@RequestBody SignupRequest body,
 			jakarta.servlet.http.HttpServletRequest request) {
-		String ip = ipResolver.resolve(request);
-		exigeIpNaoBloqueado(ip);
-		// Contenção imediata: nome com o padrão do ataque não cria conta; repetições do mesmo
-		// aparelho pausam novos cadastros (as contas "probe" de 20/10 e 22/10 nasciam em série do
-		// mesmo provedor). A impressão do aparelho só identifica quem repete, nunca autoriza nada.
-		signupAttackGuard.checkSignup(body.name(), body.email(), ip, deviceFingerprint);
-		// An already registered e-mail goes through every gate below and gets the same 201 body as
-		// a new signup; the service e-mails the existing account instead (see AuthService.signup).
-		// Portao de cadastros: a operacao pode fechar a criacao de contas (a Mel pediu em
-		// 2026-10-20). Antes de Turnstile/throttle: nao adianta o cliente resolver captcha.
-		if (!signupEnabled) {
-			throw new ApiException(403, "SIGNUP_DISABLED",
-				"Os cadastros estao fechados no momento. Se voce ja tem conta, entre normalmente.");
-		}
-		// Honeypot: bots preenchem o campo "website" que humanos nunca veem.
-		// Resposta fake (201) para nao dar dica ao atacante.
-		if (body.website() != null && !body.website().isBlank()) {
-			return fakeSignupAccepted(body.email());
-		}
-		throttle.exigeSignupPermitido(ip, deviceFingerprint);
-		String scope = authScope(body.email());
-		// Hash sem senha: a idempotência não pode virar um hash rápido de credencial no banco (E-03).
-		String hash = idempotency.hash("signup:" + body.email().trim().toLowerCase(Locale.ROOT));
-		return idempotency.execute(scope, "POST", "/api/auth/signup", idempotencyKey, hash, () -> {
-			// Dentro do idempotente: repetir a MESMA requisição devolve a resposta em cache sem
-			// queimar um captcha novo (Turnstile e desafio são de uso único).
-			if (turnstile.isAvailable()) {
-				turnstile.require(body.turnstileToken());
-			}
-			else {
-				signupCaptcha.require(body.challengeId(), body.challengeAnswer(), sessionToken, deviceFingerprint);
-			}
-			return new CommandResponse(201, signupUseCase.signup(new SignupCommand(body.name(), "USER",
-				body.email(), body.password(), body.acceptedTerms(), body.birthDate())));
-		});
+		return cadastro.cadastrar(body, idempotencyKey, sessionToken, deviceFingerprint, ipResolver.resolve(request));
 	}
 
 	/**
@@ -575,18 +486,6 @@ class AuthController {
 	}
 
 	record DeleteAccountRequest(String password) {
-	}
-
-	record AuthConfig(String captchaMode, String turnstileSiteKey, boolean googleLoginEnabled) {
-}
-
-	/** Same shape as a real signup response, serialized by the JSON mapper. */
-	private ResponseEntity<String> fakeSignupAccepted(String email) {
-		String normalized = email == null ? "" : email.trim().toLowerCase(Locale.ROOT);
-		return ResponseEntity.status(201)
-			.contentType(org.springframework.http.MediaType.APPLICATION_JSON)
-			.body(objectMapper.writeValueAsString(Map.of("email", normalized, "verificationRequired", true,
-				"emailSent", true)));
 	}
 
 	private String authScope(String email) {
