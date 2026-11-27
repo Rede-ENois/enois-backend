@@ -15,12 +15,14 @@ interface SpringDataPortfolioPublicationJpaRepository extends JpaRepository<Port
 	Optional<PortfolioPublicationJpaEntity> findFirstByUserIdOrderByVersionDesc(String userId);
 
 	/**
-	 * Toda versão publicada dos donos informados, para o título da lista. O rascunho nunca vira
-	 * versão, então não aparece aqui; as peças são lidas junto com a linha.
+	 * As versões de trilha que a lista pública vai usar, dos donos informados. A linha carrega html
+	 * e peças em longtext, então só vêm as versões pedidas — não o histórico inteiro de quem publica
+	 * muito. O rascunho nunca vira versão, então não aparece aqui.
 	 */
 	@Query("""
 		select p from PortfolioPublicationJpaEntity p
-		where p.userId in :userIds and p.version > 0
+		where p.userId in :userIds and p.version in :versions
 		""")
-	List<PortfolioPublicationJpaEntity> findPublished(@Param("userIds") Collection<String> userIds);
+	List<PortfolioPublicationJpaEntity> findPublished(@Param("userIds") Collection<String> userIds,
+			@Param("versions") Collection<Integer> versions);
 }

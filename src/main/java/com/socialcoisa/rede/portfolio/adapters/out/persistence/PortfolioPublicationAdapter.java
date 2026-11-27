@@ -31,9 +31,12 @@ class PortfolioPublicationAdapter implements PortfolioPublicationRepository {
 	}
 
 	@Override
-	public Map<String, Map<Integer, String>> publishedHtml(Collection<String> userIds) {
+	public Map<String, Map<Integer, String>> publishedHtml(Collection<String> userIds, Collection<Integer> versions) {
+		if (userIds.isEmpty() || versions.isEmpty()) {
+			return Map.of();
+		}
 		Map<String, Map<Integer, String>> byOwner = new HashMap<>();
-		for (PortfolioPublication publication : jpaRepository.findPublished(userIds).stream()
+		for (PortfolioPublication publication : jpaRepository.findPublished(userIds, versions).stream()
 			.map(PortfolioPublicationJpaEntity::toDomain)
 			.toList()) {
 			byOwner.computeIfAbsent(publication.userId(), owner -> new HashMap<>())
