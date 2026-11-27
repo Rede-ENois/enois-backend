@@ -17,6 +17,11 @@ public enum DoacaoStatus {
 	public enum Origem {
 		CONTA,
 		DOADOR,
-		REVISAO
+		REVISAO,
+		/**
+		 * Selo registrado à mão por um administrador: nenhum comprovante foi lido. A linha tem
+		 * valor zero e existe só para o selo — nunca entra como dinheiro recebido.
+		 */
+		MANUAL
 	}
 }
