@@ -88,11 +88,15 @@ public interface NodeObservabilityRepository {
 	void addLatencySample(String nodeId, Instant at, int bucketUpperMs);
 
 	/**
-	 * Soma, para uma tarefa que precisou de {@code durationMs} ms, quantas tentativas foram perdidas
-	 * antes de concluir (brief §8.2, "retentativas"). Entra na faixa da hora de {@code at}, somando
-	 * no banco como {@link #addLatencySample}.
+	 * Soma, para uma tarefa que concluiu, quantas tentativas foram perdidas antes de concluir (brief
+	 * §8.2, "retentativas").
+	 *
+	 * <p>{@code retries} é uma CONTAGEM, não uma duração: vai para a faixa da hora de {@code at}
+	 * somando no banco como {@link #addLatencySample}, e é lida como o próprio número. O parâmetro se
+	 * chamava {@code durationMs} e era bucketeado como se fosse ms — 3 tentativas viravam 4 e acima
+	 * de 16 saturavam.</p>
 	 */
-	void addRetrySample(String nodeId, Instant at, long durationMs);
+	void addRetrySample(String nodeId, Instant at, long retries);
 
 	/**
 	 * Contagem por faixa deste nó nas últimas {@code hours} horas, até {@code now}. Faixa sem tarefa

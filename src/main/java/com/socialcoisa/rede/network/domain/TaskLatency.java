@@ -29,8 +29,9 @@ public record TaskLatency(Map<Integer, Integer> samplesByUpperBoundMs, Map<Integ
 	private static final int MAX_BUCKET_MS = 1 << 16;
 
 	/**
-	 * {@code retriesByUpperBoundMs} é a faixa das tarefas que FORAM devolvidas à fila (brief §8.2,
-	 * "retentativas"), com as tentativas perdidas antes da conclusão.
+	 * {@code retriesByUpperBoundMs} é quantas tentativas perdidas as tarefas que FORAM devolvidas à
+	 * fila precisaram (brief §8.2, "retentativas"). A chave é a CONTAGEM de tentativas, não faixa de
+	 * ms: o adaptador grava o número como veio, e aqui ele é lido direto.
 	 *
 	 * <p>Entram na distribuição de tentativas — {@code p50Ms} responde "em quantas tentativas o nó
 	 * costuma concluir" — e <b>não</b> na de duração: o tempo até a falha não é tempo de execução, e
@@ -59,17 +60,39 @@ public record TaskLatency(Map<Integer, Integer> samplesByUpperBoundMs, Map<Integ
 		return retriesByUpperBoundMs.values().stream().mapToLong(Integer::longValue).sum();
 	}
 
-	/** Percentil de TENTATIVAS até concluir; {@code null} sem tarefa que tenha sido devolvida. */
+	/**
+	 * Percentil de TENTATIVAS até concluir; {@code null} sem tarefa que tenha sido devolvida.
+	 *
+	 * <p>É o percentil de uma CONTAGEM, não de uma duração: as chaves do mapa já são o número de
+	 * tentativas (1, 2, 3 …), então o percentil sai como o próprio valor da faixa em que ele cai —
+	 * sem {@code bucketOf} no caminho e sem interpolação, que suavizaria um número inteiro.</p>
+	 */
 	public Long retriesP50() {
-		return new TaskLatency(retriesByUpperBoundMs).percentile(0.50);
+		return retriesPercentile(0.50);
 	}
 
 	public Long retriesP95() {
-		return new TaskLatency(retriesByUpperBoundMs).percentile(0.95);
+		return retriesPercentile(0.95);
 	}
 
 	public Long retriesP99() {
-		return new TaskLatency(retriesByUpperBoundMs).percentile(0.99);
+		return retriesPercentile(0.99);
+	}
+
+	private Long retriesPercentile(double p) {
+		long total = retries();
+		if (total == 0 || p <= 0 || p > 1) {
+			return null;
+		}
+		long posicao = (long) Math.ceil(p * total - 1e-9);
+		long acumulado = 0;
+		for (Map.Entry<Integer, Integer> faixa : retriesByUpperBoundMs.entrySet()) {
+			acumulado += faixa.getValue();
+			if (acumulado >= posicao) {
+				return faixa.getKey().longValue();
+			}
+		}
+		return null;
 	}
 
 	/**

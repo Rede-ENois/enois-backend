@@ -123,8 +123,8 @@ class NetworkTaskRetryTests {
 			"select bucket_upper_ms, retries from network_task_latency_buckets where node_id = ? and retries > 0",
 			node.id());
 		assertThat(((Number) faixaDaTentativa.get("BUCKET_UPPER_MS")).intValue())
-			.as("a faixa da contagem é a das tentativas perdidas, não a da duração")
-			.isEqualTo(com.socialcoisa.rede.network.domain.TaskLatency.bucketOf(naEntrega - 1L));
+			.as("a faixa é a CONTAGEM de tentativas perdidas, não a duração bucketada")
+			.isEqualTo((int) (naEntrega - 1L));
 		assertThat(((Number) faixaDaTentativa.get("RETRIES")).intValue()).isEqualTo(1);
 
 		mockMvc

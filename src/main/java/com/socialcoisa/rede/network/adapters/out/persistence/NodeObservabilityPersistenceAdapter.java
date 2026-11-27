@@ -62,10 +62,16 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 		on duplicate key update samples = samples + 1
 		""";
 
+	/**
+	 * A contagem de tentativas é gravada COMO É, na faixa `bucket_upper_ms` igual ao número de
+	 * tentativas perdidas. Ela não é duração: passar pelo {@code bucketOf} arredondava 3 para 4, 5–7
+	 * para 8 e saturava acima de 16 (uma tarefa com 50 retentativas publicava 65536). Para uma
+	 * contagem pequena, limitada por {@code maxAttempts}, faixa não rende nada além de erro.
+	 */
 	private static final String UPSERT_RETRY = """
 		insert into network_task_latency_buckets (node_id, metrics_hour, bucket_upper_ms, samples, retries)
-		values (?, ?, ?, 0, 1)
-		on duplicate key update retries = retries + 1
+		values (?, ?, ?, 0, ?)
+		on duplicate key update retries = retries + ?
 		""";
 
 	private static final String SUM_LATENCY = "select bucket_upper_ms, sum(samples) from network_task_latency_buckets "
@@ -136,9 +142,10 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 	}
 
 	@Override
-	public void addRetrySample(String nodeId, Instant at, long durationMs) {
+	public void addRetrySample(String nodeId, Instant at, long retries) {
+		int tentativas = (int) Math.max(0, retries);
 		jdbc.update(UPSERT_RETRY, nodeId, Timestamp.from(at.truncatedTo(java.time.temporal.ChronoUnit.HOURS)),
-			com.socialcoisa.rede.network.domain.TaskLatency.bucketOf(durationMs));
+			tentativas, tentativas, tentativas);
 	}
 
 	@Override
