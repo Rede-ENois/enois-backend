@@ -17,7 +17,7 @@ import com.socialcoisa.rede.feed.domain.FeedTab;
  * posts newer than {@code lastSeenAt} first (newest first), then the divider, then the rest in API
  * order.
  */
-record FeedResponse(List<PostView> items, String nextCursor, Instant lastSeenAt) {
+public record FeedResponse(List<PostView> items, String nextCursor, Instant lastSeenAt) {
 
 	static boolean carriesMarker(FeedTab tab) {
 		return tab == FeedTab.FOR_YOU;

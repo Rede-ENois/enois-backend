@@ -28,7 +28,6 @@ import com.socialcoisa.rede.feed.application.BulkDeletePostsCommand;
 import com.socialcoisa.rede.feed.application.CommentOnPostCommand;
 import com.socialcoisa.rede.feed.application.DeletePostCommand;
 import com.socialcoisa.rede.feed.application.EditPostCommand;
-import com.socialcoisa.rede.feed.application.GetFeedQuery;
 import com.socialcoisa.rede.feed.application.GetCommentsQuery;
 import com.socialcoisa.rede.feed.application.GetProfilePostsQuery;
 import com.socialcoisa.rede.feed.application.PostActionCommand;
@@ -94,7 +93,7 @@ class FeedController {
 	private final HoneypotGuard honeypots;
 	private final com.socialcoisa.rede.coin.application.CoinService coins;
 	private final com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository outboxEventRepository;
-	private final com.socialcoisa.rede.feed.application.port.out.FeedSeenMarkerRepository feedSeenMarkers;
+	private final ConsultaFeedHttp consultaFeed;
 	private final com.socialcoisa.rede.feed.application.port.in.VotePollUseCase votePoll;
 	private final com.socialcoisa.rede.feed.application.DeleteCommentService deleteComment;
 	/** Resposta do voto da enquete (PollView): o endpoint devolve o estado da enquete em JSON. */
@@ -117,7 +116,7 @@ class FeedController {
 			HoneypotGuard honeypots,
 			com.socialcoisa.rede.feed.application.port.out.OutboxEventRepository outboxEventRepository,
 			com.socialcoisa.rede.coin.application.CoinService coins,
-			com.socialcoisa.rede.feed.application.port.out.FeedSeenMarkerRepository feedSeenMarkers,
+			ConsultaFeedHttp consultaFeed,
 			com.socialcoisa.rede.feed.application.port.in.VotePollUseCase votePoll,
 			com.socialcoisa.rede.feed.application.DeleteCommentService deleteComment) {
 		this.coins = coins;
@@ -147,7 +146,7 @@ class FeedController {
 		this.mediaOwnershipValidator = mediaOwnershipValidator;
 		this.honeypots = honeypots;
 		this.outboxEventRepository = outboxEventRepository;
-		this.feedSeenMarkers = feedSeenMarkers;
+		this.consultaFeed = consultaFeed;
 		this.votePoll = votePoll;
 		this.deleteComment = deleteComment;
 	}
@@ -165,14 +164,7 @@ class FeedController {
 			@RequestParam(defaultValue = "FOR_YOU") FeedTab tab,
 			@RequestParam(required = false) Set<com.socialcoisa.rede.feed.domain.PostType> type,
 			@RequestParam(required = false) Boolean resolved) {
-		CurrentUser user = currentUserResolver.resolve(sessionToken);
-		Optional<Instant> before = tab == FeedTab.TRENDING ? Optional.empty() : cursorCodec.decode(cursor);
-		var page = getFeedUseCase.getFeed(new GetFeedQuery(user.id(), before, limit, tab,
-			type == null ? Set.of() : type, resolved, tab == FeedTab.TRENDING
-				? com.socialcoisa.rede.feed.application.TrendingCursor.decode(cursor) : null));
-		// "Voce esta em dia": only the first page carries the marker (see FeedResponse).
-		boolean withMarker = before.isEmpty() && FeedResponse.carriesMarker(tab);
-		return FeedResponse.of(page, withMarker ? feedSeenMarkers.lastSeenAt(user.id()).orElse(null) : null);
+		return consultaFeed.consultar(sessionToken, cursor, limit, tab, type, resolved);
 	}
 
 	/**

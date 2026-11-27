@@ -18,13 +18,15 @@ interface SpringDataNotificationJpaRepository extends JpaRepository<Notification
 	 * Page of the person's notifications. A null context keeps every kind; PROFESSIONAL keeps the
 	 * work kinds, SOCIAL the rest, and both keep the account-wide (shared) kinds.
 	 */
-	@Query("SELECT n FROM NotificationJpaEntity n WHERE n.userId = :userId AND (:before IS NULL OR n.createdAt < :before)"
+	@Query("SELECT n FROM NotificationJpaEntity n WHERE n.userId = :userId"
+		+ " AND (:before IS NULL OR n.createdAt < :before"
+		+ " OR (n.createdAt = :before AND :beforeId IS NOT NULL AND n.id < :beforeId))"
 		+ " AND (:context IS NULL OR n.kind IN " + NotificationContext.SHARED_KINDS_JPQL
 		+ " OR (:context = 'PROFESSIONAL' AND n.kind IN " + NotificationContext.PROFESSIONAL_KINDS_JPQL + ")"
 		+ " OR (:context = 'SOCIAL' AND n.kind NOT IN " + NotificationContext.PROFESSIONAL_KINDS_JPQL + "))"
-		+ " ORDER BY n.createdAt DESC")
+		+ " ORDER BY n.createdAt DESC, n.id DESC")
 	List<NotificationJpaEntity> findByUserId(@Param("userId") String userId, @Param("before") Instant before,
-			@Param("context") String context, Pageable pageable);
+			@Param("beforeId") String beforeId, @Param("context") String context, Pageable pageable);
 
 	/**
 	 * Unread count per (kind, actor, href) of the person, with the same context filter as

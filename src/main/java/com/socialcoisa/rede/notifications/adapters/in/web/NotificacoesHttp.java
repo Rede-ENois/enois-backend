@@ -1,0 +1,185 @@
+package com.socialcoisa.rede.notifications.adapters.in.web;
+
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+import org.springframework.http.ResponseEntity;
+import org.springframework.stereotype.Component;
+
+import com.socialcoisa.rede.corporate.application.CorporateProfileService;
+import com.socialcoisa.rede.corporate.domain.CorporateProfile;
+import com.socialcoisa.rede.idempotency.application.CommandResponse;
+import com.socialcoisa.rede.idempotency.application.IdempotencyApplicationService;
+import com.socialcoisa.rede.notifications.application.NotificationPlaces;
+import com.socialcoisa.rede.notifications.application.NotificationService;
+import com.socialcoisa.rede.notifications.domain.Notification;
+import com.socialcoisa.rede.notifications.domain.NotificationContext;
+import com.socialcoisa.rede.notifications.domain.NotificationModule;
+import com.socialcoisa.rede.notifications.domain.NotificationPlace;
+import com.socialcoisa.rede.profile.application.NameStyleView;
+import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
+import com.socialcoisa.rede.profile.domain.UserProfile;
+import com.socialcoisa.rede.shared.blocks.BlockedUsersReader;
+import com.socialcoisa.rede.shared.web.ApiException;
+import com.socialcoisa.rede.shared.web.CurrentUser;
+import com.socialcoisa.rede.shared.web.CurrentUserResolver;
+import com.socialcoisa.rede.shared.web.CursorCodec;
+import com.socialcoisa.rede.shared.web.PageResponse;
+import com.socialcoisa.rede.shared.web.StatusResponse;
+
+@Component
+public class NotificacoesHttp {
+
+	/** Teto de avisos por página: a lista carrega aos poucos, como o feed e as mensagens. */
+	private static final int MAX_PAGE_SIZE = 20;
+
+	private final IdempotencyApplicationService idempotency;
+	private final CurrentUserResolver currentUserResolver;
+	private final NotificationService notificationService;
+	private final CursorCodec cursorCodec;
+	private final UserProfileRepository userProfileRepository;
+	private final BlockedUsersReader blockedUsersReader;
+	private final CorporateProfileService corporateProfiles;
+	private final NotificationPlaces places;
+
+	NotificacoesHttp(IdempotencyApplicationService idempotency, CurrentUserResolver currentUserResolver,
+			NotificationService notificationService, CursorCodec cursorCodec,
+			UserProfileRepository userProfileRepository, BlockedUsersReader blockedUsersReader,
+			CorporateProfileService corporateProfiles, NotificationPlaces places) {
+		this.corporateProfiles = corporateProfiles;
+		this.places = places;
+		this.idempotency = idempotency;
+		this.currentUserResolver = currentUserResolver;
+		this.notificationService = notificationService;
+		this.cursorCodec = cursorCodec;
+		this.userProfileRepository = userProfileRepository;
+		this.blockedUsersReader = blockedUsersReader;
+	}
+
+	public PageResponse<NotificationView> notifications(String sessionToken, String cursor, int limit, String context) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		// Teto de página: sem ele, `limit` vinha do cliente sem limite nenhum e uma aba aberta
+		// pedia a lista inteira de uma vez. A lista carrega aos poucos, como o feed e as mensagens.
+		limit = Math.clamp(limit, 1, MAX_PAGE_SIZE);
+		var before = cursorCodec.decodePage(cursor).orElse(null);
+		// Bloqueio: notificacao de quem foi bloqueado (ou de quem bloqueou) nao aparece mais.
+		Set<String> hidden = blockedUsersReader.hiddenIdsFor(user.id().value());
+		// O cursor sai da pagina LIDA, antes do filtro de bloqueio: senao a pagina que perde itens
+		// para o filtro parecia a ultima e as notificacoes seguintes ficavam inalcancaveis.
+		List<Notification> page = notificationService.list(user.id().value(),
+			before == null ? null : before.instant(), before == null ? null : before.tieBreak(), parseContext(context), limit);
+		List<Notification> notifications = page.stream()
+			.filter(n -> n.actorId() == null || !hidden.contains(n.actorId()))
+			.toList();
+		Map<String, UserProfile> profiles = resolveActors(notifications);
+		Map<String, CorporateProfile> professionals = professionalActors(notifications);
+		Map<String, NotificationPlaces.Resolved> targets = places.resolve(
+			notifications.stream().map(Notification::href).collect(Collectors.toSet()));
+		var items = notifications.stream()
+			.map(n -> {
+				NotificationContext notificationContext = NotificationContext.of(n.kind());
+				// Aviso de trabalho mostra QUEM agiu pela identidade profissional (recrutador, contratante).
+				CorporateProfile pro = notificationContext == NotificationContext.PROFESSIONAL
+					&& n.actorId() != null ? professionals.get(n.actorId()) : null;
+				// Ator nulo (acolhida anônima em desabafo) não tem perfil a resolver; os mapas
+				// imutáveis recusam chave nula.
+				UserProfile p = n.actorId() == null ? null : profiles.get(n.actorId());
+				NotificationPlaces.Resolved target = targets.get(n.href());
+				return new NotificationView(n.id(), n.kind(), notificationContext.name(),
+					NotificationModule.of(n.kind()).name(), n.actorId(),
+					pro != null ? pro.name() : p != null ? p.name() : null,
+					pro != null ? pro.username() : p != null ? p.username() : null,
+					pro != null ? (pro.avatar() == null ? "" : pro.avatar()) : p != null ? p.avatar() : null,
+					pro != null ? "CORPORATE" : "SOCIAL",
+					pro == null && p != null ? NameStyleView.from(p) : null,
+					n.title(), n.body(), n.preview(),
+					n.createdAt() != null ? n.createdAt().toString() : null,
+					n.isRead(), n.href(), n.ctaLabel(), n.actorCount(), target.place(),
+					target.eventDate() != null ? target.eventDate().toString() : null);
+			})
+			.toList();
+		String nextCursor = null;
+		if (page.size() == limit) {
+			var last = page.getLast();
+			nextCursor = cursorCodec.encodePage(last.createdAt(), last.id());
+		}
+		return new PageResponse<>(items, nextCursor);
+	}
+
+	/**
+	 * Unread notifications per interface area, for the menu indicators: same session, context
+	 * filter and blocked-actor rule as the list. An area clears when its notifications are read.
+	 */
+	public NotificationService.UnreadSummary unreadSummary(String sessionToken, String context) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		return notificationService.unreadSummary(user.id().value(), parseContext(context),
+			blockedUsersReader.hiddenIdsFor(user.id().value()));
+	}
+
+	private Map<String, CorporateProfile> professionalActors(List<Notification> notifications) {
+		Set<String> actorIds = notifications.stream()
+			.filter(n -> NotificationContext.of(n.kind()) == NotificationContext.PROFESSIONAL)
+			.map(Notification::actorId)
+			.filter(Objects::nonNull)
+			.collect(Collectors.toSet());
+		return corporateProfiles.activeByUserIds(actorIds);
+	}
+
+	/** Blank keeps every context (older clients); otherwise SOCIAL or PROFESSIONAL. */
+	private static NotificationContext parseContext(String value) {
+		if (value == null || value.isBlank()) {
+			return null;
+		}
+		String normalized = value.trim().toUpperCase(java.util.Locale.ROOT);
+		if (!"SOCIAL".equals(normalized) && !"PROFESSIONAL".equals(normalized)) {
+			throw new ApiException(400, "INVALID_CONTEXT", "Contexto invalido: use SOCIAL ou PROFESSIONAL.");
+		}
+		return NotificationContext.valueOf(normalized);
+	}
+
+	private Map<String, UserProfile> resolveActors(List<Notification> notifications) {
+		Set<String> actorIds = notifications.stream()
+			.map(Notification::actorId)
+			.filter(Objects::nonNull)
+			.collect(Collectors.toSet());
+		if (actorIds.isEmpty()) return Map.of();
+		return userProfileRepository.findAllByIds(actorIds).stream()
+			.collect(Collectors.toMap(UserProfile::id, Function.identity()));
+	}
+
+	/**
+	 * {@code module} is the interface area of the kind ({@link NotificationModule}); {@code place} the
+	 * community or group it came from and {@code eventDate} ("YYYY-MM-DD") the day of the event it is
+	 * about, both resolved from the href and null when there is none.
+	 */
+	public record NotificationView(String id, String kind, String context, String module, String actorId, String actorName,
+			String actorUsername, String actorAvatar, String actorIdentity, NameStyleView actorStyle, String title,
+			String body, String preview, String createdAt, boolean read, String href, String ctaLabel, int actorCount,
+			NotificationPlace place, String eventDate) {
+	}
+
+	public ResponseEntity<String> read(String sessionToken, String idempotencyKey, String notificationId) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		String hash = idempotency.hash(Map.of("notificationId", notificationId));
+		return idempotency.execute(user.id(), "POST", "/api/notifications/{notificationId}/read", idempotencyKey, hash,
+			() -> {
+				notificationService.markRead(notificationId, user.id().value());
+				return new CommandResponse(200, new StatusResponse(notificationId, "READ"));
+			});
+	}
+
+	public ResponseEntity<String> readAll(String sessionToken, String idempotencyKey) {
+		CurrentUser user = currentUserResolver.resolve(sessionToken);
+		String hash = idempotency.hash(Map.of("userId", user.id().value()));
+		return idempotency.execute(user.id(), "POST", "/api/notifications/read-all", idempotencyKey, hash,
+			() -> {
+				notificationService.markAllRead(user.id().value());
+				return new CommandResponse(200, new StatusResponse(user.id().value(), "ALL_READ"));
+			});
+	}
+
+}

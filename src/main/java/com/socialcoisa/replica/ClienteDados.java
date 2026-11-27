@@ -48,6 +48,28 @@ final class ClienteDados implements AutoCloseable {
 		return consultar(atribuicao, atribuicao.dados().resolve("/internal/data/v1/session"), sessao, 2500);
 	}
 
+	HttpResponse<byte[]> consultarColecao(String caminho, String consulta, String sessao)
+			throws IOException, InterruptedException {
+		var atribuicao = contexto.atual();
+		var rota = atribuicao.dados().resolve("/internal/data/v1" + caminho + (consulta == null ? "" : "?" + consulta));
+		if (rota.getRawFragment() != null) {
+			throw new IllegalArgumentException("Consulta de dados invalida.");
+		}
+		return consultar(atribuicao, rota, sessao, 2500);
+	}
+
+	HttpResponse<byte[]> lerNotificacao(String id, String sessao, String chave)
+			throws IOException, InterruptedException {
+		var atribuicao = contexto.atual();
+		var rota = id == null ? atribuicao.dados().resolve("/internal/data/v1/notifications/read-all")
+			: org.springframework.web.util.UriComponentsBuilder.fromUri(atribuicao.dados())
+				.pathSegment("internal", "data", "v1", "notifications", "{id}", "read")
+				.encode().buildAndExpand(id).toUri();
+		var pedido = HttpRequest.newBuilder(rota).POST(HttpRequest.BodyPublishers.noBody());
+		cabecalho(pedido, "Idempotency-Key", chave);
+		return consultar(atribuicao, pedido, sessao, 3500);
+	}
+
 	HttpResponse<byte[]> publicar(byte[] corpo, String sessao, String chave) throws IOException, InterruptedException {
 		var atribuicao = contexto.atual();
 		var pedido = HttpRequest.newBuilder(atribuicao.dados().resolve("/internal/data/v1/posts"))

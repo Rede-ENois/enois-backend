@@ -139,6 +139,41 @@ class ApiReplicaController {
 		return indisponivel();
 	}
 
+	@GetMapping({"/feed", "/notifications", "/notifications/unread-summary"})
+	ResponseEntity<?> consultarColecao(@RequestHeader(value = "X-Session-Token", required = false) String token,
+			@CookieValue(value = SessionCookies.SESSION, required = false) String cookie,
+			HttpServletRequest requisicao) {
+		try {
+			return respostaPublica(dados.consultarColecao(requisicao.getServletPath(), requisicao.getQueryString(),
+				StringUtils.hasText(token) ? token : cookie));
+		} catch (InterruptedException falha) {
+			Thread.currentThread().interrupt();
+		} catch (IOException | IllegalArgumentException ignored) {
+			// A sessão e a leitura da coleção pertencem à autoridade de dados.
+		}
+		return indisponivel();
+	}
+
+	@PostMapping({"/notifications/{notificationId}/read", "/notifications/read-all"})
+	ResponseEntity<?> lerNotificacao(@PathVariable(required = false) String notificationId,
+			@RequestHeader(value = "X-Session-Token", required = false) String token,
+			@RequestHeader(value = "Idempotency-Key", required = false) String chave,
+			@RequestHeader(value = "X-CSRF-Protection", required = false) String csrf,
+			@CookieValue(value = SessionCookies.SESSION, required = false) String cookie,
+			@CookieValue(value = SessionCookies.REFRESH, required = false) String refresh) {
+		if (csrfRecusado(token, cookie, refresh, csrf)) {
+			return erroCsrf();
+		}
+		try {
+			return respostaPublica(dados.lerNotificacao(notificationId, StringUtils.hasText(token) ? token : cookie, chave));
+		} catch (InterruptedException falha) {
+			Thread.currentThread().interrupt();
+		} catch (IOException | IllegalArgumentException ignored) {
+			// A autoridade de dados verifica o destinatário e a chave de repetição.
+		}
+		return indisponivel();
+	}
+
 	private static ResponseEntity<?> respostaPublica(HttpResponse<byte[]> resposta) {
 		return respostaPublica(resposta, false);
 	}

@@ -40,7 +40,8 @@ class ReplicaApplicationTests {
 				.containsExactlyInAnyOrder("/health", "/version", "/readyz", "/feed/posts/{postId}", "/feed/posts",
 					"/auth/me", "/auth/login", "/auth/logout", "/auth/refresh", "/auth/2fa/verify",
 					"/auth/config", "/auth/signup-challenge", "/auth/signup", "/auth/email/verify",
-					"/auth/email/resend", "/error", "/error");
+					"/auth/email/resend", "/feed", "/notifications", "/notifications/unread-summary",
+					"/notifications/{notificationId}/read", "/notifications/read-all", "/error", "/error");
 
 			int porta = ((ServletWebServerApplicationContext) contexto).getWebServer().getPort();
 			var json = JsonMapper.builder().build();

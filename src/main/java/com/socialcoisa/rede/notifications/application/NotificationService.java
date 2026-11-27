@@ -178,7 +178,12 @@ public class NotificationService {
 	/** Notifications of one interface (plus the account-wide ones); a null context keeps all. */
 	public List<Notification> list(String userId, java.time.Instant before,
 			com.socialcoisa.rede.notifications.domain.NotificationContext context, int limit) {
-		return repository.findByUserId(userId, before, context, limit);
+		return list(userId, before, null, context, limit);
+	}
+
+	public List<Notification> list(String userId, java.time.Instant before, String beforeId,
+			com.socialcoisa.rede.notifications.domain.NotificationContext context, int limit) {
+		return repository.findByUserId(userId, before, beforeId, context, limit);
 	}
 
 	/**

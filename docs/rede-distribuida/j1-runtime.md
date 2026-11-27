@@ -49,6 +49,15 @@ preserva a chave de idempotência e envia a confirmação por SMTP. O ambiente
 distribuído habilita o cadastro depois de configurar o remetente. A réplica
 devolve os cookies de sessão emitidos na confirmação do e-mail.
 
+`GET /feed` encaminha os filtros e o cursor para a autoridade. Durante a
+transição, o serviço Java reutiliza a consulta de feed do backend.
+`GET /notifications` e `GET /notifications/unread-summary` usam a sessão
+para resolver destinatário, contexto e bloqueios. A paginação desempata
+por identificador quando as datas coincidem e aceita os cursores antigos.
+As rotas `POST /notifications/{notificationId}/read` e
+`POST /notifications/read-all` preservam a chave de idempotência e exigem
+`X-CSRF-Protection: 1` nas chamadas autenticadas por cookie.
+
 ## Serviço Java de dados
 
 Para o aceite em staging, veja [MariaDB para o serviço de dados no J6](j6-mariadb.md).

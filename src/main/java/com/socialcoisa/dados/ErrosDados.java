@@ -12,7 +12,7 @@ import com.socialcoisa.rede.shared.web.ErrorResponse;
 
 import io.github.resilience4j.ratelimiter.RequestNotPermitted;
 
-@RestControllerAdvice(assignableTypes = {DadosController.class, SessoesDadosController.class})
+@RestControllerAdvice(assignableTypes = {DadosController.class, SessoesDadosController.class, NavegadorDadosController.class})
 class ErrosDados {
 
 	@ExceptionHandler(ApiException.class)

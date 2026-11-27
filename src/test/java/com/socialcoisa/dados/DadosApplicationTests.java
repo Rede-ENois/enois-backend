@@ -86,7 +86,10 @@ class DadosApplicationTests {
 					"/internal/data/v1/browser/{operacao:login|refresh|logout|verify}",
 					"/internal/data/v1/browser/config", "/internal/data/v1/browser/signup-challenge",
 					"/internal/data/v1/browser/signup", "/internal/data/v1/browser/email/verify",
-					"/internal/data/v1/browser/email/resend", "/error", "/error");
+					"/internal/data/v1/browser/email/resend", "/internal/data/v1/feed",
+					"/internal/data/v1/notifications", "/internal/data/v1/notifications/unread-summary",
+					"/internal/data/v1/notifications/{notificationId}/read", "/internal/data/v1/notifications/read-all",
+					"/error", "/error");
 
 			long agora = System.currentTimeMillis();
 			var grant = grant(CHAVE, "enois-backend", "data", 1, agora + 10000);
@@ -96,6 +99,13 @@ class DadosApplicationTests {
 			assertThat(consultar(cliente, porta, "/internal/data/v1/ready", null).statusCode()).isEqualTo(401);
 			assertThat(consultar(cliente, porta, "/internal/data/v1/browser/signup-challenge", null).statusCode())
 				.isEqualTo(401);
+			for (String caminho : new String[]{"/internal/data/v1/feed", "/internal/data/v1/notifications",
+					"/internal/data/v1/notifications/unread-summary"}) {
+				assertThat(consultar(cliente, porta, caminho, null).statusCode()).isEqualTo(401);
+				var semSessao = consultar(cliente, porta, caminho, grant);
+				assertThat(semSessao.statusCode()).isEqualTo(401);
+				assertThat(semSessao.headers().firstValue("X-Enois-Data-Protocol")).contains("1");
+			}
 			for (String recusado : new String[] {
 					grant(CHAVE, "outro-app", "data", 1, agora + 10000),
 					grant(CHAVE, "enois-backend", "tasks", 1, agora + 10000),

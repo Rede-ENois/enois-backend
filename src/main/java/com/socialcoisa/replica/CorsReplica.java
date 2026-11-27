@@ -28,14 +28,16 @@ final class CorsReplica implements WebMvcConfigurer {
 	@Override
 	public void addCorsMappings(CorsRegistry registry) {
 		for (String rota : new String[] {"/feed/posts", "/auth/login", "/auth/refresh", "/auth/logout", "/auth/2fa/verify",
-				"/auth/signup", "/auth/email/verify", "/auth/email/resend"}) {
+				"/auth/signup", "/auth/email/verify", "/auth/email/resend", "/notifications/read-all",
+				"/notifications/*/read"}) {
 			registry.addMapping(rota).allowedOrigins(origens)
 				.allowedMethods("POST", "OPTIONS")
 				.allowedHeaders("Content-Type", "Idempotency-Key", "X-CSRF-Protection",
 					"X-Session-Token", "X-Client-Origin", "X-Device-Fingerprint")
 				.allowCredentials(true);
 		}
-		for (String rota : new String[] {"/feed/posts/*", "/auth/me", "/auth/config", "/auth/signup-challenge"}) {
+		for (String rota : new String[] {"/feed", "/feed/posts/*", "/auth/me", "/auth/config", "/auth/signup-challenge",
+				"/notifications", "/notifications/unread-summary"}) {
 			registry.addMapping(rota).allowedOrigins(origens)
 				.allowedMethods("GET", "HEAD", "OPTIONS")
 				.allowedHeaders("Accept", "Content-Type", "X-Session-Token", "X-Client-Origin", "X-Device-Fingerprint")

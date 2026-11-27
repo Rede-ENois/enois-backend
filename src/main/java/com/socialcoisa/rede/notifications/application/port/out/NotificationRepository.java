@@ -12,7 +12,12 @@ public interface NotificationRepository {
 	Optional<Notification> findById(String id);
 
 	/** A null context keeps every kind. */
-	List<Notification> findByUserId(String userId, java.time.Instant before,
+	default List<Notification> findByUserId(String userId, java.time.Instant before,
+			com.socialcoisa.rede.notifications.domain.NotificationContext context, int limit) {
+		return findByUserId(userId, before, null, context, limit);
+	}
+
+	List<Notification> findByUserId(String userId, java.time.Instant before, String beforeId,
 			com.socialcoisa.rede.notifications.domain.NotificationContext context, int limit);
 
 	/** Unread notifications per kind, actor and href (a null context keeps every kind). */

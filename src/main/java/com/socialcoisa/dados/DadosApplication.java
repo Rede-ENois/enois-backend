@@ -33,7 +33,7 @@ import com.socialcoisa.rede.shared.outbox.AgendamentoOutboxDados;
 		RedeApplication.class, Filter.class, EmoteCatalogScheduler.class, ExternalJobRefreshScheduler.class
 	})
 })
-@Import({CredencialDados.class, DadosController.class, SessoesDadosController.class, ErrosDados.class,
+@Import({CredencialDados.class, DadosController.class, SessoesDadosController.class, NavegadorDadosController.class, ErrosDados.class,
 	AgendamentoOutboxDados.class})
 public class DadosApplication {
 
