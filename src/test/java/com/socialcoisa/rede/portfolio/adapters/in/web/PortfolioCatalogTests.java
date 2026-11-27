@@ -151,6 +151,22 @@ class PortfolioCatalogTests {
 	}
 
 	@Test
+	void tituloVemDaVersaoNoArENaoDoRascunho() throws Exception {
+		var owner = account("pf_lista_rascunho");
+		publishedWith(owner, "<h1>No ar</h1>");
+		// O dono continua editando: o rascunho é privado e o público segue na versão 1.
+		saveDraft(owner, "<h1>Rascunho</h1>");
+
+		JsonNode item = itemOf(list(null, 50), usernameOf(owner));
+		assertThat(item).isNotNull();
+		assertThat(item.path("version").asInt()).isEqualTo(1);
+		assertThat(item.path("title").asText()).isEqualTo("No ar");
+		mockMvc.perform(get("/portfolio/{username}", usernameOf(owner)))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.html").value("<h1>No ar</h1>"));
+	}
+
+	@Test
 	void republicarAtualizaATituloEOContadorDeVersao() throws Exception {
 		var owner = account("pf_lista_versao");
 		publishedWith(owner, "<h1>Primeira versao</h1>");
