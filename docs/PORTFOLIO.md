@@ -31,6 +31,7 @@ peças; o editor e o render público da página no front são fases seguintes.
 | Método | Rota | O que faz |
 | --- | --- | --- |
 | `GET /portfolio/{username}` | leitura pública: última publicação (versão, HTML, peças) |
+| `GET /portfolio` | lista pública das vitrines no ar (`limit` 1–50, `cursor`; sem HTML nem peças) |
 | `GET /portfolio` | lista pública das vitrines no ar (`limit`, `cursor`; sem HTML nem peças) |
 | `GET /me/portfolio` | o que o dono edita: rascunho, peças e versão publicada |
 | `PUT /me/portfolio/draft` | `{ html }` — grava o rascunho da página (sanitizado) |
@@ -56,6 +57,7 @@ Erros: `400 PORTFOLIO_BLOCK_TYPE_REQUIRED`, `400 PORTFOLIO_BLOCK_TITLE_TOO_LONG`
 | Item | Limite |
 | --- | --- |
 | HTML da página | 200.000 caracteres (o mesmo do post de página) |
+| Lista de vitrines | 1–50 por página (padrão 20) |
 | Peças por portfólio | 30 |
 | Título da peça | 160 |
 | Texto da peça | 4.000 |
@@ -99,8 +101,9 @@ linhas quando alguém publicasse entre duas páginas. `limit` vai de 1 a 50 (pad
 ## Fases seguintes (não implementadas aqui)
 
 1. Render público da página no front (`patterns/html-frame`, quadro isolado) e editor
-   (`patterns/editor`), como views do design system.
-2. Seção no Explorar e card no feed.
+   (`patterns/editor`), como views do design system — **entregue** (Rede-ENois/enois-frontend#1209).
+2. Seção no Explorar e card do feed — **entregue** (Rede-ENois/enois-frontend#1209), com a lista
+   pública de `GET /portfolio` acima.
 3. Exportação em PDF — **decidida em 2026-11-26: feita no navegador de quem abre a vitrine**
    (imprimir/salvar como PDF), sem render no servidor. O HTML do autor já é exibido em quadro
    isolado sem scripts; gerar o arquivo no cliente não acrescenta processo novo no backend nem
