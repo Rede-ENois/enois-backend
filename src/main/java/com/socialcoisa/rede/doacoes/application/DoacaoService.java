@@ -25,6 +25,8 @@ import com.socialcoisa.rede.doacoes.domain.Doacao;
 import com.socialcoisa.rede.doacoes.domain.DoacaoStatus;
 import com.socialcoisa.rede.doacoes.domain.EndToEndId;
 import com.socialcoisa.rede.doacoes.domain.PixStatement;
+import com.socialcoisa.rede.moderation.domain.UserWarning;
+import com.socialcoisa.rede.profile.application.port.out.UserProfileRepository;
 import com.socialcoisa.rede.shared.web.ApiException;
 
 /**
@@ -44,14 +46,16 @@ public class DoacaoService {
 	private static final ZoneId BR = ZoneId.of("America/Sao_Paulo");
 
 	private final DoacaoRepository doacoes;
+	private final UserProfileRepository profiles;
 	private final BrCode brCode;
 	private final Clock clock;
 
-	public DoacaoService(DoacaoRepository doacoes, Clock clock,
+	public DoacaoService(DoacaoRepository doacoes, UserProfileRepository profiles, Clock clock,
 			@Value("${rede.doacoes.pix.key-digits}") String chave,
 			@Value("${rede.doacoes.pix.name:Apoie o Enois}") String nome,
 			@Value("${rede.doacoes.pix.city:SAO PAULO}") String cidade) {
 		this.doacoes = doacoes;
+		this.profiles = profiles;
 		this.clock = clock;
 		this.brCode = new BrCode(new BrCode.Pix(chave, nome, cidade));
 	}
@@ -261,6 +265,43 @@ public class DoacaoService {
 
 	public boolean isApoiador(String userId) {
 		return userId != null && doacoes.confirmedUserIds(Set.of(userId)).contains(userId);
+	}
+
+	/**
+	 * Um administrador registra o selo à mão. Existe para o caso em que o dinheiro chegou mas o
+	 * sistema não reconheceu o comprovante: sem isto a pessoa ficaria sem o selo que o gesto dela
+	 * merece.
+	 *
+	 * <p>Regras, todas para o selo continuar significando algo:</p>
+	 * <ul>
+	 * <li>só há <b>um</b> selo registrado por pessoa — pedir o segundo responde {@code 409}, então a
+	 * tela mostra "já é apoiador" em vez de acumular cliques;</li>
+	 * <li>quem tem doação confirmada de verdade não precisa dele ({@code 409}: já é apoiador);</li>
+	 * <li>a conta precisa existir (404 para perfil inexistente);</li>
+	 * <li>a linha nasce com valor zero e origem {@code MANUAL} — não soma em nenhum total de
+	 * dinheiro;</li>
+	 * <li>o motivo é obrigatório e o nome de quem registrou fica na linha.</li>
+	 * </ul>
+	 */
+	@Transactional
+	public Doacao grantSeal(String adminId, String username, String reason) {
+		String usuario = username == null ? "" : username.trim();
+		String motivo = UserWarning.requireReason(reason, "selo de apoiador");
+		String userId = profiles.findByUsername(usuario)
+			.orElseThrow(() -> new ApiException(404, "USER_NOT_FOUND", "Usuário não encontrado."))
+			.id();
+		Optional<Doacao> confirmada = doacoes.byUser(userId).stream()
+			.filter(d -> d.status() == DoacaoStatus.CONFIRMADA)
+			.findFirst();
+		if (confirmada.isPresent()) {
+			if (confirmada.get().origem() == DoacaoStatus.Origem.MANUAL) {
+				throw new ApiException(409, "SUPPORTER_SEAL_ALREADY_GRANTED",
+					"O selo de apoiador desta conta já foi registrado à mão.");
+			}
+			throw new ApiException(409, "SUPPORTER_ALREADY_CONFIRMED",
+				"Esta conta já é apoiadora por doação confirmada; não há o que registrar à mão.");
+		}
+		return doacoes.save(Doacao.manualSeal(userId, clock.instant(), adminId));
 	}
 
 	/** O estado do selo para a tela da pessoa: apoiador e quantas doações confirmadas. */
