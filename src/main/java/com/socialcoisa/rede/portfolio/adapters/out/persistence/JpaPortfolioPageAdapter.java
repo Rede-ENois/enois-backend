@@ -1,7 +1,10 @@
 package com.socialcoisa.rede.portfolio.adapters.out.persistence;
 
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
 
 import com.socialcoisa.rede.portfolio.application.port.out.PortfolioPageRepository;
@@ -29,5 +32,12 @@ class JpaPortfolioPageAdapter implements PortfolioPageRepository {
 	@Override
 	public PortfolioPage save(PortfolioPage page) {
 		return jpaRepository.save(PortfolioPageJpaEntity.fromDomain(page)).toDomain();
+	}
+
+	@Override
+	public List<PortfolioPage> findPublished(Instant before, String beforeId, int limit) {
+		return jpaRepository.findPublished(before, beforeId, PageRequest.of(0, Math.max(1, limit))).stream()
+			.map(PortfolioPageJpaEntity::toDomain)
+			.toList();
 	}
 }
