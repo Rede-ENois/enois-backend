@@ -68,9 +68,14 @@ class AdminNetworkTaskController {
 	 * região evacuada e ainda não passou pela rodada de drenagem regional. Sem ele o admin declara a
 	 * evacuação e não vê que havia trabalho na mão da região até o scheduler rodar.
 	 */
+	/**
+	 * {@code retried} é quantas tarefas voltaram à fila e ainda estão abertas, esperando a próxima
+	 * tentativa (brief §8.2, "retentativas"). É aditivo: o total de {@code pending} não diz quantas
+	 * dele já falharam uma vez, e é essa a diferença entre fila normal e fila doente.
+	 */
 	record OverviewView(String mode, long pending, long dispatched, long done, long failed, long dead,
 			long cancelled, long awaitingDrain, long awaitingEvacuation,
-			java.util.Map<String, java.util.Map<String, Long>> deadByQueue) {
+			java.util.Map<String, java.util.Map<String, Long>> deadByQueue, long retried) {
 	}
 
 	@GetMapping
@@ -100,7 +105,8 @@ class AdminNetworkTaskController {
 			tasks.countByStatus(TaskStatus.FAILED), tasks.countByStatus(TaskStatus.DEAD),
 			tasks.countByStatus(TaskStatus.CANCELLED), tasks.countOnNonOperatingNodes(),
 			tasks.countOnEvacuatedRegions(),
-			deadByQueue(tasks.queues(TaskStatus.DEAD, TaskStatus.FAILED, TaskStatus.CANCELLED)));
+			deadByQueue(tasks.queues(TaskStatus.DEAD, TaskStatus.FAILED, TaskStatus.CANCELLED)),
+			tasks.countRetried());
 	}
 
 	/**

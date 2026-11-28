@@ -396,7 +396,11 @@ public class MonitoringService {
 
 		refreshCounts();
 		ResourceView resources = resources();
+		// Não há piso a inventar: cada ponto da série é o percentil do próprio minuto, e minuto sem
+		// requisição sai 0 (o contrato antigo do campo, e o front lê 0 como "sem dado"). O que faltava
+		// era o tamanho da amostra: p95 sobre 3 requisições não se lê como p95 sobre 3 mil.
 		return new OverviewView(clock.instant().toString(),
+			latencySamples.size(),
 			ManagementFactory.getRuntimeMXBean().getUptime() / 1000,
 			last.requests(), last.errors4xx(), last.errors5xx(), errorRate, p95(latencySamples),
 			dropped.get(), series, levelCounts, typeCounts, topRoutes, recentEvents(100),
@@ -760,14 +764,26 @@ public class MonitoringService {
 		return values == null ? 0 : percentile(new ArrayList<>(values), 0.99);
 	}
 
+	/**
+	 * Percentil (<b>nearest-rank</b>) de uma lista de durações, em ms: a menor posição (1-indexada)
+	 * que já cobre a fração pedida.
+	 *
+	 * <p>O cálculo está certo e <b>medido</b>: para todo n de 1 a 2000 (o teto da janela por minuto) e
+	 * p em 0,50/0,95/0,99, {@code ceil(n * p)} é exato em {@code double} — nenhum produto erra por
+	 * representação nessa faixa, e a folga de {@code 1e-9} não move posição nenhuma. Lista vazia
+	 * devolve 0, que é "sem amostra" e não "0 ms medido"; quem diz o tamanho da amostra é o
+	 * {@code latencySamplesInWindow} do {@link OverviewView}.</p>
+	 */
 	private static long percentile(List<Long> values, double percentile) {
 		if (values == null || values.isEmpty()) {
 			return 0;
 		}
 		List<Long> copy = new ArrayList<>(values);
 		copy.sort(Long::compareTo);
-		int index = Math.min(copy.size() - 1, (int) Math.ceil(copy.size() * percentile) - 1);
-		return copy.get(Math.max(0, index));
+		// 1-indexado: a menor posição que já cobre a fração pedida. A folga de 1e-9 é defensiva (não
+		// há erro de representação nessa faixa, medido), e não move posição real.
+		int position = (int) Math.ceil(copy.size() * percentile - 1e-9);
+		return copy.get(Math.min(copy.size() - 1, Math.max(0, position - 1)));
 	}
 
 	private static long max(List<Long> values) {
@@ -887,7 +903,12 @@ public class MonitoringService {
 			double cgroupCpuPercent, DbPoolView dbPool) {
 	}
 
-	public record OverviewView(String generatedAt, long uptimeSeconds, long requestsLastMinute,
+	/**
+	 * {@code latencySamplesInWindow} é quantas requisições entraram no p50/p95/p99 acima (janela de
+	 * 5 minutos). É aditivo e existe para o p95 não ser lido como se viesse de milhares de amostras
+	 * quando veio de três — a §8.2 pede p95/p99 de requisição, e o número não diz nada sozinho.
+	 */
+	public record OverviewView(String generatedAt, long latencySamplesInWindow, long uptimeSeconds, long requestsLastMinute,
 			long errors4xxLastMinute, long errors5xxLastMinute, double errorRate, long p95Ms, long droppedEvents,
 			List<MinutePoint> series, List<CountView> levels24h, List<CountView> types24h,
 			List<CountView> topRoutes, List<EventView> recent, JvmView jvm, double requestsPerSecond,

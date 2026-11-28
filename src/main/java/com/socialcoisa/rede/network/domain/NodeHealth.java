@@ -35,6 +35,87 @@ public record NodeHealth(NodeHealth.State host, NodeHealth.State runtime, NodeHe
 	}
 
 	/**
+	 * As quatro dimensões, na ordem do brief. Toda dimensão tem o seu estado no quadro — o painel
+	 * não escolhe um "verde" resumido, porque é justamente o resumo que escondia o caso.
+	 */
+	public enum Dimension {
+		HOST, RUNTIME, APPLICATION, NETWORK;
+
+		public State of(NodeHealth health) {
+			return switch (this) {
+				case HOST -> health.host();
+				case RUNTIME -> health.runtime();
+				case APPLICATION -> health.application();
+				case NETWORK -> health.network();
+			};
+		}
+	}
+
+	/**
+	 * O alerta que a saúde deste nó gera, ou {@code null} quando não há o que avisar (brief §8.8).
+	 *
+	 * <p>Um alerta por dimensão em estado ruim, e a <b>ordem é a da urgência</b>: o que impede a
+	 * máquina de servir (sem heartbeat, suspensa, em quarentena) vem antes do que a faz servir pior
+	 * (sem perfil, falhas seguidas, sobrecarga, atraso). O código é verificável pela máquina
+	 * ({@code NODE_SILENT}, {@code NODE_SATURATED}) e a mensagem é para o olho do operador — os
+	 * mesmos três sinais já usados pelo modo {@code DEGRADED}, para o painel e o modo não darem dois
+	 * nomes ao mesmo fato.</p>
+	 *
+	 * <p>{@code host} falho não gera alerta de aplicação nem de rede: sem heartbeat não há medida
+	 * nova, e somar "não responde" com "não participa" contaria o mesmo fato duas vezes. A falta do
+	 * heartbeat <b>é</b> a explicação das outras duas.</p>
+	 *
+	 * @param behindAggregates agregados do nó em versão anterior à da origem
+	 */
+	public static Alert alert(NodeHealth health, NetworkNode node, Instant now, long behindAggregates) {
+		if (health.host() == State.FAILING) {
+			return new Alert(Dimension.HOST, "NODE_SILENT", "o nó não manda heartbeat dentro da janela de "
+				+ ALIVE_WINDOW.toSeconds() + " s");
+		}
+		if (node.status() == NodeStatus.SUSPENDED || node.status() == NodeStatus.REVOKED) {
+			return new Alert(Dimension.NETWORK, "NODE_" + node.status().name(),
+				"a participação foi encerrada por decisão administrativa (" + node.status().name() + ")");
+		}
+		if (node.quarantined(now)) {
+			return new Alert(Dimension.NETWORK, "NODE_QUARANTINED",
+				"removido do balanceamento até " + node.quarantinedUntil() + ": " + node.quarantineReason());
+		}
+		if (node.profiles().isEmpty()) {
+			return new Alert(Dimension.APPLICATION, "NODE_NO_WORK",
+				"sem perfil: está de pé e não pode executar nenhum tipo de trabalho");
+		}
+		if (node.failing()) {
+			return new Alert(Dimension.APPLICATION, "NODE_FAILING",
+				node.consecutiveFailures() + " falhas seguidas — acima do limite de " + NetworkNode.FAILURE_STREAK_LIMIT);
+		}
+		if (behindAggregates > 0) {
+			return new Alert(Dimension.APPLICATION, "NODE_BEHIND",
+				behindAggregates + " agregado(s) em versão anterior à da origem");
+		}
+		// Carga antes de vaga: um nó em 92% com uma vaga declarada é sobrecarga, e chamá-lo de "cheio"
+		// esconderia o número que importa — o teto é promessa, a CPU medida é o que está acontecendo.
+		// A mesma ordem do modo da rede (quem está saturado não promete vaga).
+		if (node.saturated()) {
+			return new Alert(Dimension.NETWORK, "NODE_SATURATED",
+				"CPU observada em " + node.observedCpuPercent() + "%, acima do limiar de "
+					+ NetworkNode.SATURATED_CPU_PERCENT + "%");
+		}
+		if (node.memoryExhausted()) {
+			return new Alert(Dimension.NETWORK, "NODE_MEMORY_FULL", "memória observada em " + node.observedMemoryMb()
+				+ " MiB, no teto de " + node.declaredMemoryMb() + " MiB que o participante cedeu");
+		}
+		if (!node.hasCapacity()) {
+			return new Alert(Dimension.NETWORK, "NODE_FULL",
+				node.runningTasks() + " tarefa(s) rodando com teto de " + node.concurrencyLimit());
+		}
+		return null;
+	}
+
+	/** Um aviso do painel (§8.8): dimensão, código estável e o motivo legível. */
+	public record Alert(Dimension dimension, String code, String reason) {
+	}
+
+	/**
 	 * Janela de "vivo" — 180 s, a mesma do scheduler, do painel e da série. Um segundo corte faria o
 	 * nó estar vivo numa dimensão e morto na outra no mesmo quadro.
 	 */
@@ -95,7 +176,8 @@ public record NodeHealth(NodeHealth.State host, NodeHealth.State runtime, NodeHe
 	 * sem perfil ou sem heartbeat são {@code FAILING}.</p>
 	 */
 	static State network(NetworkNode node, Instant now) {
-		if (!node.alive(now, ALIVE_WINDOW) || !node.canOperate() || node.quarantined(now)) {
+		if (!node.alive(now, ALIVE_WINDOW) || !node.canOperate() || node.quarantined(now)
+				|| node.status() == NodeStatus.SUSPENDED || node.status() == NodeStatus.REVOKED) {
 			return State.FAILING;
 		}
 		return node.saturated() || !node.hasCapacity() ? State.DEGRADED : State.OK;

@@ -58,7 +58,40 @@ public record NetworkNode(String id, String displayName, String ownerUserId, Nod
 		Integer observedRunningTasks, Integer observedLatencyMs, Long observedDiskFreeMb, Long observedDiskTotalMb,
 		Double observedDiskIops, Double observedDiskLatencyMs, Long observedContentUsedMb, Long observedBytesInMb,
 		Long observedBytesOutMb, int consecutiveFailures, Instant quarantinedUntil, String quarantineReason,
-		BigDecimal observedTemperatureC) {
+		BigDecimal observedTemperatureC, java.util.List<String> executorTaskTypes) {
+
+	/**
+	 * O mesmo nó sem a declaração de capacidade do executor (runtime anterior à V390). Nulo é "não
+	 * declarou" — e o despacho trata isso como "vale a permissão do perfil", nunca como "consegue
+	 * nada": um nó que ainda não subiu depois da atualização não pode sair do balanceamento.
+	 */
+	public NetworkNode(String id, String displayName, String ownerUserId, NodeStatus status,
+			Set<NodeProfile> profiles, String region, String country, String runtimeVersion, Instant lastSeenAt,
+			int declaredCpuCores, int declaredMemoryMb, int declaredDiskMb, int declaredBandwidthMbps,
+			Double observedCpuPercent, Integer observedMemoryMb, Integer observedMemoryAvailableMb,
+			Integer observedRunningTasks, Integer observedLatencyMs, Long observedDiskFreeMb, Long observedDiskTotalMb,
+			Double observedDiskIops, Double observedDiskLatencyMs, Long observedContentUsedMb, Long observedBytesInMb,
+			Long observedBytesOutMb, int consecutiveFailures, Instant quarantinedUntil, String quarantineReason,
+			BigDecimal observedTemperatureC) {
+		this(id, displayName, ownerUserId, status, profiles, region, country, runtimeVersion, lastSeenAt,
+			declaredCpuCores, declaredMemoryMb, declaredDiskMb, declaredBandwidthMbps, observedCpuPercent,
+			observedMemoryMb, observedMemoryAvailableMb, observedRunningTasks, observedLatencyMs, observedDiskFreeMb,
+			observedDiskTotalMb, observedDiskIops, observedDiskLatencyMs, observedContentUsedMb, observedBytesInMb,
+			observedBytesOutMb, consecutiveFailures, quarantinedUntil, quarantineReason, observedTemperatureC, null);
+	}
+
+	/**
+	 * O nó consegue executar este tipo <b>agora</b>? A permissão é do perfil ({@link #accepts}); a
+	 * capacidade é a que o nó declarou (brief §8.2, "Health checks").
+	 *
+	 * <p>Não declarada ({@code null}) vale a permissão: runtime anterior à V390 não sabia responder,
+	 * e tirar o nó do balanceamento por isso seria transformar falta de informação em falta de
+	 * máquina. Declarada <b>vazia</b> é o nó dizendo "nenhum tipo" — respeitado.</p>
+	 */
+	public boolean able(String taskType) {
+		return executorTaskTypes == null
+			|| executorTaskTypes.stream().anyMatch(tipo -> tipo != null && tipo.equals(taskType));
+	}
 
 	/**
 	 * Mesmo nó sem o tráfego medido (runtime anterior à V345): os dois contadores ficam nulos, que

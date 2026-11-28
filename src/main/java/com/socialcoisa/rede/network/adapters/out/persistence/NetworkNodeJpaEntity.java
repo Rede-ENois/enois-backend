@@ -35,6 +35,13 @@ class NetworkNodeJpaEntity {
 	@Column(nullable = false, length = 255)
 	private String profiles;
 
+	/**
+	 * O que o nó declarou conseguir executar (V390), em JSON array. {@code null} = não declarou
+	 * (runtime anterior); lista vazia não é nula, e o despacho respeita as duas de forma diferente.
+	 */
+	@Column(name = "executor_task_types", columnDefinition = "text")
+	private String executorTaskTypes;
+
 	@Column(name = "declared_cpu_cores", nullable = false)
 	private int declaredCpuCores;
 
@@ -183,7 +190,26 @@ class NetworkNodeJpaEntity {
 			observedMemoryAvailableMb, observedRunningTasks, observedLatencyMs, observedDiskFreeMb,
 			observedDiskTotalMb, observedDiskIops, observedDiskLatencyMs, observedContentUsedMb,
 			observedBytesInMb, observedBytesOutMb, consecutiveFailures, quarantinedUntil, quarantineReason,
-			observedTemperatureC);
+			observedTemperatureC, declaramExecutaveis(executorTaskTypes));
+	}
+
+	/**
+	 * O JSON array da V390 como lista. {@code null} (nunca declarou) continua {@code null}: lista
+	 * vazia e "não declarou" têm significados diferentes no despacho, e `List.of()` apagaria a
+	 * diferença.
+	 */
+	private static java.util.List<String> declaramExecutaveis(String json) {
+		if (json == null || json.isBlank()) {
+			return null;
+		}
+		String corpo = json.trim();
+		if (corpo.startsWith("[") && corpo.endsWith("]")) {
+			corpo = corpo.substring(1, corpo.length() - 1);
+		}
+		return java.util.Arrays.stream(corpo.split(","))
+			.map(item -> item.trim().replaceAll("^\"|\"$", ""))
+			.filter(item -> !item.isEmpty())
+			.toList();
 	}
 
 	String status() {

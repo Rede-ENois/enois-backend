@@ -51,7 +51,7 @@ do mantenedor, não efeito colateral de código.
 |---|---|---|
 | §4.1 | captura única por binlog, posição persistente | **inexistente** (ver §2) |
 | §4.3 | aplicação idempotente de eventos de tabela nas réplicas com checkpoint transacional | **inexistente**. O que há é o cursor do change feed de conteúdo, que avança só depois de o corpo estar em disco no nó |
-| §8 | observabilidade distribuída "de todos os nós" | **parcial**: heartbeat e saúde por nó existem (`degraded`, latência EWMA, sequência de falhas, quarentena), e o painel agrega; o que o heartbeat carrega do host cresceu (CPU, memória em uso e disponível, disco, tráfego acumulado das interfaces, desde o ciclo 161 — doc 20 §3 e §6; o runtime também mede e envia swap e pressão PSI, mas o Control Plane ainda não os consome); falta IOPS, latência de disco, temperatura, p95/p99 e DLQ |
+| §8 | observabilidade distribuída "de todos os nós" | **parcial**: heartbeat e saúde por nó existem (`degraded`, latência EWMA, sequência de falhas, quarentena), e o painel agrega; o que o heartbeat carrega do host cresceu (CPU, memória em uso e disponível, disco, tráfego acumulado das interfaces, desde o ciclo 161 — doc 20 §3 e §6; o runtime também mede e envia swap e pressão PSI, mas o Control Plane ainda não os consome); IOPS, latência de disco, temperatura, p95/p99 do tempo de execução (ciclo 160), DLQ por fila (ciclo 161) e retentativas por nó e na fila (ciclo 162 — doc 20 §11 e §11.1) estão entregues; threads do processo do nó entregue no ciclo 163 (V388, doc 20 §11.3), swap e pressão de memória no ciclo 165 (V389, doc 20 §11.4); GC/heap não se aplicam (o runtime é shell) do ciclo 170 em diante as **quatro dimensões de saúde do §8.8** são contadas na rede inteira pelo painel (doc 20 §14), com os alertas que derivam do que o Control Plane já mede — o histórico de resolução e a deduplicação continuam pendentes; e faltam os itens de Gateway; o p50/p95/p99 de **requisição HTTP** do Control Plane existe desde o ciclo 163 com o tamanho da amostra (doc 20 §11.2) |
 | §9 | múltiplos domínios com autoridade própria | **inexistente**. Existe região, que é ordenação de afinidade e estado fora de operação. Um segundo domínio com autoridade necessita de termo e quórum, que a F6 (ADR-013) já esboça para uma autoridade única |
 | §11 | blockchain e consenso | **inexistente** e o brief não exige implementar agora; a autoridade com termo (ADR-013) é o que existe de mais próximo |
 
@@ -167,3 +167,31 @@ dois espaços de nomes.
 O SQL é `group by bucket` numa consulta só, com índice, e é verificado contra o H2 em
 `StorageCatalogBucketsPersistenceTests` — os testes do serviço usam mock e provariam a ligação, não
 a consulta.
+
+## 7. §8.8 entregue em parte: as quatro dimensões de saúde sobre a rede (ciclo 170)
+
+`GET /admin/network/nodes/dashboard` ganhou `health`: host, runtime, aplicação e participação na
+rede, contados na rede inteira, com um alerta por nó (o mais grave). O raciocínio, o que fica de fora
+e a prova estão no [doc 20 §14](20-painel-admin-observabilidade-nos.md). O pedido de severidade,
+deduplicação, agrupamento e histórico de resolução é estado entre ciclos — tabela própria — e é o
+próximo passo natural do §8.8 depois deste.
+
+O que continua bloqueado, e por quê, não mudou: a captura (§4) depende de decisão de infraestrutura
+(`log_bin`, `binlog_format=ROW`, usuário com `REPLICATION SLAVE`), e o §2.1 (nó→nó com circuit
+breakers, latência de encaminhamento) não é reuso, é um segundo caminho de entrada — o Control
+Plane não inicia conexão ao nó.
+
+### O §2.2 ganhou o alerta: trabalho que o Master absorve sem ninguém para pegar
+
+O `health` do painel (doc 20 §14.1) passou a emitir `WORK_NO_TARGET` quando um tipo de trabalho tem
+fila **e** nenhum nó capaz. É o diagnóstico do §2.2 dado como alerta, e não só como número na
+cobertura. "Master sobrecarregado enquanto há réplicas ociosas" (§8.8) continua sem medida: hoje o
+Control Plane não mede a própria carga por serviço (§8.2, "Aplicação"), e medir isso é o passo
+anterior ao alerta — não dá para afirmar "o Master está sobrecarregado" sem a medida.
+
+### §8.8: a causa da rede degradada chegou ao painel (ciclo 173)
+
+Divergência de dados e falha de captura deixam de ser só o modo `DEGRADED`: viraram `NETWORK_DIVERGED`
+e `NETWORK_CAPTURE_NOT_READY` no `health.alerts`, com a mesma conta do modo (`NetworkHealth`) e a
+severidade em número (4, acima de todo sintoma por nó). Detalhes e provas no
+[doc 20 §14.2](20-painel-admin-observabilidade-nos.md).

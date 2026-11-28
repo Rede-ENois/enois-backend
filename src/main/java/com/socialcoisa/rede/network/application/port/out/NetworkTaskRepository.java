@@ -115,6 +115,13 @@ public interface NetworkTaskRepository {
 	/** Devolve à fila para nova tentativa, com o próximo instante calculado pelo chamador. */
 	int requeue(String id, int attempt, String error, Instant nextAttemptAt, Instant now);
 
+	/**
+	 * Tarefas que voltaram à fila nesta rodada: {@code attempt >= 1} e ainda abertas (§8.2,
+	 * "retentativas"). O {@code attempt} conta <b>entregas</b> — o claim incrementa e a devolução não —
+	 * então recém-criada é 0 e devolvida é pelo menos 1.
+	 */
+	long countRetried();
+
 	/** Esgota a tarefa: vira DEAD (DLQ) com o último erro. */
 	int kill(String id, int attempt, String error, Instant now);
 
@@ -122,6 +129,13 @@ public interface NetworkTaskRepository {
 	int cancel(String id, String actorId, Instant now);
 
 	long countByStatus(TaskStatus status);
+
+	/**
+	 * Quantas tarefas de um tipo estão pendentes. O agregado ({@link #countByStatus}) diz que há fila;
+	 * esta pergunta diz de que tipo ela é — e é o que permite ao painel nomear o trabalho que ninguém
+	 * consegue pegar ("3 tarefas ASYNC_JOB e nenhum nó capaz").
+	 */
+	long countPendingByType(String type);
 
 	/**
 	 * Quantas tarefas de cada tipo estão em cada estado (brief §8.2, "DLQ por fila").

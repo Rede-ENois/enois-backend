@@ -60,6 +60,12 @@ DISKSTATE_FILE="$NODE_HOME/disk-prev"
 # O arquivo de contadores do kernel lido pela medição de I/O do ciclo. Variável e não caminho fixo
 # para o harness poder servir contadores conhecidos; em produção o padrão é o do kernel.
 DISKSTATS_FILE="${DISKSTATS_FILE:-/proc/diskstats}"
+# Contadores de rede (acumulado, em BYTES) e instante da medida anterior, para a TAXA de entrada e
+# saída do intervalo. Mesmo motivo do disco: `cycle` roda num processo por volta, então o intervalo
+# que só o processo anterior viu fica em arquivo. É uma medida SEPARADA do acumulado que vai para o
+# painel do participante — aquele é o total desde o boot, este é MiB/s.
+NETSTATE_FILE="$NODE_HOME/net-prev"
+NET_DEV_FILE="${NET_DEV_FILE:-/proc/net/dev}"
 # Sensores de temperatura lidos pela mesma razão: caminho fixo em produção, sobreponível no harness
 # (e no container, quando o `/sys` do host é montado em outro ponto).
 THERMAL_HWMON_DIR="${THERMAL_HWMON_DIR:-/sys/class/hwmon}"
@@ -67,6 +73,17 @@ THERMAL_ZONE_DIR="${THERMAL_ZONE_DIR:-/sys/class/thermal}"
 # Acima disto a leitura é descartada: nenhum componente em operação normal passa de 110 °C, e o que
 # passa é sensor de ponto de critério ou sensor quebrado.
 THERMAL_MAX_C="${THERMAL_MAX_C:-110}"
+# Diretório de processos lido pela contagem de threads (brief §8.2, "threads"). Variável e não
+# caminho fixo pelo mesmo motivo dos contadores de disco: o harness serve um diretório conhecido, e
+# em produção é o do kernel.
+PROC_ROOT="${PROC_ROOT:-/proc}"
+# Intervalo do release das habilidades do executor (brief §8.2, "Health checks"). A declaração vai
+# JUNTO da config que o nó já lê e verifica — não há segundo canal: o mesmo GET autenticado leva o
+# que a máquina consegue executar, e a resposta do Control Plane é a config assinada, com ou sem a
+# declaração. O intervalo evita repetir a declaração a cada ciclo; a primeira já sai com a primeira
+# config, porque não há nada publicado ainda.
+RELEASE_EVERY="${RELEASE_EVERY:-5}"
+RELEASE_LAST_FILE="$NODE_HOME/executor-capabilities.json"
 
 event() {
   # event <nivel> <mensagem>: guarda para o próximo heartbeat.
@@ -141,12 +158,24 @@ json_flag() {
 
 # allowedTasks da config assinada — a ÚNICA fonte de permissão de execução.
 allowed_tasks() {
-  local config rc
+  local config rc cache capacity declaracao_body=()
   if [[ ! -s "$NODE_HOME/pinning-key" ]]; then
     notice_once sem-pino 'sem pinning-key — config não verificável; rode --start para pinar a chave'
     return 1
   fi
-  config=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+  # A declaração de capacidade vai JUNTO da leitura da config: é o mesmo GET autenticado que o nó já
+  # faz, e o Control Plane que ainda não conhece o campo o ignora (`--get` porque é leitura). Não há
+  # segundo canal nem segunda credencial — a declaração é dado do pedido que já existe.
+  #
+  # Ela sai sobre a lista que o nó está VIVENDO hoje (o cache verificado, se ainda vale): declarar
+  # sobre uma permissão que ninguém leu seria inventar. Sem cache válido a lista é vazia — nada
+  # autorizado, nada a declarar.
+  cache=$(allowed_tasks_da_cache 2>/dev/null) && cache=$(allowed_tasks_list <<<"$cache")
+  capacity=$(declaracao_de_capacidade "$cache")
+  if declaracao_vencida "$capacity"; then
+    declaracao_body=(--get --data-urlencode "executorTaskTypes=$capacity")
+  fi
+  config=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 "${declaracao_body[@]}" \
     "${auth[@]}" "$CONTROL_PLANE/network/nodes/me/config")
   rc=$?
   if (( rc != 0 )); then
@@ -158,12 +187,18 @@ allowed_tasks() {
       return 1
     fi
     # Queda de transporte: o Control Plane não respondeu. A permissão que ele assinou continua
-    # valendo enquanto o TTL dela não vence (doc 06 §6) — blip de rede não derruba nó sadio.
+    # valendo enquanto o TTL dela não vence (doc 06 §6) — blip de rede não derruba nó sadio. A
+    # declaração também não foi aceita: o instante NÃO é gravado (queda não é publicação).
     allowed_tasks_da_cache
     return $?
   fi
   config_valida "$config" || return 1
   config_cache_guardar "$config"
+  # A resposta veio e conferiu: a config é a resposta a ESTE pedido, e a declaração que viajou com ele
+  # foi aceita. O instante e o corpo ficam para o intervalo.
+  if (( ${#declaracao_body[@]} > 0 )); then
+    printf '%s\n%s' "$(date +%s)" "$capacity" > "$RELEASE_LAST_FILE" 2>/dev/null || true
+  fi
   printf '%s' "$config"
 }
 
@@ -1354,11 +1389,57 @@ exec_api_request() {
   printf '[executor] rota %s status=%s bytes=%s\n' "$route" "$status" "$bytes"
 }
 
+# O que cada tipo de tarefa EXIGE da máquina além do que o runtime já usa (bash, sed, awk, curl).
+# Só dependência externa entra aqui.
+executor_nao_roda() {
+  # executor_nao_roda <tipo>: 0 quando esta máquina NÃO consegue executar o tipo.
+  case "$1" in
+    MEDIA_TRANSCODE) ! command -v ffmpeg >/dev/null 2>&1 ;;
+    *) return 1 ;;
+  esac
+}
+
+# A declaração de capacidade: dos tipos que a config AUTORIZA, os que esta máquina roda.
+#
+# <autorizados> é só a lista de nomes (como `allowed_tasks_list` a lê), não o JSON da config: misturar
+# os dois embrulharia os colchetes uma segunda vez e o Control Plane recusaria o corpo. Lista VAZIA é
+# declaração honesta ("o único tipo autorizado não roda aqui") e o despacho a respeita; a AUSÊNCIA da
+# declaração é "não declarou", e aí vale a permissão do perfil.
+declaracao_de_capacidade() {
+  local autorizados="${1:-}" tipo lista=''
+  for tipo in $(printf '%s' "$autorizados" | tr ',' ' '); do
+    tipo=$(printf '%s' "$tipo" | tr -d '" ')
+    [[ -n "$tipo" ]] || continue
+    executor_nao_roda "$tipo" && continue
+    lista="$lista${lista:+,}\"$tipo\""
+  done
+  printf '%s' "[$lista]"
+}
+
+# O intervalo: declaração igual à que o Control Plane JÁ RECEBEU e instante recente não se repetem.
+# O arquivo do NODE_HOME guarda o instante na primeira linha e o corpo na segunda. Só a resposta
+# aceita grava — tentativa que não chegou seria dada como publicada até a janela seguinte, e o
+# Control Plane seguiria sem saber que esta máquina perdeu o executor: o caso que a declaração existe
+# para evitar. Declaração DIFERENTE sai na hora (capacidade perdida não espera a janela).
+declaracao_vencida() {
+  # declaracao_vencida <capacidade>: 0 quando há de enviar a declaração neste ciclo.
+  local capacidade="$1" agora ultimo publicado=''
+  [[ -f "$RELEASE_LAST_FILE" ]] || return 0
+  ultimo=$(head -n 1 "$RELEASE_LAST_FILE" 2>/dev/null)
+  publicado=$(sed -n '2,$p' "$RELEASE_LAST_FILE" 2>/dev/null | tr -d '\n')
+  [[ "$ultimo" =~ ^[0-9]+$ ]] || return 0
+  [[ "$publicado" == "$capacidade" ]] || return 0
+  agora=$(date +%s)
+  (( agora - ultimo >= RELEASE_EVERY * ${NODE_POLL_SECONDS:-15} ))
+}
+
 cycle() {
   # 1. heartbeat: estado, modo e se pode pedir tarefa.
   local hb mode accept_tasks observed_cpu observed_mem observed_avail mem_swap mem_pressure observed_disk observed_term term_part disk_part mem_part
   local disk_now disk_prev disk_prev_at disk_now_ns d_reads d_writes d_ms p_reads p_writes p_ms ops disk_io_iops disk_io_latency disk_io_part=
+  local net_now net_prev net_prev_at net_now_ns n_rx n_tx p_rx p_tx net_rate_part=
   local temp_part temp_max_c temp_max_raw temp_file temp_raw temp_c
+  local runtime_part threads
   observed_cpu=$(awk 'NR==1 {printf "%.1f", $1}' /proc/loadavg 2>/dev/null || echo 0)
   # Memória em DUAS medidas, como o Control Plane lê desde a V378: `memoryMb` é o USO e
   # `memoryAvailableMb` o DISPONÍVEL. Antes o runtime media só `MemAvailable` e o mandava como
@@ -1456,6 +1537,23 @@ cycle() {
   done
   if [[ -n "$temp_max_raw" ]]; then
     temp_part=",\"temperatureC\":$temp_max_c"
+  fi
+  # Processo do runtime (brief §8.2, "Runtime": threads). O runtime do nó é um `bash` por ciclo — cada
+  # volta é uma execução curta e sai —, então o que existe para medir aqui é o número de threads do
+  # processo que está medindo: `Threads:` de `/proc/<pid>/status`, que o kernel publica para a tarefa
+  # inteira (o thread de sinal do bash e o que ele abriu). Não é "threads do sistema": é o processo
+  # do nó, e é o que a §8.2 pede no bloco "Runtime".
+  #
+  # NÃO vai daqui: GC, heap e non-heap (não há coletor nem heap em shell — o do Control Plane é do
+  # processo Java dele), e uptime/reinicializações (o processo morre a cada ciclo; o que se mede de
+  # vida do HOST é `uptimeSeconds`, que já existe desde o ciclo anterior). Mandar 0 seria afirmar
+  # "zero threads", que é outra medida: sem `/proc/<pid>/status` o campo NÃO vai.
+  runtime_part=''
+  if [[ -r "$PROC_ROOT/self/status" ]]; then
+    threads=$(awk '/^Threads:/ {print $2; exit}' "$PROC_ROOT/self/status" 2>/dev/null)
+    if [[ "$threads" =~ ^[0-9]+$ ]]; then
+      runtime_part=",\"threads\":$threads"
+    fi
   fi
   disk_io_part=''
   if [[ -r "$DISKSTATS_FILE" ]]; then
@@ -1555,7 +1653,10 @@ cycle() {
   # não termina em `:`, então nem entra. Sem `/proc/net/dev` e sem contador numérico os campos NÃO
   # vão: ausente é "não medido", nunca zero, que afirmaria "não transferiu nada".
   net_part=''
-  if [[ -r /proc/net/dev ]]; then
+  if [[ -r "$NET_DEV_FILE" ]]; then
+    # Bytes crus (sem arredondar para MiB): a taxa do intervalo é a diferença entre dois ciclos, e
+    # arredondar cada leitura antes de subtrair perderia justamente o tráfego pequeno de um ciclo de
+    # 15 s. O campo do acumulado continua em MiB, como o contrato da V345 define.
     net_medido=$(awk '
       /^[ ]*[^ ]+:/ {
         name = $1
@@ -1571,10 +1672,43 @@ cycle() {
       }
       END {
         if (!seen) exit 0
-        printf "%d %d", int(rx / 1048576), int(tx / 1048576)
-      }' /proc/net/dev 2>/dev/null) || net_medido=''
+        printf "%d %d", rx, tx
+      }' "$NET_DEV_FILE" 2>/dev/null) || net_medido=''
     if [[ "$net_medido" =~ ^[0-9]+\ [0-9]+$ ]]; then
-      net_part=",\"bytesInMb\":${net_medido%% *},\"bytesOutMb\":${net_medido##* }"
+      net_part=",\"bytesInMb\":$(( ${net_medido%% *} / 1048576 )),\"bytesOutMb\":$(( ${net_medido##* } / 1048576 ))"
+      # Taxa do intervalo (brief §8.2, "Throughput de entrada e saída"; §8.3, "throughput global"):
+      # MiB/s entre a medida ANTERIOR (instante em nanossegundos, no arquivo de estado) e esta. O
+      # acumulado diz "quanto já passou"; a taxa diz "quanto está passando", e a diferença entre
+      # amostras não pode ser refeita depois — o intervalo de cada uma não fica gravado.
+      #
+      # Sem medida anterior (primeiro ciclo), intervalo zero/não provável (relógio atrasado) ou
+      # contador que RETROCEDEU (interface recriada, contador de 32 bits reiniciado) os campos NÃO
+      # vão: uma taxa negativa ou de horas não é medida, e o painel diz "não medido" em vez de
+      # mostrar um valor que ninguém mediu.
+      net_prev_at=''
+      net_prev=''
+      if [[ -r "$NETSTATE_FILE" ]]; then
+        read -r net_prev_at net_prev < "$NETSTATE_FILE" 2>/dev/null || true
+      fi
+      net_now_ns=$(date +%s%N)
+      if [[ "$net_now_ns" =~ ^[0-9]+$ && "$net_prev" =~ ^[0-9]+\ [0-9]+$ \
+            && "$net_prev_at" =~ ^[0-9]+$ ]] && (( net_now_ns > net_prev_at )); then
+        read -r n_rx n_tx <<<"$net_medido"
+        read -r p_rx p_tx <<<"$net_prev"
+        if (( n_rx >= p_rx && n_tx >= p_tx )); then
+          net_rate=$(awk -v a="$n_rx" -v b="$p_rx" -v c="$n_tx" -v e="$p_tx" \
+            -v ns="$(( net_now_ns - net_prev_at ))" \
+            'BEGIN {s = ns / 1000000000; printf "%.3f %.3f", ((a - b) / 1048576) / s, ((c - e) / 1048576) / s}')
+          net_rate_part=",\"netInMbps\":${net_rate%% *},\"netOutMbps\":${net_rate##* }"
+        fi
+      fi
+      # O estado do próximo ciclo é o de AGORA — mesmo quando esta rodada não mediu: se o arquivo só
+      # avançasse nos ciclos bem-sucedidos, um contador reiniciado deixaria o nó sem taxa até alguém
+      # reiniciar o processo.
+      if [[ "$net_now_ns" =~ ^[0-9]+$ ]]; then
+        printf '%s %s\n' "$net_now_ns" "$net_medido" > "$NETSTATE_FILE" 2>/dev/null \
+          && chmod 600 "$NETSTATE_FILE" 2>/dev/null || true
+      fi
     fi
   fi
   # Linhas do ciclo vão JUNTO do heartbeat: é a única saída do nó (ele não abre porta), e o
@@ -1584,15 +1718,35 @@ cycle() {
   events=$(events_json)
   [[ -n "$events" ]] && logs_part=",\"logs\":[$events]"
   # O corpo tem de ser JSON VÁLIDO. Ele é montado por fragmentos opcionais (`mem_part`,
-  # `temp_part`, `disk_io_part`, `disk_part`, `net_part`), e cada fragmento carrega a própria
-  # vírgula — é a única forma de o campo ausente não deixar vírgula solta. O separador depois de
-  # `runningTasks` esteve ausente e `temp_part`/`disk_io_part` começavam sem vírgula: com memória,
-  # temperatura ou I/O medidos o corpo ia malformado (`0"memoryMb"`), o Control Plane respondia
-  # 400 e o nó recebia "heartbeat falhou" a cada ciclo — saindo do balanceamento por
-  # `last_seen_at` velho, sem que nenhum campo da memória explicasse. Provado por
+  # `temp_part`, `disk_io_part`, `disk_part`, `net_part`, `runtime_part`), e cada fragmento carrega
+  # a própria vírgula — é a única forma de o campo ausente não deixar vírgula solta. O separador
+  # depois de `runningTasks` esteve ausente e `temp_part`/`disk_io_part` começavam sem vírgula: com
+  # memória, temperatura ou I/O medidos o corpo ia malformado (`0"memoryMb"`), o Control Plane
+  # respondia 400 e o nó recebia "heartbeat falhou" a cada ciclo — saindo do balanceamento por
+  # `last_seen_at` velho, sem que nenhum campo da memória explicasse.
+  #
+  # A regra "cada fragmento carrega a própria vírgula" só fecha se o fragmento SEGUINTE só entrar
+  # quando o anterior entrou. No ciclo 163 apareceu o irmão do defeito: sem `/proc/meminfo`
+  # (`mem_part` vazio — o normal num container) e com temperatura medida, o corpo saía
+  # `"runningTasks":0,,"temperatureC"`; logo, 400 do Control Plane e o nó fora do balanceamento em
+  # toda máquina sem meminfo. Por isso o acúmulo é em `obs` e cada parte só entra se a anterior
+  # estiver lá. Provado por
   # `node-traffic-test.sh`, que lê o corpo como JSON de verdade.
+  # Cada fragmento já começa com a vírgula dele. O PRIMEIRO a entrar não precisa dela (o `obs`
+  # ainda não tem nada depois de `runningTasks`): `${fragmento#,}` tira a vírgula da frente uma vez.
+  obs="\"cpuPercent\":$observed_cpu,\"runningTasks\":0"
+  primeiro=1
+  for fragmento in "$mem_part" "$temp_part" "$disk_io_part" "$disk_part" "$net_part" "$net_rate_part" "$runtime_part"; do
+    [[ -n "$fragmento" ]] || continue
+    if [[ "$primeiro" == 1 ]]; then
+      obs="$obs,${fragmento#,}"
+      primeiro=0
+    else
+      obs="$obs$fragmento"
+    fi
+  done
   hb=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
-    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{\"cpuPercent\":$observed_cpu,\"runningTasks\":0,$mem_part$temp_part$disk_io_part$disk_part$net_part}$term_part$logs_part}" \
+    "${auth[@]}" -d "{\"runtimeVersion\":\"$RUNTIME_VERSION\",\"observed\":{$obs}$term_part$logs_part}" \
     "$CONTROL_PLANE/network/nodes/heartbeat") || { printf '[executor] heartbeat falhou\n' >&2; return 1; }
   : > "$EVENTS_FILE" 2>/dev/null || true
   mode=$(json_field "$hb" mode)

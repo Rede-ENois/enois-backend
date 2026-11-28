@@ -89,4 +89,36 @@ class TaskLatencyTests {
 		assertThat(uma.p95Ms()).isEqualTo(256);
 		assertThat(uma.p99Ms()).isEqualTo(256);
 	}
+
+	/**
+	 * A contagem de tentativas é um número, não uma duração: o percentil tem de devolver o próprio
+	 * valor. Antes, as chaves passavam por `bucketOf` (faixas de ms) e três tentativas publicavam
+	 * quatro; acima de 16 saturava em 65536.
+	 */
+	@Test
+	void oPercentilDeTentativasDevolveAContagemEhNaoAFaixaDeMs() {
+		// Três tentativas, uma tarefa: p50 é 3 — não 4, que é o bucket de ms de 3.
+		assertThat(new TaskLatency(Map.of(), Map.of(3, 1)).retriesP50()).isEqualTo(3);
+		// Cinco e sete não viram 8.
+		assertThat(new TaskLatency(Map.of(), Map.of(5, 1)).retriesP50()).isEqualTo(5);
+		assertThat(new TaskLatency(Map.of(), Map.of(7, 1)).retriesP50()).isEqualTo(7);
+		// Acima de 16 não satura no teto da faixa de duração.
+		assertThat(new TaskLatency(Map.of(), Map.of(50, 1)).retriesP50()).isEqualTo(50);
+	}
+
+	@Test
+	void oPercentilDeTentativasRespeitaADistribuicao() {
+		// Dez tarefas com 3 tentativas: p50 reportado era 2 (o bucket derrubava a mediana).
+		TaskLatency tres = new TaskLatency(Map.of(), Map.of(3, 10));
+		assertThat(tres.retriesP50()).isEqualTo(3);
+		assertThat(tres.retriesP95()).isEqualTo(3);
+
+		// Mistura: 8 tarefas com 1 tentativa e 2 com 4 → p50 = 1, p95 = 4.
+		TaskLatency mistura = new TaskLatency(Map.of(), Map.of(1, 8, 4, 2));
+		assertThat(mistura.retriesP50()).isEqualTo(1);
+		assertThat(mistura.retriesP95()).isEqualTo(4);
+
+		// Sem tarefa devolvida à fila não há medida: nulo, não zero.
+		assertThat(TaskLatency.empty().retriesP50()).isNull();
+	}
 }

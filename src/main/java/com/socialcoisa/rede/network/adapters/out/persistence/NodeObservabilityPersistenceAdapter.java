@@ -23,18 +23,22 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 	 * série ter passo regular.
 	 */
 	private static final String UPSERT_SAMPLE = """
-		insert into network_node_samples (node_id, sampled_at, cpu_percent, memory_mb, disk_free_mb,
-		  disk_iops, disk_latency_ms, temperature_c, running_tasks, queue_depth, mode, activity)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		insert into network_node_samples (node_id, sampled_at, cpu_percent, memory_mb, swap_used_mb,
+		  memory_pressure_percent, net_in_mbps, net_out_mbps, disk_free_mb, disk_iops, disk_latency_ms,
+		  temperature_c, threads, running_tasks, queue_depth, mode, activity)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		on duplicate key update cpu_percent = values(cpu_percent), memory_mb = values(memory_mb),
+		  swap_used_mb = values(swap_used_mb), memory_pressure_percent = values(memory_pressure_percent),
+		  net_in_mbps = values(net_in_mbps), net_out_mbps = values(net_out_mbps),
 		  disk_free_mb = values(disk_free_mb), disk_iops = values(disk_iops),
 		  disk_latency_ms = values(disk_latency_ms), temperature_c = values(temperature_c),
-		  running_tasks = values(running_tasks),
+		  threads = values(threads), running_tasks = values(running_tasks),
 		  queue_depth = values(queue_depth), mode = values(mode), activity = values(activity)
 		""";
 
-	private static final String SAMPLE_COLUMNS = "node_id, sampled_at, cpu_percent, memory_mb, disk_free_mb, "
-		+ "disk_iops, disk_latency_ms, temperature_c, running_tasks, queue_depth, mode, activity";
+	private static final String SAMPLE_COLUMNS = "node_id, sampled_at, cpu_percent, memory_mb, swap_used_mb, "
+		+ "memory_pressure_percent, net_in_mbps, net_out_mbps, disk_free_mb, "
+		+ "disk_iops, disk_latency_ms, temperature_c, threads, running_tasks, queue_depth, mode, activity";
 
 	private static final String LIST_SAMPLES = "select " + SAMPLE_COLUMNS
 		+ " from network_node_samples where node_id = ? order by sampled_at desc limit ?";
@@ -58,8 +62,24 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 		on duplicate key update samples = samples + 1
 		""";
 
+	/**
+	 * A contagem de tentativas é gravada COMO É, na faixa `bucket_upper_ms` igual ao número de
+	 * tentativas perdidas. Ela não é duração: passar pelo {@code bucketOf} arredondava 3 para 4, 5–7
+	 * para 8 e saturava acima de 16 (uma tarefa com 50 retentativas publicava 65536). Para uma
+	 * contagem pequena, limitada por {@code maxAttempts}, faixa não rende nada além de erro.
+	 */
+	private static final String UPSERT_RETRY = """
+		insert into network_task_latency_buckets (node_id, metrics_hour, bucket_upper_ms, samples, retries)
+		values (?, ?, ?, 0, ?)
+		on duplicate key update retries = retries + ?
+		""";
+
 	private static final String SUM_LATENCY = "select bucket_upper_ms, sum(samples) from network_task_latency_buckets "
 		+ "where node_id = ? and metrics_hour >= ? and metrics_hour <= ? group by bucket_upper_ms";
+
+	private static final String SUM_RETRIES = "select bucket_upper_ms, sum(retries) "
+		+ "from network_task_latency_buckets where node_id = ? and metrics_hour >= ? and metrics_hour <= ? "
+		+ "group by bucket_upper_ms";
 
 	private static final String INSERT_LOG = "insert into network_node_logs (id, node_id, logged_at, level, message) "
 		+ "values (?, ?, ?, ?, ?)";
@@ -79,7 +99,9 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 		rs.getTimestamp("sampled_at").toInstant(), nullableDouble(rs, "cpu_percent"), nullableInt(rs, "memory_mb"),
 		nullableLong(rs, "disk_free_mb"), nullableInt(rs, "running_tasks"), nullableInt(rs, "queue_depth"),
 		rs.getString("mode"), rs.getString("activity"), nullableDouble(rs, "disk_iops"),
-		nullableDouble(rs, "disk_latency_ms"), rs.getBigDecimal("temperature_c"));
+		nullableDouble(rs, "disk_latency_ms"), rs.getBigDecimal("temperature_c"), nullableInt(rs, "threads"),
+		nullableLong(rs, "swap_used_mb"), nullableDouble(rs, "memory_pressure_percent"),
+		nullableDouble(rs, "net_in_mbps"), nullableDouble(rs, "net_out_mbps"));
 
 	private static final RowMapper<LogLine> LOG_MAPPER = (rs, row) -> new LogLine(rs.getString("id"),
 		rs.getString("node_id"), rs.getTimestamp("logged_at").toInstant(), rs.getString("level"),
@@ -94,9 +116,10 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 	@Override
 	public void saveSample(Sample sample) {
 		jdbc.update(UPSERT_SAMPLE, sample.nodeId(), Timestamp.from(sample.sampledAt()), sample.cpuPercent(),
-			sample.memoryMb(), sample.diskFreeMb(), sample.diskIops(), sample.diskLatencyMs(), sample.temperatureC(),
-			sample.runningTasks(),
-			sample.queueDepth(), sample.mode(), sample.activity());
+			sample.memoryMb(), sample.swapUsedMb(), sample.memoryPressurePercent(), sample.netInMbps(),
+			sample.netOutMbps(), sample.diskFreeMb(), sample.diskIops(), sample.diskLatencyMs(),
+			sample.temperatureC(), sample.threads(), sample.runningTasks(), sample.queueDepth(), sample.mode(),
+			sample.activity());
 	}
 
 	@Override
@@ -116,6 +139,23 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 	public void addLatencySample(String nodeId, Instant at, int bucketUpperMs) {
 		jdbc.update(UPSERT_LATENCY, nodeId, Timestamp.from(at.truncatedTo(java.time.temporal.ChronoUnit.HOURS)),
 			bucketUpperMs);
+	}
+
+	@Override
+	public void addRetrySample(String nodeId, Instant at, long retries) {
+		int tentativas = (int) Math.max(0, retries);
+		jdbc.update(UPSERT_RETRY, nodeId, Timestamp.from(at.truncatedTo(java.time.temporal.ChronoUnit.HOURS)),
+			tentativas, tentativas, tentativas);
+	}
+
+	@Override
+	public java.util.Map<Integer, Integer> retrySamples(String nodeId, Instant now, int hours) {
+		Instant from = now.minusSeconds(hours * 3600L).truncatedTo(java.time.temporal.ChronoUnit.HOURS);
+		java.util.Map<Integer, Integer> samples = new java.util.TreeMap<>();
+		jdbc.query(SUM_RETRIES, rs -> {
+			samples.put(rs.getInt(1), rs.getInt(2));
+		}, nodeId, Timestamp.from(from), Timestamp.from(now));
+		return samples;
 	}
 
 	@Override

@@ -557,6 +557,89 @@ out=$(run_custom)
 assert_contains 'sem ffmpeg a tarefa falha com código próprio' "$(cat "$TMP/curl-calls")" 'TASK_EXECUTOR_MISSING'
 assert_not_contains 'sem ffmpeg não baixa a origem' "$(cat "$TMP/curl-calls")" '/network/media/md_1/source'
 
+# ------------------------------------------------- cenário 9.1: a máquina sem executor DECLARA isso
+# A permissão assinada autoriza MEDIA_TRANSCODE (o perfil é NODE_MEDIA), e a máquina pode não ter o
+# ffmpeg. Sem a declaração, o Control Plane designa, o nó tenta, falta o binário e a tarefa gasta uma
+# tentativa — uma por ciclo. A declaração vai JUNTO do GET da config (não há segundo canal): o que
+# esta máquina consegue executar dos tipos que a config autoriza.
+declare_line() { /bin/grep '/network/nodes/me/config' "$TMP/curl-calls" | /bin/grep 'executorTaskTypes' | head -n 1 || true; }
+# Lista VAZIA é o caso honesto: o único tipo autorizado não roda aqui, e a declaração vai com `[]` —
+# não com a lista autorizada. O ciclo 9, logo antes, rodou sem ffmpeg.
+assert_contains 'sem ffmpeg a declaração sai com a lista vazia' "$(declare_line)" 'executorTaskTypes=[]'
+assert_not_contains 'sem ffmpeg o tipo ausente não é declarado' "$(declare_line)" 'MEDIA_TRANSCODE'
+# A assinatura da config de prova é genuína: o nó a lê e guarda. Sem isto, um bloco seguinte cuja config
+# o nó recusa por assinatura pareceria "declarou sobre a config anterior" e o teste passaria por engano.
+assert_contains 'a config de prova é aceita pelo nó (assinatura confere)' "$(grep -o '"allowedTasks":\[[^]]*\]' "$NH/config.json")" '"MEDIA_TRANSCODE"'
+# Com o ffmpeg de volta, o MESMO pedido declara o tipo: a declaração é a capacidade de agora.
+make_command ffmpeg 'exit 0'
+out=$(run_custom)
+# `-E` porque a linha do registro é longa: sem ele o sed corta em 79 caracteres e o nome do tipo
+# (no fim do pedido) nem aparece. A captura é o valor do campo até o fim do argumento.
+declare_body=$(sed -nE 's/.*executorTaskTypes=(\[[^]]*\]).*/\1/p' <<<"$(declare_line)" | tail -1)
+assert_eq 'com ffmpeg de volta o pedido declara o tipo' "$declare_body" '["MEDIA_TRANSCODE"]'
+# O intervalo: declaração igual à que o Control Plane já recebeu e instante recente não se repetem.
+assert_eq 'a declaração aceita fica com instante e corpo' \
+  "$(sed -n '2,$p' "$NH/executor-capabilities.json")" "$declare_body"
+out=$(run_custom)
+assert_not_contains 'lista igual dentro da janela: nenhuma declaração repetida' "$(declare_line)" 'executorTaskTypes'
+# Instante vencido: a mesma lista é declarada de novo (a janela é o que pausa, não a igualdade).
+printf '1\n%s\n' "$declare_body" > "$NH/executor-capabilities.json"
+out=$(run_custom)
+# O recorte pelos tipos AUTORIZADOS: a permissão do perfil não é a declaração. O perfil continua
+# NODE_MEDIA, que libera MEDIA_TRANSCODE, e a máquina tem o ffmpeg — mas a lista autorizada que o nó lê
+# é VAZIA e não sobra tarefa a declarar. O "declara pelo perfil" diria `["MEDIA_TRANSCODE"]` aqui.
+#
+# A lista vazia é a que o Control Plane manda para um nó fora de operação
+# (`NetworkConfigService.allowedTasks`); aqui ela é posta no cache, que é o que a declaração lê no
+# início do ciclo. O cache da config assinada do cenário volta logo depois.
+python3 - "$NH" <<'PY'
+import io, sys, os
+nh = sys.argv[1]
+anterior = io.open(os.path.join(nh, "config.json"), encoding="utf-8").read()
+io.open(os.path.join(nh, "config.json"), "w", encoding="utf-8").write(
+    anterior.replace('"allowedTasks":["MEDIA_TRANSCODE"]', '"allowedTasks":[]'))
+PY
+printf '1\n["MEDIA_TRANSCODE"]\n' > "$NH/executor-capabilities.json"
+out=$(run_custom)
+assert_contains 'a config que não autoriza nada faz a declaração ficar vazia' "$(declare_line)" 'executorTaskTypes=[]'
+CONFIG_MEDIA='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":6,"ttlSeconds":300,"configVersion":4,"profiles":["NODE_MEDIA"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["MEDIA_TRANSCODE"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'"$(sign_limits_config 4 '["NODE_MEDIA"]' 4 8192 51200 100 '["MEDIA_TRANSCODE"]' 2)"'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+CONFIG_MEDIA='{"nodeId":"nd_exec1","status":"ACTIVE","operable":true,"formatVersion":6,"ttlSeconds":300,"configVersion":4,"profiles":["NODE_MEDIA"],"limits":{"cpuCores":4,"memoryMb":8192,"diskMb":51200,"bandwidthMbps":100},"allowedTasks":["MEDIA_TRANSCODE"],"allowedRoutes":[],"region":"sudeste","country":"BR","issuedAt":"2026-11-12T12:00:00Z","term":2,"signed":true,"signature":"'$(sign_limits_config 4 '["NODE_MEDIA"]' 4 8192 51200 100 '["MEDIA_TRANSCODE"]' 2 300 ausente)'","algorithm":"Ed25519","publicKey":"'"$CP_PUB"'"}'
+# A perda do executor NÃO espera a janela: a lista mudou, e o Control Plane tem de saber antes de
+# designar mais trabalho que esta máquina não faz. O instante do release é recente: o que força a saída
+# é a lista ter mudado, não a janela.
+rm -f "$TMP/ffmpeg"
+printf '%s\n["MEDIA_TRANSCODE"]\n' "$(date +%s)" > "$NH/executor-capabilities.json"
+out=$(run_custom)
+assert_contains 'a perda do executor muda a declaração na hora' "$(declare_line)" 'executorTaskTypes=[]'
+make_command ffmpeg 'exit 0'
+# Queda de transporte não conta como publicado: a declaração sai e não chega, o arquivo fica com o
+# instante antigo, e o ciclo seguinte declara de novo sem esperar a janela.
+printf '1\n["MEDIA_TRANSCODE"]\n' > "$NH/executor-capabilities.json"
+rm -f "$TMP/ffmpeg"
+# A chamada que FALHA é a que interessa aqui: o stub que só registra depois de responder não deixa
+# rastro da tentativa, e "não chegou" e "não tentou" ficariam iguais. Este stub registra antes.
+cp "$TMP/curl" "$TMP/curl-bom"
+cat > "$TMP/curl-queda" <<MOCK
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+url="\${@: -1}"
+case "\$url" in
+  */network/nodes/heartbeat) printf '%s' '$HEARTBEAT_OK' ;;
+  */network/nodes/me/config) exit 7 ;;
+  *) exit 22 ;;
+esac
+MOCK
+chmod +x "$TMP/curl-queda"
+mv "$TMP/curl-queda" "$TMP/curl"
+out=$(run_custom)
+assert_contains 'a declaração de agora saiu' "$(declare_line)" 'executorTaskTypes=[]'
+assert_eq 'sem resposta o instante não é dado como publicado' '1' "$(head -n 1 "$NH/executor-capabilities.json")"
+assert_contains 'nem o corpo publicado muda' "$(sed -n '2,$p' "$NH/executor-capabilities.json")" 'MEDIA_TRANSCODE'
+mv "$TMP/curl-bom" "$TMP/curl"
+out=$(run_custom)
+assert_contains 'o pedido que não chegou é refeito antes da janela' "$(declare_line)" 'executorTaskTypes=[]'
+make_command ffmpeg 'exit 0'
+
 
 # ------------------------------------------------- cenário 10: READ_QUERY (réplica de leitura)
 # O nó percorre o catálogo por cursor, lê o corpo de cada item, guarda e confirma

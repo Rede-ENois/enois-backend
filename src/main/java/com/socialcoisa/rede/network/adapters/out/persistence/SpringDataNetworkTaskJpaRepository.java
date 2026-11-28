@@ -119,10 +119,20 @@ interface SpringDataNetworkTaskJpaRepository extends JpaRepository<NetworkTaskJp
 
 	long countByStatus(String status);
 
+	/**
+	 * Tarefas abertas que já foram devolvidas à fila ao menos uma vez (brief §8.2, "retentativas").
+	 * O {@code attempt} conta entregas: a recém-criada está em 0, a devolvida em 1 ou mais.
+	 */
+	@Query("select count(t) from NetworkTaskJpaEntity t where t.status = 'PENDING' and t.attempt >= 1")
+	long countRetried();
+
 	/** Contagem agrupada por tipo e estado: a origem do quadro de filas do painel. */
 	@Query("select t.taskType as taskType, t.status as status, count(t) as tasks "
 			+ "from NetworkTaskJpaEntity t group by t.taskType, t.status")
 	List<QueueCountRow> countGroupedByQueueAndStatus();
+
+	/** Pendentes de UM tipo: o alerta de "trabalho que ninguém pode fazer" é por tipo, não agregado. */
+	long countByTaskTypeAndStatus(String taskType, String status);
 
 	/** Projeção da consulta acima; os nomes dos acessores são os aliases do `select`. */
 	interface QueueCountRow {

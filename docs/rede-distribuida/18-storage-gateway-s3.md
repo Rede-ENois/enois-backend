@@ -29,7 +29,9 @@ de fora do v1 não é lacuna escondida, é recusa declarada:
 | STS (`X-Amz-Security-Token`) | credencial fixa | credenciais temporárias exigem um emissor de tokens; a credencial por dono cobre o v1 |
 
 Estas recusas são **decisão**, não pendência: mudar qualquer linha acima é um ciclo novo com o
-brief do lado. O que fica para o roadmap não é o protocolo — são as **fases 3–6 do brief**
+brief do lado.
+A lista **fechada**, com o motivo de cada linha e o teste que a protege, está em
+[`22-escopo-s3-congelado.md`](22-escopo-s3-congelado.md) (ciclo 170). O que fica para o roadmap não é o protocolo — são as **fases 3–6 do brief**
 (erasure coding, CDN de borda, painel do participante), que o v1 não promete.
 
 O raciocínio completo, e o que o v1 de fato entrega, estão no §6 ("O que NÃO está entregue").
@@ -2207,7 +2209,7 @@ Ed25519 da config é gerado pelo harness e o privado sobe pelo `--rede.network.c
   ou falhava pelo tempo do executor, não pela pausa. O §25.11 devolve o nó ao ar **antes** da cura, e
   repete a cura com folga: uma designação pode cair num nó que ainda não voltou a operar.
 
-**Verificação:** `storage-acceptance.sh` **PASS 15 | FAIL 0** (ciclo 160), quatro rodadas seguidas —
+**Verificação:** `storage-acceptance.sh` **PASS 18 | FAIL 0** (ciclo 170; eram 15 — ver §6.1) —
 antes eram 14 asserções e o §25.10 falhava em cerca de uma em três rodadas. Rodado em série com os
 outros harnesses. Mutações no próprio harness, cada uma derrubando a asserção que ela mede:
 assinar o caminho do servidor (`/s3/…`) em vez do do protocolo (§25.3); executar a tarefa sem
@@ -2217,6 +2219,27 @@ cura (§25.11); digest do arquivo do nó trocado (§25.8). Uma sobreviveu e foi 
 asserção** (ver §4.70): o executor que não confere o que baixou — o Control Plane mede de novo e
 recusa, então a garantia vale de qualquer jeito; a conferência do nó é a primeira linha, não a
 única.
+
+### 6.1 O que o ciclo 170 mudou na aceitação
+
+Três lacunas de medição fechadas no próprio harness (nenhum código de produção mudou para isso):
+
+- **o alvo é o do operador, e é 3.** O CP sobe com `--rede.storage.replicas=3` e o harness confere que
+  `replicasExpected` é 3. Com o padrão 2 (réplica 0 do CP + uma cópia de nó), o §25.10 derrubava um dos
+  dois nós e o objeto continuava "no alvo" porque CP + o nó que sobrou somam 2 — o critério passava sem
+  medir redundância nenhuma. Com 3 e três nós, sobra uma cópia inteira enquanto o derrubado está fora.
+- **o nó derrubado tinha a cópia confirmada antes da pausa, e ele é LIDO do catálogo.** A primeira
+  versão fixava `NO2` e falhou na rodada seguinte (17/18): a designação escolhe entre os três pela
+  carga, e o objeto tinha caído em outro nó — a asserção acusava "cópia ausente" para um nó que
+  nunca foi dono da cópia. Agora o nó que tem a réplica `OK` é quem é pausado, com o jar do dono
+  certo, e o mesmo nó volta e é revogado nos §25.11/§25.12. Três rodadas seguidas 18/18; a mutação
+  que volta a fixar o nó derruba três asserções (§25.10, §25.11 estado, §25.12 chave).
+- **§25.4 entrou na sequência.** O nó3 ingressa sem IP nem porta declarados (o modelo é pull) e
+  completa o ciclo com `heartbeat 200`; o cadastro não tem campo de endereço. É prova negativa, e por
+  isso vale: se o enroll passar a exigir endereço, a asserção cai.
+
+Os 18 itens (15 + "três participantes", "alvo 3", "cópia do derrubado confirmada", "§25.4") passaram
+em uma rodada completa.
 
 ## 4.70 O teste que proibia `"abc"` media a sorte do bucket (ciclo 155)
 

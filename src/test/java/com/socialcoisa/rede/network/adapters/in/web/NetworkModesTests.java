@@ -67,6 +67,9 @@ class NetworkModesTests {
 	void setUp() {
 		auth = new TestAuthHelper(mockMvc, objectMapper);
 		jdbc.update("delete from network_tasks");
+		// A divergência de OUTRA classe do mesmo H2 deixaria a rede DEGRADED aqui: modo e painel
+		// passariam a medir o cenário alheio, na ordem em que a suíte rodou.
+		jdbc.update("delete from network_content_snapshots where divergence_reason is not null");
 		jdbc.update("delete from network_state");
 		jdbc.update("delete from network_node_keys");
 		jdbc.update("delete from network_provision_tokens");
@@ -393,7 +396,113 @@ class NetworkModesTests {
 			.andExpect(jsonPath("$.acceptTasks").value(false));
 	}
 
+	// ---------------------------------------------------------------- dispersão quando não há quem faça
+
+	/**
+	 * §2.2 / §8.8 do brief: "o Master não deve absorver o que a réplica poderia fazer". Quando nenhum
+	 * nó pode receber um tipo de trabalho e o Control Plane enfileira dele, o fato não pode existir
+	 * só na contabilidade: vira alerta nomeado no painel, com o operador sabendo que a causa é
+	 * uma, não duas.
+	 *
+	 * <p>Mede o estado <b>depois</b> do enfileiramento: com a fila vazia e nenhum nó, nada a alertar.
+	 */
+	@Test
+	void trabalhoSemQuemFacaViraAlertaDoPainelEOOperadorSabeQueEleFicouNoMaster() throws Exception {
+		var admin = adminSession();
+		activeNode(admin.token(), "no-so-media", List.of("NODE_MEDIA"));
+
+		assertThat(tasks.dispatchPending()).isZero();
+
+		var antes = dashboard(admin.token());
+		assertThat(antes.get("health").get("alertsTotal").asInt()).isZero();
+
+		enqueue("sem-quem", 2);
+		assertThat(tasks.dispatchPending()).isZero();
+
+		var depois = dashboard(admin.token());
+		var alertas = depois.get("health").get("alerts");
+		assertThat(alertas.size()).isEqualTo(1);
+		assertThat(alertas.get(0).get("code").asString()).isEqualTo("WORK_NO_TARGET");
+		assertThat(alertas.get(0).get("reason").asString()).contains("ASYNC_JOB").contains("2");
+		// O alerta não é do nó: ele descreve a rede. O campo que liga o alerta a alguém fica nulo.
+		assertThat(alertas.get(0).get("nodeId").isNull()).isTrue();
+
+		// Um nó capaz chega: a fila é absorvida e o alerta desaparece (não é estado congelado).
+		Node worker = activeNode(admin.token(), "no-worker", List.of("NODE_WORKER"));
+		heartbeat(worker);
+		assertThat(tasks.dispatchPending()).isEqualTo(2);
+		assertThat(dashboard(admin.token()).get("health").get("alertsTotal").asInt()).isZero();
+	}
+
+	// ---------------------------------------------------------------- o alerta diz o mesmo que o modo
+
+	/**
+	 * §8.8 "divergência de dados" e "falha de captura": o modo medido já vai para {@code DEGRADED}
+	 * quando há divergência ou captura exigida e quebrada ({@code NetworkModeService#healthSignal}).
+	 * O painel dizia o modo e NÃO dizia a causa — o operador via "DEGRADED" e ia procurar no lado
+	 * da carga, que não tem nada a ver. O alerta `NETWORK_DEGRADED` carrega a evidência, e ele vem
+	 * ANTES dos alertas de nó: a causa comum da rede não se esconde atrás de sintomas por nó.
+	 */
+	@Test
+	void redeDegradadaPorEvidenciaViraAlertaComACausaEDepoisOsAlertasDeNo() throws Exception {
+		var admin = adminSession();
+
+		// Nenhuma divergência, nenhum nó: o painel não inventa alerta de degradação.
+		assertThat(dashboard(admin.token()).get("health").get("alertsTotal").asInt()).isZero();
+
+		// O cenário que o modo já mede: o nó reportou uma versão e a origem mostra outra — a
+		// divergência que `ContentReconcileService#countDivergent` conta.
+		Node mudo = activeNode(admin.token(), "no-mudo", List.of("NODE_LOCAL"));
+		enqueue("fila", 1);
+		jdbc.update("insert into network_content_snapshots "
+			+ "(node_id, content_type, content_id, source_version, content_hash, synced_at, divergence_reason) "
+			+ "values (?, 'POST', 'conteudo-xyz', 4, 'abc', current_timestamp, 'hash diverge')",
+			mudo.id());
+		assertThat(modes.evaluate()).isEqualTo(NetworkMode.DEGRADED);
+
+		var alertas = dashboard(admin.token()).get("health").get("alerts");
+		assertThat(alertas.get(0).get("code").asString()).isEqualTo("NETWORK_DIVERGED");
+		assertThat(alertas.get(0).get("dimension").asString()).isEqualTo("APPLICATION");
+		assertThat(alertas.get(0).get("reason").asString()).contains("1 agregado").contains("divergem");
+		assertThat(alertas.get(0).get("nodeId").isNull()).isTrue();
+		assertThat(alertas.get(0).get("severity").asInt()).isEqualTo(4);
+
+		// O nó silencioso continua no quadro, atrás do alerta da rede: o painel não troca a causa
+		// pelo sintoma. (Sem ele o teste acima não provaria a ordem.)
+		mockMvc
+			.perform(post("/network/nodes/heartbeat").header("X-Node-Id", mudo.id()).header("X-Node-Key", mudo.key())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("runtimeVersion", "0.1.0",
+					"observed", Map.of("cpuPercent", 5.0, "runningTasks", 0)))))
+			.andExpect(status().isOk());
+		jdbc.update("update network_nodes set last_seen_at = timestampadd(second, -600, current_timestamp) "
+			+ "where id = ?", mudo.id());
+		// A tarefa da fila é limpa: com o nó silencioso ela não despacha, e o alerta dela
+		// (`WORK_NO_TARGET`) é outro fato — este trecho mede a ordem entre a rede e o nó.
+		jdbc.update("delete from network_tasks");
+		alertas = dashboard(admin.token()).get("health").get("alerts");
+		assertThat(alertas.get(0).get("code").asString()).isEqualTo("NETWORK_DIVERGED");
+		assertThat(alertas.get(1).get("code").asString()).isEqualTo("NODE_SILENT");
+	}
+
 	// ---------------------------------------------------------------- helpers
+
+	private tools.jackson.databind.JsonNode dashboard(String token) throws Exception {
+		return objectMapper.readTree(mockMvc.perform(get("/admin/network/nodes/dashboard").header("X-Session-Token", token))
+			.andExpect(status().isOk())
+			.andReturn()
+			.getResponse()
+			.getContentAsString());
+	}
+
+	private void heartbeat(Node node) throws Exception {
+		mockMvc
+			.perform(post("/network/nodes/heartbeat").header("X-Node-Id", node.id()).header("X-Node-Key", node.key())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("runtimeVersion", "0.1.0", "observed",
+					Map.of("cpuPercent", 5.0, "runningTasks", 0)))))
+			.andExpect(status().isOk());
+	}
 
 	private record Node(String id, String key) {
 	}
