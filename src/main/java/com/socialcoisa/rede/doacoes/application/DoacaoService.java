@@ -174,6 +174,15 @@ public class DoacaoService {
 	}
 
 	/**
+	 * Doações de dinheiro confirmadas — sem a linha de selo manual, que é {@code CONFIRMADA} com
+	 * valor zero. É o número do resumo público, cuja chave diz "doações confirmadas".
+	 */
+	public long countConfirmedMoney() {
+		return doacoes.countByStatus(DoacaoStatus.CONFIRMADA) - doacoes.countByStatusAndOrigem(
+			DoacaoStatus.CONFIRMADA, DoacaoStatus.Origem.MANUAL);
+	}
+
+	/**
 	 * Confere o extrato Pix da conta: cada entrada reconhecida confirma a doação aberta de mesmo
 	 * valor (e mesma data, quando o extrato traz). {@code dryRun} devolve o que faria sem gravar.
 	 */

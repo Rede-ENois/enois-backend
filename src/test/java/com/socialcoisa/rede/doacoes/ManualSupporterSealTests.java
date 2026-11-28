@@ -74,7 +74,9 @@ class ManualSupporterSealTests {
 			.andExpect(jsonPath("$.apoiador").value(true));
 		mockMvc.perform(get("/doacoes/minhas").header("X-Session-Token", pessoa.token()))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.selo.apoiador").value(true));
+			.andExpect(jsonPath("$.selo.apoiador").value(true))
+			// O selo aparece em `selo`; o EXTRATO não ganha uma doação de R$ 0,00 que a pessoa não fez.
+			.andExpect(jsonPath("$.doacoes").isEmpty());
 
 		// A linha não é dinheiro: valor zero, origem manual, quem registrou fica gravado.
 		var linha = doacoes.byUser(pessoa.userId()).get(0);
@@ -192,5 +194,33 @@ class ManualSupporterSealTests {
 		var session = auth(name);
 		TestDatabase.setAdmin(session.userId());
 		return session;
+	}
+
+	/**
+	 * O resumo público conta DINHEIRO confirmado. A linha de selo manual é `CONFIRMADA` com valor
+	 * zero, e antes desta correção entrava no `confirmed` de `GET /doacoes/resumo`.
+	 */
+	@Test
+	void oResumoPublicoNaoContaOSeloManualComoDoacaoConfirmada() throws Exception {
+		String nome = "selo_resumo_" + System.nanoTime();
+		var pessoa = auth(nome);
+		var admin = admin("admin_resumo_" + System.nanoTime());
+
+		long antes = doacoes.countByStatus(DoacaoStatus.CONFIRMADA)
+			- doacoes.countByStatusAndOrigem(DoacaoStatus.CONFIRMADA, DoacaoStatus.Origem.MANUAL);
+		registra(admin.token(), usernameOf(nome)).andExpect(status().isOk());
+
+		// A linha manual existe e está CONFIRMADA...
+		assertThat(doacoes.byUser(pessoa.userId()).stream()
+			.filter(d -> d.origem() == DoacaoStatus.Origem.MANUAL && d.status() == DoacaoStatus.CONFIRMADA)
+			.count()).isEqualTo(1);
+		// ...e não mexe no número de doações de dinheiro, nem no resumo público.
+		long depois = doacoes.countByStatus(DoacaoStatus.CONFIRMADA)
+			- doacoes.countByStatusAndOrigem(DoacaoStatus.CONFIRMADA, DoacaoStatus.Origem.MANUAL);
+		assertThat(depois).as("selo manual não é doação de dinheiro").isEqualTo(antes);
+		// E o resumo público devolve esse número, não o que inclui a linha manual (antes + 1).
+		mockMvc.perform(get("/doacoes/resumo"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.confirmed").value(antes));
 	}
 }
