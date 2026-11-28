@@ -10,31 +10,55 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.socialcoisa.rede.portfolio.application.PortfolioService;
 import com.socialcoisa.rede.portfolio.application.PortfolioService.BlockInput;
+import com.socialcoisa.rede.portfolio.application.PublishedPortfolioCatalog;
 import com.socialcoisa.rede.portfolio.domain.PortfolioBlockType;
 import com.socialcoisa.rede.shared.web.ApiException;
 import com.socialcoisa.rede.shared.web.CurrentUser;
 import com.socialcoisa.rede.shared.web.CurrentUserResolver;
+import com.socialcoisa.rede.shared.web.CursorCodec;
+import com.socialcoisa.rede.shared.web.PageResponse;
 
 /**
  * Portfólio profissional.
  *
  * <p>A leitura pública é por username (`GET /portfolio/{username}`) e devolve só a última
- * publicação. Tudo que o dono edita fica em `/me/portfolio`: o rascunho e as peças nunca aparecem
- * na leitura pública, nem depois de publicados, até a próxima publicação.</p>
+ * publicação; a lista `GET /portfolio` traz as vitrines que estão no ar, sem a página. Tudo que o
+ * dono edita fica em `/me/portfolio`: o rascunho e as peças nunca aparecem na leitura pública, nem
+ * depois de publicados, até a próxima publicação.</p>
  */
 @RestController
 class PortfolioController {
 
 	private final PortfolioService service;
+	private final PublishedPortfolioCatalog catalog;
 	private final CurrentUserResolver currentUserResolver;
+	private final CursorCodec cursorCodec;
 
-	PortfolioController(PortfolioService service, CurrentUserResolver currentUserResolver) {
+	PortfolioController(PortfolioService service, PublishedPortfolioCatalog catalog,
+			CurrentUserResolver currentUserResolver, CursorCodec cursorCodec) {
 		this.service = service;
+		this.catalog = catalog;
 		this.currentUserResolver = currentUserResolver;
+		this.cursorCodec = cursorCodec;
+	}
+
+	/** As vitrines publicadas, mais recentes primeiro. Aberta a quem visita, como a leitura por username. */
+	@GetMapping("/portfolio")
+	PageResponse<PortfolioViews.Showcase> showcases(
+			@RequestParam(value = "cursor", required = false) String cursor,
+			@RequestParam(value = "limit", defaultValue = "20") int limit) {
+		var pageCursor = cursorCodec.decodePage(cursor);
+		PublishedPortfolioCatalog.Page page = catalog.page(
+			pageCursor.map(CursorCodec.PageCursor::instant).orElse(null),
+			pageCursor.map(CursorCodec.PageCursor::tieBreak).orElse(null), limit);
+		String next = page.next() == null ? null
+			: cursorCodec.encodePage(page.next().publishedAt(), page.next().userId());
+		return new PageResponse<>(page.items().stream().map(PortfolioViews.Showcase::from).toList(), next);
 	}
 
 	@GetMapping("/portfolio/{username}")

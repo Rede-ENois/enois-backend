@@ -31,11 +31,29 @@ class MediaAssetPersistenceAdapter implements MediaAssetRepository {
 	}
 
 	@Override
+	public Optional<MediaAsset> findByObjectKey(String objectKey) {
+		return objectKey == null ? Optional.empty()
+			: repository.findFirstByObjectKey(objectKey).map(MediaAssetJpaEntity::toDomain);
+	}
+
+	@Override
 	public List<MediaAsset> findByIds(Collection<String> ids) {
 		if (ids == null || ids.isEmpty()) {
 			return List.of();
 		}
 		return repository.findByIdIn(ids).stream().map(MediaAssetJpaEntity::toDomain).toList();
+	}
+
+	@Override
+	public List<MediaAsset> findVisibleByOwnerSince(String ownerId, java.time.Instant since, int limit) {
+		if (ownerId == null || since == null) {
+			return List.of();
+		}
+		return repository.findVisibleByOwnerSince(ownerId, since,
+				com.socialcoisa.rede.media.domain.MediaDeleteStatus.NONE, PageRequest.of(0, Math.max(1, limit)))
+			.stream()
+			.map(MediaAssetJpaEntity::toDomain)
+			.toList();
 	}
 
 	@Override

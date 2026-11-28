@@ -137,6 +137,23 @@ class DoacaoController {
 		return Map.of("doacao", adminView(doacoes.decide(request.aprovar(), user.id().value(), id)));
 	}
 
+	/**
+	 * O selo de apoiador registrado à mão, pelo perfil da pessoa. Para quando o dinheiro chegou e o
+	 * sistema não reconheceu o comprovante: a pessoa pagou, e o selo não podia depender da leitura.
+	 *
+	 * <p>Exige motivo (é decisão administrativa e fica com o nome de quem fez), só registra um por
+	 * conta e recusa quem já é apoiador por doação confirmada — nada disto volta pela tela: o
+	 * próximo clique depois de um registro bem-sucedido já recebe "já registrado".</p>
+	 */
+	@PostMapping("/admin/doacoes/sele/{username}")
+	Map<String, Object> grantSeal(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken,
+			@PathVariable String username, @RequestBody SealRequest request) {
+		CurrentUser user = requireAdmin(sessionToken);
+		throttle.exigePermitido("doacao-sele-manual", user.id().value(), 30, JANELA_PROVA);
+		return Map.of("doacao", adminView(doacoes.grantSeal(user.id().value(), username,
+				request == null ? null : request.reason())));
+	}
+
 	private CurrentUser requireAdmin(String sessionToken) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		adminGuard.requireAdmin(user);
@@ -178,5 +195,8 @@ class DoacaoController {
 	}
 
 	record DecisionRequest(Boolean aprovar) {
+	}
+
+	record SealRequest(String reason) {
 	}
 }

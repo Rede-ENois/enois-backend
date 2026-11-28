@@ -1,5 +1,8 @@
 package com.socialcoisa.rede.portfolio.adapters.out.persistence;
 
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.stereotype.Repository;
@@ -25,6 +28,18 @@ class PortfolioPublicationAdapter implements PortfolioPublicationRepository {
 	public Optional<PortfolioPublication> findLatest(String userId) {
 		return jpaRepository.findFirstByUserIdOrderByVersionDesc(userId)
 			.map(PortfolioPublicationJpaEntity::toDomain);
+	}
+
+	@Override
+	public Map<String, Map<Integer, String>> publishedHtml(Collection<String> userIds) {
+		Map<String, Map<Integer, String>> byOwner = new HashMap<>();
+		for (PortfolioPublication publication : jpaRepository.findPublished(userIds).stream()
+			.map(PortfolioPublicationJpaEntity::toDomain)
+			.toList()) {
+			byOwner.computeIfAbsent(publication.userId(), owner -> new HashMap<>())
+				.put(publication.version(), publication.html());
+		}
+		return byOwner;
 	}
 
 	@Override
