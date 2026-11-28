@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -59,8 +60,12 @@ public class PublishedPortfolioCatalog {
 			return new Page(List.of(), null);
 		}
 		Set<String> banned = sanctionGate.bannedAmong(published.stream().map(PortfolioPage::userId).toList());
-		Map<String, Map<Integer, String>> publishedHtml = publications
-			.publishedHtml(published.stream().map(PortfolioPage::userId).toList());
+		// O PAR dono → versão de cada página, não a lista de donos: com donos soltos a consulta
+		// carrega o histórico inteiro de cada um (html e peças) para a leitura usar uma linha.
+		Map<String, Integer> liveVersions = published.stream()
+			.collect(Collectors.toMap(PortfolioPage::userId, PortfolioPage::publishedVersion, (a, b) -> a,
+				java.util.LinkedHashMap::new));
+		Map<String, Map<Integer, String>> publishedHtml = publications.publishedHtml(liveVersions);
 		List<PublishedPortfolio> visible = new ArrayList<>();
 		for (PortfolioPage page : published) {
 			if (banned.contains(page.userId())) {
