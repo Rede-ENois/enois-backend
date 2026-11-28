@@ -858,6 +858,83 @@ class S3GatewayTests {
 	 * que nada foi reescrito, e o {@code GET} prova que o corpo é o de antes.
 	 * </p>
 	 */
+	/**
+	 * Escopo S3 congelado por decisão (ciclo 170, {@code docs/rede-distribuida/22-escopo-s3-congelado.md}).
+	 *
+	 * <p>A lista é <b>literal</b> de propósito: é a transcrição da decisão publicada. Se o gateway
+	 * passar a implementar um destes subrecursos, este teste falha e obriga a atualizar a decisão —
+	 * em vez de deixar a doc descrever algo que não existe ou esconder uma capacidade que existe.
+	 * O que se mede é o par: {@code 501 NotImplemented} nomeando o subrecurso <b>e</b> nenhum efeito
+	 * sobre o objeto ou o bucket.</p>
+	 */
+	@Test
+	void o_escopo_congelado_responde_501_nomeando_o_subrecurso_e_sem_efeito() throws Exception {
+		gravar("congelado/alvo.txt", "conteudo congelado");
+		String etagOriginal = cabecalhosDe("congelado/alvo.txt").getHeader(HttpHeaders.ETAG);
+
+		java.util.List<String> gravariam = java.util.List.of("tagging", "acl", "retention", "legal-hold",
+			"object-lock");
+		for (String sub : gravariam) {
+			var pedido = put("/s3/" + bucket + "/congelado/alvo.txt").queryParam(sub)
+				.content("<Tagging/>".getBytes(StandardCharsets.UTF_8)).contentType("application/xml");
+			assinar(pedido, SECRET, shaDe("<Tagging/>"));
+			var resposta = mockMvc.perform(pedido).andReturn().getResponse();
+			assertThat(resposta.getStatus()).as("PUT ?" + sub).isEqualTo(501);
+			assertThat(resposta.getContentAsString()).as("PUT ?" + sub)
+				.contains("<Code>NotImplemented</Code>").contains(sub);
+		}
+
+		java.util.List<String> naoApagaveis = java.util.List.of("tagging", "acl", "retention", "legal-hold",
+			"object-lock");
+		for (String sub : naoApagaveis) {
+			MockHttpServletRequestBuilder remover = delete("/s3/" + bucket + "/congelado/alvo.txt?" + sub);
+			assinar(remover, SECRET, shaVazio());
+			var resposta = mockMvc.perform(remover).andReturn().getResponse();
+			assertThat(resposta.getStatus()).as("DELETE ?" + sub).isEqualTo(501);
+			assertThat(resposta.getContentAsString()).as("DELETE ?" + sub)
+				.contains("<Code>NotImplemented</Code>").contains(sub);
+		}
+
+		// A versão é a decisão de versionamento: apagar UM id responderia como "apagado" sem apagar
+		// a versão. O nome do parâmetro na recusa é `versionId`.
+		MockHttpServletRequestBuilder versao = delete("/s3/" + bucket + "/congelado/alvo.txt?versionId=qualquer");
+		assinar(versao, SECRET, shaVazio());
+		var respostaVersao = mockMvc.perform(versao).andReturn().getResponse();
+		assertThat(respostaVersao.getStatus()).as("DELETE ?versionId").isEqualTo(501);
+		assertThat(respostaVersao.getContentAsString()).as("DELETE ?versionId")
+			.contains("<Code>NotImplemented</Code>").contains("versionId");
+
+		java.util.List<String> leiturasNaoEnderecadas = java.util.List.of("torrent", "partNumber");
+		for (String sub : leiturasNaoEnderecadas) {
+			MockHttpServletRequestBuilder leitura = get("/s3/" + bucket + "/congelado/alvo.txt?" + sub);
+			assinar(leitura, SECRET, shaVazio());
+			var resposta = mockMvc.perform(leitura).andReturn().getResponse();
+			assertThat(resposta.getStatus()).as("GET ?" + sub).isEqualTo(501);
+			assertThat(resposta.getContentAsString()).as("GET ?" + sub)
+				.contains("<Code>NotImplemented</Code>").contains(sub);
+		}
+
+		java.util.List<String> deBucket = java.util.List.of("cors", "tagging", "policy", "website", "notification",
+			"logging", "replication", "encryption", "accelerate", "requestPayment", "publicAccessBlock",
+			"ownershipControls", "analytics", "intelligent-tiering", "metrics", "inventory", "object-lock", "acl",
+			"location", "versioning", "lifecycle", "uploads", "versions");
+		// Os de bucket passam pelo DELETE do bucket (a guarda que os recusa é a dele): sem ela,
+		// `DELETE ?cors` seria despachado como DeleteBucket.
+		for (String sub : deBucket) {
+			MockHttpServletRequestBuilder remover = delete("/s3/" + bucket + "?" + sub);
+			assinar(remover, SECRET, shaVazio());
+			var resposta = mockMvc.perform(remover).andReturn().getResponse();
+			assertThat(resposta.getStatus()).as("DELETE ?" + sub).isEqualTo(501);
+			assertThat(resposta.getContentAsString()).as("DELETE ?" + sub)
+				.contains("<Code>NotImplemented</Code>").contains(sub);
+		}
+
+		// Nada do acima tocou o objeto: mesmo ETag, mesmo corpo.
+		assertThat(cabecalhosDe("congelado/alvo.txt").getHeader(HttpHeaders.ETAG)).as("objeto reescrito")
+			.isEqualTo(etagOriginal);
+		assertThat(ler("congelado/alvo.txt")).isEqualTo("conteudo congelado");
+	}
+
 	@Test
 	void put_de_subrecurso_que_gravaria_responde_501_sem_alterar_o_objeto() throws Exception {
 		gravar("subrecurso/alvo.txt", "conteudo que nao pode virar etiqueta");

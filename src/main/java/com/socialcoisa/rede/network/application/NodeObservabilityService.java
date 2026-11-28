@@ -101,10 +101,47 @@ public class NodeObservabilityService {
 	@Transactional
 	public void record(NetworkNode node, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
 			Integer runningTasks, Double diskIops, Double diskLatencyMs, java.math.BigDecimal temperatureC) {
+		record(node, cpuPercent, memoryMb, diskFreeMb, runningTasks, diskIops, diskLatencyMs, temperatureC, null);
+	}
+
+	/**
+	 * A amostra com as threads do processo do runtime (brief §8.2, "Runtime"). Nulo é "não medido" —
+	 * runtime antigo (anterior à V388) ou `/proc` inacessível —, e não 0, que afirmaria um processo
+	 * sem thread nenhuma.
+	 */
+	public void record(NetworkNode node, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
+			Integer runningTasks, Double diskIops, Double diskLatencyMs, java.math.BigDecimal temperatureC,
+			Integer threads) {
+		record(node, cpuPercent, memoryMb, diskFreeMb, runningTasks, diskIops, diskLatencyMs, temperatureC, threads,
+			null, null);
+	}
+
+	/**
+	 * A amostra com swap em uso e pressão de memória (brief §8.2, "Sistema operacional"). Nulo é "não
+	 * medido" — kernel sem swap ou sem PSI, runtime anterior à V389 —, e nunca 0, que afirmaria
+	 * "nenhum swap em uso" e "nenhuma tarefa esperou memória" sem ninguém ter lido o arquivo.
+	 */
+	public void record(NetworkNode node, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
+			Integer runningTasks, Double diskIops, Double diskLatencyMs, java.math.BigDecimal temperatureC,
+			Integer threads, Long swapUsedMb, Double memoryPressurePercent) {
+		record(node, cpuPercent, memoryMb, diskFreeMb, runningTasks, diskIops, diskLatencyMs, temperatureC, threads,
+			swapUsedMb, memoryPressurePercent, null, null);
+	}
+
+	/**
+	 * A amostra com a TAXA de rede medida (brief §8.2, "Throughput de entrada e saída"). Não é o
+	 * acumulado do heartbeat: são MiB por segundo, o que está passando agora — nulo quando o runtime
+	 * não mediu o intervalo, e nunca 0, que afirmaria "nada passou".
+	 */
+	@Transactional
+	public void record(NetworkNode node, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
+			Integer runningTasks, Double diskIops, Double diskLatencyMs, java.math.BigDecimal temperatureC,
+			Integer threads, Long swapUsedMb, Double memoryPressurePercent, Double netInMbps, Double netOutMbps) {
 		Instant now = clock.instant();
 		Instant minute = now.truncatedTo(java.time.temporal.ChronoUnit.MINUTES);
 		repository.saveSample(new Sample(node.id(), minute, cpuPercent, memoryMb, diskFreeMb, runningTasks, null,
-			node.status().name(), null, diskIops, diskLatencyMs, temperatureC));
+			node.status().name(), null, diskIops, diskLatencyMs, temperatureC, threads, swapUsedMb,
+			memoryPressurePercent, netInMbps, netOutMbps));
 		repository.trimSamples(node.id(), SAMPLE_KEEP);
 	}
 
@@ -139,9 +176,11 @@ public class NodeObservabilityService {
 	}
 
 	private TaskLatency latency(String nodeId, Instant now) {
-		com.socialcoisa.rede.network.domain.TaskLatency distribution = new com.socialcoisa.rede.network.domain.TaskLatency(
-			repository.latencySamples(nodeId, now, LATENCY_WINDOW_HOURS));
-		return new TaskLatency(distribution.p50Ms(), distribution.p95Ms(), distribution.p99Ms(), distribution.total());
+		var distribution = new com.socialcoisa.rede.network.domain.TaskLatency(
+			repository.latencySamples(nodeId, now, LATENCY_WINDOW_HOURS),
+			repository.retrySamples(nodeId, now, LATENCY_WINDOW_HOURS));
+		return new TaskLatency(distribution.p50Ms(), distribution.p95Ms(), distribution.p99Ms(), distribution.total(),
+			distribution.retries(), distribution.retriesP50(), distribution.retriesP95(), distribution.retriesP99());
 	}
 
 	/**
@@ -208,10 +247,20 @@ public class NodeObservabilityService {
 	 * Agregados do quadro — os mesmos números do topo do painel de monitoração, calculados sobre a
 	 * janela do nó. Média só sobre o que foi <b>medido</b>: um nó com metade dos heartbeats sem
 	 * disco não pode ter a média puxada para baixo por zeros que ninguém mediu.
+	 *
+	 * <p>{@code swapUsedMbLatest} e {@code memoryPressurePercentLatest} são o último valor <b>medido</b>
+	 * da janela (brief §8.2, "Sistema operacional"), e não o da amostra mais nova: os dois ficam nulos
+	 * quando o kernel não os expõe, e o ponto mais recente sem eles não apaga o último número que
+	 * existiu.</p>
+	 *
+	 * <p>{@code netInMbpsLatest}/{@code netOutMbpsLatest} são o último valor <b>medido</b> da taxa de
+	 * rede (brief §8.2, "Throughput de entrada e saída"), e não o acumulado do heartbeat: o mesmo
+	 * critério de {@link #latestMeasured} — nulo, nunca 0, quando ninguém mediu o intervalo.</p>
 	 */
 	record Summary(Double cpuAvgPercent, Double cpuMaxPercent, Integer memoryMbLatest, Long diskFreeMbLatest,
 			Integer runningTasksLatest, int sampleCount, Double diskIopsLatest, Double diskLatencyMsLatest,
-			java.math.BigDecimal temperatureCLatest) {
+			java.math.BigDecimal temperatureCLatest, Long swapUsedMbLatest, Double memoryPressurePercentLatest,
+			Double netInMbpsLatest, Double netOutMbpsLatest) {
 	}
 
 	record View(String id, String at, String level, String message) {
@@ -231,7 +280,33 @@ public class NodeObservabilityService {
 	 * nos percentis: um p99 sobre 10 tarefas é uma anedota, e o painel precisa poder dizer isso em vez
 	 * de mostrar um número com três algarismos de confiança que não tem.
 	 */
-	public record TaskLatency(Long p50Ms, Long p95Ms, Long p99Ms, long samplesInWindow) {
+	/**
+	 * {@code retriesInWindow} é quantas das tarefas concluídas tinham sido devolvidas à fila antes
+	 * (brief §8.2, "retentativas"); {@code retriesP*} a distribuição de TENTATIVAS perdidas até
+	 * concluir — separada da duração de propósito (tempo até a falha não é tempo de execução).
+	 * {@code null} quando nenhuma tarefa da janela precisou de retentativa: zero afirmaria "todas
+	 * concluíram na primeira tentativa", que é outra medida.
+	 */
+	public record TaskLatency(Long p50Ms, Long p95Ms, Long p99Ms, long samplesInWindow, long retriesInWindow,
+			Long retriesP50, Long retriesP95, Long retriesP99) {
+	}
+
+	/**
+	 * O último valor <b>medido</b> de uma coluna da série — não o da amostra mais nova.
+	 *
+	 * <p>Medida que o kernel não expõe (swap num container sem swap, PSI num kernel anterior a 4.20)
+	 * vem nula em quase todo heartbeat; pegar o valor da amostra mais nova mostraria "não medido" para
+	 * uma máquina que mediu swap em uso dez minutos atrás e não mudou desde então. O número mostrado é
+	 * o último que alguém mediu, com a idade da série ao lado ({@link Freshness}).</p>
+	 */
+	static <T> T latestMeasured(List<Sample> samples, java.util.function.Function<Sample, T> campo) {
+		for (int i = samples.size() - 1; i >= 0; i--) {
+			T valor = campo.apply(samples.get(i));
+			if (valor != null) {
+				return valor;
+			}
+		}
+		return null;
 	}
 
 	private static Summary summarize(List<Sample> samples) {
@@ -243,7 +318,9 @@ public class NodeObservabilityService {
 			max == null ? null : Math.round(max * 10) / 10.0, latest == null ? null : latest.memoryMb(),
 			latest == null ? null : latest.diskFreeMb(), latest == null ? null : latest.runningTasks(),
 			samples.size(), latest == null ? null : latest.diskIops(),
-			latest == null ? null : latest.diskLatencyMs(), latest == null ? null : latest.temperatureC());
+			latest == null ? null : latest.diskLatencyMs(), latest == null ? null : latest.temperatureC(),
+			latestMeasured(samples, Sample::swapUsedMb), latestMeasured(samples, Sample::memoryPressurePercent),
+			latestMeasured(samples, Sample::netInMbps), latestMeasured(samples, Sample::netOutMbps));
 	}
 
 	private static java.util.Map<String, Long> logLevels(List<LogLine> logs) {

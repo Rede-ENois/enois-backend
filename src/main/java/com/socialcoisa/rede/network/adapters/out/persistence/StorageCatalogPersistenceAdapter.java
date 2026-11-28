@@ -446,6 +446,12 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 	}
 
 	@Override
+	public boolean storageNodeExists(String nodeId) {
+		Integer existentes = jdbc.queryForObject(STORAGE_NODE_EXISTS, Integer.class, nodeId, "%NODE_STORAGE%");
+		return existentes != null && existentes > 0;
+	}
+
+	@Override
 	public Optional<StorageObject> find(String bucket, String key) {
 		return jdbc.query(SELECT_BY_KEY, OBJECT_MAPPER, bucket, key).stream().findFirst();
 	}
@@ -807,6 +813,16 @@ class StorageCatalogPersistenceAdapter implements StorageCatalogRepository {
 		}
 		return escaped.toString();
 	}
+
+	/**
+	 * O nó existe, está ACTIVE e tem o perfil de storage no CSV ordenado e sem espaço
+	 * (`NODE_API,NODE_STORAGE`), então o `like` de trecho casa o perfil inteiro. Um só `count(*)`:
+	 * a existência e o estado são a mesma pergunta.
+	 */
+	private static final String STORAGE_NODE_EXISTS = """
+		select count(*) from network_nodes
+		where id = ? and status = 'ACTIVE' and profiles like ?
+		""";
 
 	private static final RowMapper<StorageObject> OBJECT_MAPPER = (ResultSet rs, int rowNum) -> new StorageObject(
 		rs.getString("id"), rs.getString("bucket"), rs.getString("object_key"), rs.getString("content_type"),

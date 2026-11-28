@@ -87,4 +87,15 @@ public enum TaskType {
 	public static java.util.List<TaskType> allowedTypesFor(Set<NodeProfile> profiles) {
 		return java.util.Arrays.stream(values()).filter(type -> type.allowedFor(profiles)).toList();
 	}
+
+	/**
+	 * Os mesmos tipos, como nomes, na lista que a config assinada leva e o runtime confere.
+	 *
+	 * <p>Vive aqui, e não no serviço de config, porque há dois leitores da MESMA permissão: a config
+	 * que o nó obedece e a declaração de capacidade (brief §8.2, "Health checks"). Uma lista e a
+	 * outra divergindo faria o nó declarar como executável um tipo que a config dele nem autoriza.</p>
+	 */
+	public static java.util.List<String> allowedNamesFor(Set<NodeProfile> profiles) {
+		return allowedTypesFor(profiles).stream().map(Enum::name).toList();
+	}
 }

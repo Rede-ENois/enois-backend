@@ -465,6 +465,11 @@ class NetworkConfigServiceTests {
 		}
 
 		@Override
+		public void observeExecutorTaskTypes(String id, java.util.List<String> taskTypes, Instant now) {
+			throw new AssertionError("nao usado");
+		}
+
+		@Override
 		public void touchConfig(String id, Instant now) {
 			throw new AssertionError("nao usado");
 		}

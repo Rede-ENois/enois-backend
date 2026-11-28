@@ -21,21 +21,88 @@ import java.util.TreeMap;
  * <p>Sem amostra, os percentis são {@code null} — não 0. Zero seria "todas as tarefas concluíram em
  * 0 ms", que é uma medida, e de uma rede que não executou nada.</p>
  */
-public record TaskLatency(Map<Integer, Integer> samplesByUpperBoundMs) {
+public record TaskLatency(Map<Integer, Integer> samplesByUpperBoundMs, Map<Integer, Integer> retriesByAttempts) {
 
 	/** Menor faixa: 1 ms. Tarefa abaixo disso cai nela. */
 	private static final int FIRST_BUCKET_MS = 1;
 	/** Maior faixa: 2^16 ms (≈ 68 min). Acima disso, tudo cai aqui — a tarefa não terminou em tempo útil. */
 	private static final int MAX_BUCKET_MS = 1 << 16;
 
+	/**
+	 * {@code retriesByAttempts} é a CONTAGEM de tentativas perdidas das tarefas que foram devolvidas
+	 * à fila antes de concluir (brief §8.2, "retentativas"): chave {@code 1} = concluiu na 2ª, chave
+	 * {@code 3} = na 4ª.
+	 *
+	 * <p>Entram na distribuição de tentativas — o percentil responde "em quantas tentativas o nó
+	 * costuma concluir" — e <b>não</b> na de duração: o tempo até a falha não é tempo de execução, e
+	 * misturá-los esticaria a cauda com trabalho que não terminou. Tentativa é a outra pergunta, e é
+	 * medida em contagem: antes a chave era uma faixa de tempo ({@code bucketOf}), e o percentil
+	 * respondia "4 tentativas" para quem concluiu com 3.</p>
+	 */
 	public TaskLatency {
 		samplesByUpperBoundMs = samplesByUpperBoundMs == null ? Map.of()
 			: java.util.Collections.unmodifiableMap(new TreeMap<>(samplesByUpperBoundMs));
+		retriesByAttempts = retriesByAttempts == null ? Map.of()
+			: java.util.Collections.unmodifiableMap(new TreeMap<>(retriesByAttempts));
+	}
+
+	/** Distribuição de duração sozinha: nenhuma tarefa foi devolvida à fila. */
+	public TaskLatency(Map<Integer, Integer> samplesByUpperBoundMs) {
+		this(samplesByUpperBoundMs, Map.of());
 	}
 
 	/** Distribuição vazia: o nó não concluiu tarefa nenhuma na janela. */
 	public static TaskLatency empty() {
 		return new TaskLatency(Map.of());
+	}
+
+	/** Tarefas concluídas que já tinham sido devolvidas à fila ao menos uma vez. */
+	public long retries() {
+		return retriesByAttempts.values().stream().mapToLong(Integer::longValue).sum();
+	}
+
+	/** Percentil de TENTATIVAS até concluir; {@code null} sem tarefa que tenha sido devolvida. */
+	public Long retriesP50() {
+		return retriesPercentile(0.50);
+	}
+
+	public Long retriesP95() {
+		return retriesPercentile(0.95);
+	}
+
+	public Long retriesP99() {
+		return retriesPercentile(0.99);
+	}
+
+	/**
+	 * Percentil de uma variável DISCRETA: devolve o valor medido que ocupa a posição, sem
+	 * interpolação.
+	 *
+	 * <p>Interpolar entre 1 e 2 tentativas responderia "1,5 tentativas", que não existe — e o método
+	 * da duração ({@link #percentile(double)}) interpola de propósito, porque milissegundos são
+	 * contínuos. Aqui a distribuição é a contagem direta: com 45 tarefas de primeira (chave 0
+	 * ausente, porque só quem precisou entra) e 5 com 3 perdidas, o p50 é 3, não uma média entre
+	 * faixas.</p>
+	 */
+	Long retriesPercentile(double p) {
+		long total = retries();
+		if (total == 0 || p <= 0 || p > 1) {
+			return null;
+		}
+		long position = (long) Math.ceil(p * total - 1e-9);
+		long seen = 0;
+		for (Map.Entry<Integer, Integer> contagem : new TreeMap<>(retriesByAttempts).entrySet()) {
+			int attempts = contagem.getKey();
+			int count = contagem.getValue();
+			if (count <= 0) {
+				continue;
+			}
+			seen += count;
+			if (seen >= position) {
+				return (long) attempts;
+			}
+		}
+		return null;
 	}
 
 	/**

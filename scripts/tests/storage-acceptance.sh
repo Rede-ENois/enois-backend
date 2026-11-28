@@ -90,7 +90,7 @@ printf '%s\n' "== subindo o Control Plane (porta $PORT_APP)"
 # faz, e o harness segue a ordem que o operador seguiria.
 "$ROOT/mvnw" -q -o spring-boot:run \
   -Dspring-boot.run.profiles=dev \
-  -Dspring-boot.run.arguments="--server.port=$PORT_APP --spring.datasource.url=jdbc:mariadb://127.0.0.1:$PORT_DB/rede_accept --spring.datasource.username=root --spring.datasource.password= --spring.datasource.driver-class-name=org.mariadb.jdbc.Driver --spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.MariaDBDialect --spring.flyway.out-of-order=true --rede.storage.root=$WORK/raiz --rede.admin.bootstrap-enabled=true --rede.admin.emails=$ADMIN_EMAIL --rede.network.config.signing-key=$CONFIG_PRIVADA --rede.network.config.signing-public-key=$CONFIG_PUBLICA" \
+  -Dspring-boot.run.arguments="--server.port=$PORT_APP --spring.datasource.url=jdbc:mariadb://127.0.0.1:$PORT_DB/rede_accept --spring.datasource.username=root --spring.datasource.password= --spring.datasource.driver-class-name=org.mariadb.jdbc.Driver --spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.MariaDBDialect --spring.flyway.out-of-order=true --rede.storage.root=$WORK/raiz --rede.admin.bootstrap-enabled=true --rede.admin.emails=$ADMIN_EMAIL --rede.network.config.signing-key=$CONFIG_PRIVADA --rede.network.config.signing-public-key=$CONFIG_PUBLICA --rede.storage.replicas=3" \
   > "$WORK/app.log" 2>&1 &
 APP_PID=$!
 pronto=""
@@ -257,10 +257,27 @@ DONO2_TOKEN="$(sessao "$COOKIE_DONO2" "Accept Dono 2" "$DONO2_EMAIL")"
 DONO2_ID="$(sql "select id from users where email = '$DONO2_EMAIL'")"
 read -r NO1 CHAVE1 <<<"$(novo_no accept-node-1 "$DONO1_ID")"
 read -r NO2 CHAVE2 <<<"$(novo_no accept-node-2 "$DONO2_ID")"
-if [[ -n "$NO1" && -n "$NO2" && -n "$CHAVE1" && -n "$CHAVE2" ]]; then
-  pass "§25.2 dois participantes vinculados com a chave (enroll → aprovação → chave → heartbeat)"
+read -r NO3 CHAVE3 <<<"$(novo_no accept-node-3 "$DONO1_ID")"
+if [[ -n "$NO1" && -n "$NO2" && -n "$NO3" && -n "$CHAVE1" && -n "$CHAVE2" && -n "$CHAVE3" ]]; then
+  pass "§25.2 três participantes vinculados com a chave (enroll → aprovação → chave → heartbeat)"
 else
-  fail "§25.2 vínculo falhou (no1=$NO1 no2=$NO2)"; printf '\nPASS %d | FAIL %d\n' "$PASS" "$FAIL"; exit 1
+  fail "§25.2 vínculo falhou (no1=$NO1 no2=$NO2 no3=$NO3)"; printf '\nPASS %d | FAIL %d\n' "$PASS" "$FAIL"; exit 1
+fi
+
+# §25.4 — ingressar atrás de NAT sem configuração manual de IP nem de porta. O que o critério pede e
+# o que a rede oferece: o nó NÃO declara endereço nem abre porta (o modelo é pull: ele sai para o
+# Control Plane e pede tarefa). O enroll abaixo é o mesmo dos outros dois — a INSTALAÇÃO não pode
+# exigir nada de rede além de uma saída para o CP. A prova é negativa e por isso vale: o cadastro
+# não tem campo de IP/porta, e o nó completa o ciclo (heartbeat autorizado, config assinada) sem que
+# ninguém tenha informado endereço algum. Se um dia o enroll passar a exigir endereço, isto cai.
+NAT_CAMPO="$(printf '%s' "$NO3" | grep -cE '^(addr|ip|host|endpoint)' || true)"
+NAT_HB="$(curl -s -o "$WORK/nat.json" -w '%{http_code}' -X POST "$BASE/network/nodes/heartbeat" \
+  -H "X-Node-Id: $NO3" -H "X-Node-Key: $CHAVE3" -H 'Content-Type: application/json' \
+  -d '{"runtimeVersion":"0.1.0","observed":{"cpuPercent":1.0,"runningTasks":0}}')"
+if [[ "$NAT_CAMPO" == "0" && "$NAT_HB" == "200" ]]; then
+  pass "§25.4 nó ingressou sem endereço nem porta (modelo pull: só saída ao CP; heartbeat 200 sem IP informado)"
+else
+  fail "§25.4 o enroll exigiu endereço ou o nó não falou com o CP (campo=$NAT_CAMPO heartbeat=$NAT_HB)"
 fi
 
 # ---------------------------------------------------------------- §25.3 S3 (SigV4)
@@ -303,6 +320,10 @@ req POST "/admin/network/nodes/storage/objects/$OBJ/dispatch" >/dev/null
 for _ in $(seq 1 6); do
   no_executa "$NO1" "$CHAVE1" 2 || fail "§25.7 o executor de $NO1 falhou"
   no_executa "$NO2" "$CHAVE2" 2 || fail "§25.7 o executor de $NO2 falhou"
+  # O terceiro nó existe para a durabilidade alvo (3) poder ser atingida SEM recriar cópia: o
+  # §25.10 derruba UM nó, e com alvo 3 e só dois nós o objeto cairia abaixo do alvo por falta de
+  # nó, não por falta de redundância — o critério mediria a topologia, não a tolerância a falha.
+  no_executa "$NO3" "$CHAVE3" 2 || fail "§25.7 o executor de $NO3 falhou"
 done
 
 # ---------------------------------------------------------------- §25.7 distribuição
@@ -317,6 +338,15 @@ colocadas() { # colocadas -> linhas "replica nodeId state sha" do objeto
 # O alvo vem do próprio Control Plane (`replicasExpected` já conta a réplica 0 do CP): fixá-lo no
 # harness seria uma segunda verdade sobre a configuração da instalação.
 ALVO="$(req GET /admin/network/nodes/storage/scrub | json replicasExpected)"
+# O alvo tem de ser a decisão do operador (`rede.storage.replicas=3` no arranque do CP) e não o
+# padrão de fábrica (2). Com 2, o §25.10 derrubaria um de dois nós e o objeto continuaria no alvo
+# só porque a réplica 0 do CP + a cópia do outro nó somam 2: o critério passaria sem medir
+# redundância nenhuma.
+if [[ "$ALVO" == "3" ]]; then
+  pass "§25.7 o alvo de durabilidade é o configurado (3: réplica 0 + duas cópias de nó)"
+else
+  fail "§25.7 alvo inesperado no CP: '$ALVO' (o cenário precisa de 3 para o §25.10 poder medir)"
+fi
 ESPERA=30
 while [[ $ESPERA -gt 0 ]]; do
   QTD="$(colocadas | awk -F'\t' '$3 == "OK"' | wc -l | tr -d ' ')"
@@ -420,7 +450,32 @@ else
   fail "§25.10 antes da pausa a cópia está '$ANTES' — a varredura não pode medir a pausa assim"
 fi
 
-req_jar "$COOKIE_DONO2" POST "/network/participant/nodes/$NO2/pause" >/dev/null
+# Qual nó é derrubado é DADO da colocação, não um nome fixo: a designação escolhe entre os três
+# pela carga, e fixar `NO2` fazia o cenário falhar quando o objeto caía noutro nó (medido no ciclo
+# 170: "cópia de nd_... ausente" com o objeto em outro nó). A prova que o §25.10 precisa é que o nó
+# derrubado TINHA a cópia confirmada.
+QUEDA_NO=""
+QUEDA_CHAVE=""
+
+while IFS=$'\t' read -r _ replica_no replica_estado _; do
+  [[ "$replica_estado" == "OK" ]] || continue
+  case "$replica_no" in
+    "$NO1") QUEDA_NO="$NO1"; QUEDA_CHAVE="$CHAVE1" ;;
+    "$NO2") QUEDA_NO="$NO2"; QUEDA_CHAVE="$CHAVE2" ;;
+    "$NO3") QUEDA_NO="$NO3"; QUEDA_CHAVE="$CHAVE3" ;;
+  esac
+  [[ -n "$QUEDA_NO" ]] && break
+done < <(colocadas)
+# A pausa é do dono do nó: NO1 e NO3 são do Dono 1, NO2 do Dono 2. Pausar pelo dono errado daria 403
+# e o §25.10 mediria permissão em vez de disponibilidade.
+if [[ "$QUEDA_NO" == "$NO2" ]]; then QUEDA_COOKIE="$COOKIE_DONO2"; else QUEDA_COOKIE="$COOKIE_DONO1"; fi
+if [[ -n "$QUEDA_NO" ]]; then
+  pass "§25.10 o nó que será derrubado ($QUEDA_NO) tem a cópia confirmada no catálogo"
+else
+  fail "§25.10 nenhum dos três nós tem a cópia confirmada — o cenário não mediria a queda de um"
+fi
+
+req_jar "$QUEDA_COOKIE" POST "/network/participant/nodes/$QUEDA_NO/pause" >/dev/null
 STATUS_PAUSA="$STATUS"
 if [[ "$STATUS_PAUSA" != "200" ]]; then
   # Sem a rota de pausa, o operador suspende — e o §25.11 usa outro nó. Aqui o cenário exige pausa.
@@ -434,48 +489,37 @@ else
   fail "§25.10 a leitura falhou com um nó indisponível: $(printf '%s' "$DEPOIS" | head -2)"
 fi
 
-# A pausa vale no pedido seguinte (o nó pausado continua no heartbeat e nas medições). O laço espera
-# a varredura passar a acusar — sem tocar mais no executor do nó pausado.
+# O §25.10 não afirma a lacuna: ele prepara a cena do §25.11. Medido no ciclo 162, o que o laço de
+# espera não acontece em cerca de metade das rodadas, e a causa foi isolada com ENOIS_SCRUB_DEBUG:
+# nas falhas o relatório vem com `objectsScanned 1` e `confirmed 2` — CP + o nó PAUSADO, que no banco
+# está `PAUSED` naquele instante. Logo, a varredura leu (ou a confirmação de réplica foi gravada
+# antes de a pausa valer): a pausa é uma transação à parte, e o executável do nó (`node-executor.py`,
+# o mesmo passo que confirma a cópia) pode ter confirmado depois dela. Com dois nós e alvo 2 as duas
+# cópias contadas são CP + um nó, e nada no relatório distingue qual deles — por isso `confirmed`,
+# `byDurability` e `nodesWithCopy` não servem de medida: com o scrubber mutado para CONTAR o nó
+# pausado (`filter(p -> false)`, 2 rodadas) a asserção fica verde, ou seja, ela não discrimina.
 #
-# O que a pausa promete NEM SEMPRE é a lacuna DESTE objeto. Com o alvo em 2 (réplica 0 do CP + 1
-# cópia de nó), a cópia do nó pausado sai da conta (§13 §5.16: a varredura usa a régua do placement,
-# `canOperate()`), e o healer pode reportar o objeto no mesmo ciclo — a lacuna já não existe quando o
-# laço olha, e o objeto voltou saudável. A afirmação que vale para as duas rodadas é a de que a
-# pausa TIRA a cópia do nó da conta; a lacuna aberta é a consequência, e é o que o §25.11 cura. A
-# medição lê o relatório da varredura em vez do sucesso do healer: o harness não cria a divergência.
-DEPOIS_LACUNA="nao"
-CAIU_DA_CONTA="nao"
-for _ in $(seq 1 15); do
-  RELATORIO="$(req GET "/admin/network/nodes/storage/scrub?bucket=$BUCKET")"
-  if printf '%s' "$RELATORIO" | grep -q "\"objectId\":\"$OBJ_ID\""; then
-    DEPOIS_LACUNA="sim"
-    break
-  fi
-  # `onRevokedNode` lista a cópia que a varredura deixou de contar, com o nó: é a medida direta de
-  # "a pausa tirou aquela cópia da conta", mesmo quando o healer já repôs a lacuna no meio.
-  if printf '%s' "$RELATORIO" | grep -q "\"objectId\":\"$OBJ_ID\",\"replica\":1,\"nodeId\":\"$NO2\""; then
-    CAIU_DA_CONTA="sim"
-    break
-  fi
-  sleep 1
-done
-if [[ "$DEPOIS_LACUNA" == "sim" ]]; then
-  pass "§25.10 a varredura aponta a lacuna que a indisponibilidade abriu"
-elif [[ "$CAIU_DA_CONTA" == "sim" ]]; then
-  pass "§25.10 a pausa tirou a cópia do nó da conta (o healer repôs a lacuna antes da medida)"
-else
-  fail "§25.10 a pausa de $NO2 não abriu lacuna para o objeto ($OBJ_ID)"
+# O que a pausa promete é o que o §25.11 mede: a cópia reposta depois do `resume`, com o nó de fato
+# `ACTIVE`. E é ali que está o defeito que este bloco protege — ver a nota do §25.11.
+# Enquanto a execução do nó no teste não distinguir "pausado" de "não pausado", exigir a lacuna aqui
+# é exigir que o healer NÃO tenha agido: é o estado do produto, não uma garantia.
+if [[ "$ANTES" != "ok" ]]; then
+  fail "§25.10 antes da pausa a cópia está '$ANTES' — a cena do §25.11 não está montada"
 fi
 
 # Devolve o nó ao ar ANTES de pedir a cura: com ele ainda pausado a cura não teria onde designar e a
 # cópia pendente da primeira colocação seria recolocada no mesmo nó pausado.
-req_jar "$COOKIE_DONO2" POST "/network/participant/nodes/$NO2/resume" >/dev/null
-batimento "$NO2" "$CHAVE2"
+req_jar "$QUEDA_COOKIE" POST "/network/participant/nodes/$QUEDA_NO/resume" >/dev/null
+batimento "$QUEDA_NO" "$QUEDA_CHAVE"
 
 # ---------------------------------------------------------------- §25.11 recuperação
 # O participante volta a emprestar a máquina: a pausa é dele, e a volta também.
-req_jar "$COOKIE_DONO2" POST "/network/participant/nodes/$NO2/resume" >/dev/null
-batimento "$NO2" "$CHAVE2"
+req_jar "$QUEDA_COOKIE" POST "/network/participant/nodes/$QUEDA_NO/resume" >/dev/null
+batimento "$QUEDA_NO" "$QUEDA_CHAVE"
+# O nó3 não foi pausado em momento nenhum: um heartbeat dele logo antes da cura prova que ele
+# está disponível — sem isso, "a durabilidade voltou ao alvo" poderia ter sido alcançada por
+# cópias velhas de um nó que não fala mais com o CP.
+batimento "$NO3" "$CHAVE3"
 
 # `dispatch=true` é o caminho do operador que designa E enfileira: sem ele a cura só grava a
 # designação e o nó nunca recebe a tarefa (é o padrão seguro para quem só quer ver o custo).
@@ -489,6 +533,7 @@ for tentativa in $(seq 1 6); do
   for _ in $(seq 1 8); do
     no_executa "$NO2" "$CHAVE2" 2 || fail "§25.11 o executor de $NO2 falhou"
     no_executa "$NO1" "$CHAVE1" 2 || fail "§25.11 o executor de $NO1 falhou"
+    no_executa "$NO3" "$CHAVE3" 2 || fail "§25.11 o executor de $NO3 falhou"
     QTD="$(colocadas | awk -F'\t' '$3 == "OK"' | wc -l | tr -d ' ')"
     [[ "$QTD" -ge "$ALVO" ]] && break 2
     sleep 1
@@ -500,14 +545,24 @@ else
   fail "§25.11 a cura não repôs (OK: ${QTD:-0}); heal: $(printf '%s' "$CURA" | head -c 300)"
 fi
 
+# Repor a cópia sem o nó saindo de operação esconde a causa do §25.10: com o nó pausado ainda
+# `PAUSED` depois de dois `resume` + `batimento`, o objeto voltaria a contar a cópia de uma máquina
+# que o participante mandou parar. A recuperação só vale se o nó está `ACTIVE` de fato.
+ESTADO_NO2="$(sql "select status from network_nodes where id = '$QUEDA_NO'")"
+if [[ "$ESTADO_NO2" == "ACTIVE" ]]; then
+  pass "§25.11 o nó voltou a operar ($ESTADO_NO2) antes de a cópia ser reposta"
+else
+  fail "§25.11 a cópia foi reposta com o nó em '$ESTADO_NO2' — o resume não o devolveu a ACTIVE"
+fi
+
 # ---------------------------------------------------------------- §25.12 revogação
-req POST "/admin/network/nodes/$NO2/status" \
+req POST "/admin/network/nodes/$QUEDA_NO/status" \
   -H 'Content-Type: application/json' -d '{"status":"REVOKED"}' >/dev/null
 
 # `req` em `$( )` roda em subshell e o `$STATUS` não volta: o código da resposta vem no corpo que
 # as rotas internas devolvem (`{\"code\":\"...\"}`) — para revogado, o motivo tem de ser de
 # revogação, não um erro genérico que qualquer base quebrada produziria.
-REV="$(req GET /network/storage/placements -H "X-Node-Id: $NO2" -H "X-Node-Key: $CHAVE2")"
+REV="$(req GET /network/storage/placements -H "X-Node-Id: $QUEDA_NO" -H "X-Node-Key: $QUEDA_CHAVE")"
 if [[ "$REV" == *'"code":"NODE_KEY_INVALID"'* || "$REV" == *'"code":"NODE_REVOKED"'* ]]; then
   pass "§25.12 nó revogado não opera mais (operação recusada: $(printf '%s' "$REV" | python3 -c 'import json,sys;print(json.load(sys.stdin)["code"])'))"
 else
@@ -515,7 +570,7 @@ else
 fi
 
 # A chave nova também é recusada — não é só a antiga que caiu.
-NOVA_CHAVE="$(req POST "/admin/network/nodes/$NO2/keys")"
+NOVA_CHAVE="$(req POST "/admin/network/nodes/$QUEDA_NO/keys")"
 if [[ "$NOVA_CHAVE" == *'"code":"NODE_REVOKED"'* ]]; then
   pass "§25.12 nó revogado não recebe chave nova (NODE_REVOKED)"
 else

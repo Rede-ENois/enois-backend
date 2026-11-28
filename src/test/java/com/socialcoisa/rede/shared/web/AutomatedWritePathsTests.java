@@ -79,6 +79,9 @@ class AutomatedWritePathsTests {
 		// X-Node-Key), e o certificado que ele já tem não é exigido — quem renova pode estar com o
 		// certificado a um dia de expirar.
 		"/network/nodes/me/certificate",
+		// Declaração de capacidade do executor (§8.2, "Health checks", V390): o nó diz o que esta
+		// máquina consegue rodar, na mesma credencial de nó — não há sessão para conferir.
+		"/network/nodes/me/executor-capabilities",
 		// Reserva (V364): o nó confirma a própria cópia, com a mesma credencial de nó. Era o único
 		// fluxo de escrita nascido do interceptor sem entrada aqui — o teste varre a lista real e
 		// acusou a divergência (antes: só em PUBLIC_WRITES → agora: nos dois lugares).

@@ -40,8 +40,28 @@ public interface StorageCatalogRepository {
 	 * Cria o objeto em {@code PENDING}, ou devolve o existente. A segunda chamada do mesmo cliente
 	 * não duplica: {@code bucket + key} é única no banco e a consulta é o que decide.
 	 */
+	/**
+	 * Grava o objeto {@code PENDING}, ou devolve o que já existe com a mesma chave (o insert-ou-ler é
+	 * o que faz o reenvio do mesmo upload responder a mesma coisa nos dois caminhos).
+	 *
+	 * <p>A versão nova é lida do relógio do <b>banco</b>: o upload que corre contra outro na mesma
+	 * chave não pode depender de qual processo chegou primeiro — o pedido seguinte desta instância
+	 * pegaria a versão que o outro escreveu se a contagem fosse feita aqui.</p>
+	 */
 	StorageObject createPending(String id, String bucket, String key, String contentType, String createdBy,
 			Instant now);
+
+	/**
+	 * {@code ACTIVE} com o perfil de storage, pelo caminho de volta do servidor de banco.
+	 *
+	 * <p>O objeto é gravado no disco do Control Plane <b>antes</b> de a linha existir (registrar "tem
+	 * cópia" apontando para arquivo que ainda não existe daria objeto servível sem bytes), então uma
+	 * falha do banco no meio deixa bytes no disco de um objeto que ninguém (nem o dono) pode ler.
+	 * A coleta precisa poder perguntar "estes bytes têm dono?"; a resposta é esta consulta, e só
+	 * {@code ACTIVE}: o nó aprovado que ainda não mandou heartbeat conta, o que espera aprovação não
+	 * (ele não recebe colocação, então objeto dele é diagnóstico de erro, não de queda).</p>
+	 */
+	boolean storageNodeExists(String nodeId);
 
 	/** O objeto ganhou cópia inteira: bytes e hash medidos, estado {@code STORED}. */
 	boolean markStored(String id, long bytes, String sha256, Instant now);

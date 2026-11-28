@@ -299,6 +299,28 @@ public class NetworkNodeService {
 		return require(authenticated.id());
 	}
 
+	/**
+	 * O que o nó declarou conseguir EXECUTAR (brief §8.2, "Health checks").
+	 *
+	 * <p>A permissão assinada autoriza por perfil; isto é a capacidade da máquina, que o Control
+	 * Plane não vê de fora (ele nunca abre conexão para o nó). A declaração é do nó e só pode
+	 * escolher entre os tipos que a config dele autoriza: um tipo fora dela não entra na lista —
+	 * declarar capacidade de algo que não pode executar não muda nada, e guardar isso deixaria o
+	 * painel dizendo que o nó sabe fazer o que o Control Plane nunca lhe pediria.</p>
+	 */
+	@Transactional
+	public NetworkNode declareExecutorCapabilities(NetworkNode authenticated, java.util.List<String> declarados) {
+		requireOperable(authenticated);
+		java.util.List<String> autorizados = NetworkConfigService.allowedTasks(authenticated);
+		java.util.List<String> validos = declarados == null ? java.util.List.of()
+			: declarados.stream().filter(tipo -> tipo != null && autorizados.contains(tipo))
+				.distinct()
+				.sorted()
+				.toList();
+		nodes.observeExecutorTaskTypes(authenticated.id(), validos, clock.instant());
+		return require(authenticated.id());
+	}
+
 	/** Medida que não pode existir (negativa ou não numérica) é "não medido", nunca um número. */
 	private static Double naoNegativo(Double value) {
 		return value == null || value.isNaN() || value.isInfinite() || value < 0 ? null : value;
@@ -654,7 +676,8 @@ public class NetworkNodeService {
 	public record HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 			Integer memoryAvailableMb, Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Double diskIops,
 			Double diskLatencyMs, BigDecimal temperatureC, Long contentUsedMb, Long bytesInMb, Long bytesOutMb,
-			Integer observedTerm, String observedIp) {
+			Integer threads, Long swapUsedMb, Double memoryPressurePercent, Integer observedTerm,
+			String observedIp) {
 
 		/**
 		 * Heartbeat de runtime anterior ao tráfego medido (V345): os dois contadores ficam nulos.
@@ -666,7 +689,7 @@ public class NetworkNodeService {
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Long contentUsedMb, Integer observedTerm) {
 			this(runtimeVersion, cpuPercent, memoryMb, null, runningTasks, diskFreeMb, diskTotalMb, null, null,
-				null, contentUsedMb, null, null, observedTerm, null);
+				null, contentUsedMb, null, null, null, null, null, observedTerm, null);
 		}
 
 		/**
@@ -679,7 +702,7 @@ public class NetworkNodeService {
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Long diskTotalMb, Integer observedTerm) {
 			this(runtimeVersion, cpuPercent, memoryMb, null, runningTasks, diskFreeMb, diskTotalMb, null, null,
-				null, null, null, null, observedTerm, null);
+				null, null, null, null, null, null, null, observedTerm, null);
 		}
 
 		/**
@@ -693,7 +716,7 @@ public class NetworkNodeService {
 		public HeartbeatCommand(String runtimeVersion, Double cpuPercent, Integer memoryMb,
 				Integer runningTasks, Long diskFreeMb, Integer observedTerm) {
 			this(runtimeVersion, cpuPercent, memoryMb, null, runningTasks, diskFreeMb, null, null, null,
-				null, null, null, null, observedTerm, null);
+				null, null, null, null, null, null, null, observedTerm, null);
 		}
 	}
 }

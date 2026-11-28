@@ -338,14 +338,21 @@ public class NetworkConfigService {
 	 * A config do nó autenticado. {@code signed} diz a verdade sobre {@code signature}: sem chave,
 	 * {@code false} e {@code null} — nunca {@code true} com campo vazio.
 	 */
+	/**
+	 * Os tipos de tarefa que a config assinada deste nó autoriza — a mesma lista que o runtime
+	 * verifica antes de executar. A declaração de capacidade (brief §8.2, "Health checks") só pode
+	 * escolher entre eles: um nó não declara saber o que nunca lhe seria pedido.
+	 */
+	public static List<String> allowedTasks(NetworkNode node) {
+		return node.canOperate() ? TaskType.allowedNamesFor(node.profiles()) : List.of();
+	}
+
 	public NodeConfigView forNode(NetworkNode node) {
 		boolean operable = node.canOperate();
 		List<String> profiles = node.profiles().stream().map(Enum::name).sorted().toList();
 		// Nó fora de operação não recebe tarefa nenhuma: devolver a lista vazia e `operable=false` é
 		// o mesmo critério que o scheduler usa (`accepts` exige `canOperate`), dito ao runtime.
-		List<String> allowedTasks = operable
-				? TaskType.allowedTypesFor(node.profiles()).stream().map(Enum::name).toList()
-				: List.of();
+		List<String> allowedTasks = allowedTasks(node);
 		var stamp = nodes.configStamp(node.id())
 			.orElseGet(() -> new NetworkNodeRepository.ConfigStamp(FORMAT_VERSION, Instant.now(clock)));
 		// O disco declarado é o teto; o medido é a folga. Os dois vão para o nó porque ele decide o

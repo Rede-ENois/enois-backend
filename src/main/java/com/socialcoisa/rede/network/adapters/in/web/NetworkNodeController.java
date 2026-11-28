@@ -119,10 +119,17 @@ class NetworkNodeController {
 	 * <p>{@code bytesInMb}/{@code bytesOutMb} são o tráfego ACUMULADO nas interfaces
 	 * dele (brief §18, "consultar tráfego"); o Control Plane só recebe a contagem e não soma nada
 	 * por conta própria — quem transfere é a máquina do participante, e é ela que mede.
+	 *
+	 * <p>{@code netInMbps}/{@code netOutMbps} são outra medida: a TAXA de entrada e saída em MiB/s
+	 * (brief §8.2, "Throughput de entrada e saída"), calculada pelo nó entre dois ciclos. Não é o
+	 * acumulado dividido por nada — o runtime guarda o instante da medição anterior e divide por ele,
+	 * porque intervalo que o servidor não viu não pode ser reconstruído depois. Nulo é "não medido"
+	 * (runtime anterior, primeiro ciclo sem anterior, contador que retrocedeu), nunca 0.</p>
 	 */
 	record Observed(Double cpuPercent, Integer memoryMb, Integer memoryAvailableMb, Integer runningTasks,
 			Long diskFreeMb, Long diskTotalMb, Double diskIops, Double diskLatencyMs, Double temperatureC, Long usedMb,
-			Long bytesInMb, Long bytesOutMb) {
+			Long bytesInMb, Long bytesOutMb, Integer threads, Long swapUsedMb, Double memoryPressurePercent,
+			Double netInMbps, Double netOutMbps) {
 	}
 
 	/**
@@ -249,7 +256,9 @@ class NetworkNodeController {
 			observed == null ? null : observed.diskIops(), observed == null ? null : observed.diskLatencyMs(),
 			observed == null ? null : graus(observed.temperatureC()),
 			observed == null ? null : observed.usedMb(), observed == null ? null : observed.bytesInMb(),
-			observed == null ? null : observed.bytesOutMb(), request == null ? null : request.observedTerm(),
+			observed == null ? null : observed.bytesOutMb(), observed == null ? null : observed.threads(),
+			observed == null ? null : observed.swapUsedMb(), observed == null ? null : observed.memoryPressurePercent(),
+			request == null ? null : request.observedTerm(),
 			peerIp(forwardedFor, peerAddressFromRequest())));
 		// acceptTasks também é falso quando o PRÓPRIO nó está em quarentena de status: é assim que
 		// o nó de TERM_CONFLICT drena na hora, sem precisar de 403 — 403 no heartbeat encerraria o
@@ -272,7 +281,8 @@ class NetworkNodeController {
 			// com a coluna do nó nula. A temperatura usa a mesma régua da coluna (`graus`).
 			observability.record(updated, observed.cpuPercent(), updated.observedMemoryMb(), observed.diskFreeMb(),
 				observed.runningTasks(), updated.observedDiskIops(), updated.observedDiskLatencyMs(),
-				graus(observed.temperatureC()));
+				graus(observed.temperatureC()), observed.threads(), observed.swapUsedMb(),
+				observed.memoryPressurePercent(), observed.netInMbps(), observed.netOutMbps());
 		}
 		if (request != null && request.logs() != null) {
 			for (LogRequest line : request.logs()) {
@@ -300,6 +310,33 @@ class NetworkNodeController {
 	NetworkConfigService.NodeConfigView myConfig(@RequestHeader(value = "X-Node-Id", required = false) String nodeId,
 			@RequestHeader(value = "X-Node-Key", required = false) String nodeKey) {
 		return configs.forNode(keys.authenticate(nodeId, nodeKey));
+	}
+
+	/**
+	 * O que este nó consegue EXECUTAR das tarefas que a config dele autoriza (brief §8.2,
+	 * "Health checks"). O runtime publica depois de ler a config, e relembra de tempos em tempos —
+	 * a máquina pode ganhar (ou perder) o executor sem trocar de perfil.
+	 *
+	 * <p>Não é a permissão: a config assinada continua sendo a única fonte dela. É capacidade, e o
+	 * despacho usa para não mandar trabalho que esta máquina não consegue fazer — o nó que tenta e
+	 * falha gasta uma tentativa a cada ciclo.</p>
+	 */
+	@PostMapping("/nodes/me/executor-capabilities")
+	ExecutorCapabilitiesResponse declareExecutorCapabilities(
+			@RequestHeader(value = "X-Node-Id", required = false) String nodeId,
+			@RequestHeader(value = "X-Node-Key", required = false) String nodeKey, @RequestBody ExecutorCapabilities body) {
+		NetworkNode node = keys.authenticate(nodeId, nodeKey);
+		NetworkNode updated = nodes.declareExecutorCapabilities(node,
+			body == null ? null : body.enabledTaskTypes());
+		return new ExecutorCapabilitiesResponse(updated.id(), updated.executorTaskTypes());
+	}
+
+	/** O que o runtime declara: os tipos autorizados pela config que a máquina consegue rodar. */
+	record ExecutorCapabilities(List<String> enabledTaskTypes) {
+	}
+
+	/** O que ficou gravado — só tipos que a config autoriza, e já sem duplicatas. */
+	record ExecutorCapabilitiesResponse(String nodeId, List<String> enabledTaskTypes) {
 	}
 
 	/** Instante do runtime; ausente ou ilegível cai no relógio do Control Plane. */

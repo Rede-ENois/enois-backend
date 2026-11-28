@@ -12,16 +12,41 @@ import java.util.List;
  */
 public interface NodeObservabilityRepository {
 
-	/** Um ponto do gráfico: um por minuto, por nó. */
+	/**
+	 * Um ponto do gráfico: um por minuto, por nó. {@code threads} é o número de threads do processo
+	 * do runtime no instante do heartbeat (brief §8.2, "Runtime"): nulo é "não medido", e nunca 0.
+	 * {@code swapUsedMb} e {@code memoryPressurePercent} são swap em uso e a espera por memória do
+	 * PSI (brief §8.2, "Sistema operacional"), nulos quando o kernel não expõe. {@code netInMbps} e
+	 * {@code netOutMbps} são a TAXA de rede em MiB/s (brief §8.2, "Throughput de entrada e saída"),
+	 * nulos sem medição — não são o acumulado que o heartbeat manda para o painel do participante.
+	 */
 	record Sample(String nodeId, Instant sampledAt, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
 			Integer runningTasks, Integer queueDepth, String mode, String activity, Double diskIops,
-			Double diskLatencyMs, java.math.BigDecimal temperatureC) {
+			Double diskLatencyMs, java.math.BigDecimal temperatureC, Integer threads, Long swapUsedMb,
+			Double memoryPressurePercent, Double netInMbps, Double netOutMbps) {
+
+		/** Amostra de runtime anterior à V391: sem a taxa de rede medida. */
+		public Sample(String nodeId, Instant sampledAt, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
+				Integer runningTasks, Integer queueDepth, String mode, String activity, Double diskIops,
+				Double diskLatencyMs, java.math.BigDecimal temperatureC, Integer threads, Long swapUsedMb,
+				Double memoryPressurePercent) {
+			this(nodeId, sampledAt, cpuPercent, memoryMb, diskFreeMb, runningTasks, queueDepth, mode, activity,
+				diskIops, diskLatencyMs, temperatureC, threads, swapUsedMb, memoryPressurePercent, null, null);
+		}
+
+		/** Amostra de runtime anterior à V389: sem swap nem pressão de memória medidos. */
+		public Sample(String nodeId, Instant sampledAt, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
+				Integer runningTasks, Integer queueDepth, String mode, String activity, Double diskIops,
+				Double diskLatencyMs, java.math.BigDecimal temperatureC, Integer threads) {
+			this(nodeId, sampledAt, cpuPercent, memoryMb, diskFreeMb, runningTasks, queueDepth, mode, activity,
+				diskIops, diskLatencyMs, temperatureC, threads, null, null, null, null);
+		}
 
 		/** Amostra de runtime anterior à V380: sem o I/O de disco medido. */
 		public Sample(String nodeId, Instant sampledAt, Double cpuPercent, Integer memoryMb, Long diskFreeMb,
 				Integer runningTasks, Integer queueDepth, String mode, String activity) {
 			this(nodeId, sampledAt, cpuPercent, memoryMb, diskFreeMb, runningTasks, queueDepth, mode, activity, null,
-				null, null);
+				null, null, null, null, null, null, null);
 		}
 
 		/** Amostra de runtime anterior à V382: sem a temperatura da máquina. */
@@ -29,7 +54,7 @@ public interface NodeObservabilityRepository {
 				Integer runningTasks, Integer queueDepth, String mode, String activity, Double diskIops,
 				Double diskLatencyMs) {
 			this(nodeId, sampledAt, cpuPercent, memoryMb, diskFreeMb, runningTasks, queueDepth, mode, activity,
-				diskIops, diskLatencyMs, null);
+				diskIops, diskLatencyMs, null, null, null, null, null, null);
 		}
 	}
 
@@ -63,8 +88,23 @@ public interface NodeObservabilityRepository {
 	void addLatencySample(String nodeId, Instant at, int bucketUpperMs);
 
 	/**
+	 * Soma, para uma tarefa concluída, quantas tentativas foram perdidas antes de concluir (brief
+	 * §8.2, "retentativas"). Entra na faixa da hora de {@code at}.
+	 *
+	 * <p>É uma <b>contagem</b>: {@code attempts} é quantas tentativas falharam antes da que
+	 * concluiu (0, 1, 2…), e vai para a coluna como está — nada de milissegundos. A versão anterior
+	 * recebia uma duração e passava por {@code TaskLatency.bucketOf}, e o percentil respondia em
+	 * escala de tempo uma pergunta de contagem: uma tarefa que precisou de 3 tentativas caía na faixa
+	 * "4", e o p50 saía "4 tentativas" no lugar de "3".</p>
+	 */
+	void addRetrySample(String nodeId, Instant at, long attempts);
+
+	/**
 	 * Contagem por faixa deste nó nas últimas {@code hours} horas, até {@code now}. Faixa sem tarefa
 	 * não aparece: o que não foi medido não é zero.
 	 */
 	java.util.Map<Integer, Integer> latencySamples(String nodeId, Instant now, int hours);
+
+	/** Mesma leitura de {@link #latencySamples}, na coluna das tentativas até concluir. */
+	java.util.Map<Integer, Integer> retrySamples(String nodeId, Instant now, int hours);
 }
