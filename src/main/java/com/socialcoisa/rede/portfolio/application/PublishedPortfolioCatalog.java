@@ -2,9 +2,11 @@ package com.socialcoisa.rede.portfolio.application;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -59,15 +61,19 @@ public class PublishedPortfolioCatalog {
 			return new Page(List.of(), null);
 		}
 		Set<String> banned = sanctionGate.bannedAmong(published.stream().map(PortfolioPage::userId).toList());
-		Map<String, Map<Integer, String>> publishedHtml = publications
-			.publishedHtml(published.stream().map(PortfolioPage::userId).toList());
+		// Só a versão que a página de cada dono vai ler. O PAR dono → versão, e não dois conjuntos
+		// separados: com donos e versões soltos a consulta devolve o produto cartesiano, linhas que
+		// esta leitura descarta mas que o banco carrega (html e peças são longtext).
+		Map<String, Integer> liveVersions = published.stream()
+			.collect(Collectors.toMap(PortfolioPage::userId, PortfolioPage::publishedVersion, (a, b) -> a,
+				LinkedHashMap::new));
+		Map<String, Map<Integer, String>> publishedHtml = publications.publishedHtml(liveVersions);
 		List<PublishedPortfolio> visible = new ArrayList<>();
 		for (PortfolioPage page : published) {
 			if (banned.contains(page.userId())) {
 				continue;
 			}
-			// A lista e a página do mesmo dono mostram o mesmo título: sai do documento publicado.
-			String liveHtml = publishedHtml.getOrDefault(page.userId(), Map.of()).get(page.publishedVersion());
+			String liveHtml = liveHtmlOf(publishedHtml, page);
 			profiles.findById(page.userId())
 				.filter(profile -> shown(profile.username()))
 				.ifPresent(profile -> visible.add(new PublishedPortfolio(profile.id(), profile.username(),
@@ -76,6 +82,17 @@ public class PublishedPortfolioCatalog {
 		}
 		PortfolioPage last = published.get(published.size() - 1);
 		return new Page(visible, new Key(last.publishedAt(), last.userId()));
+	}
+
+	/**
+	 * A lista e a página do mesmo dono mostram o mesmo título: sai do documento publicado, e só se
+	 * a versão for a mesma que a linha aponta — versão de outro dono na mesma página não serve.
+	 */
+	private static String liveHtmlOf(Map<String, Map<Integer, String>> publishedHtml, PortfolioPage page) {
+		if (page.publishedVersion() <= 0) {
+			return null;
+		}
+		return publishedHtml.getOrDefault(page.userId(), Map.of()).get(page.publishedVersion());
 	}
 
 	/** Conta removida (anônima, `removed-`) nunca aparece na lista. */
