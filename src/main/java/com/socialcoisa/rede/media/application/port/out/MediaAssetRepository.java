@@ -14,7 +14,17 @@ public interface MediaAssetRepository {
 
 	Optional<MediaAsset> findById(String id);
 
+	/** Pelo endereço do objeto no bucket: é assim que a página renderizada de um PDF é localizada. */
+	Optional<MediaAsset> findByObjectKey(String objectKey);
+
 	List<MediaAsset> findByIds(Collection<String> ids);
+
+	/**
+	 * Mídias do dono criadas a partir de {@code since}, ainda no ar e sem remoção em curso, das mais
+	 * antigas para as mais novas. É a entrada da varredura de segurança: o que importa é o dono e a
+	 * época, não o estado em que o render parou.
+	 */
+	List<MediaAsset> findVisibleByOwnerSince(String ownerId, Instant since, int limit);
 
 	/**
 	 * Existe uma captura de denúncia entre estes assets? A captura é prova para a moderação: sai da

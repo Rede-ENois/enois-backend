@@ -16,7 +16,7 @@ Faltava ao nó um jeito de dizer "posso receber, mas não consigo rodar isto aqu
 
 ### No Control Plane
 
-- **Coluna** `network_nodes.executor_task_types` (`V390__network_node_executor_capabilities.sql`):
+- **Coluna** `network_nodes.executor_task_types` (`V391__network_node_executor_capabilities.sql`):
   JSON array de nomes de `TaskType`, `null` quando o nó nunca declarou.
 - **Rota** `POST /network/nodes/me/executor-capabilities` (`NetworkNodeController`), na mesma
   credencial de nó do resto do `/me` (API key, sem sessão). Corpo:

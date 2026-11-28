@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 import javax.imageio.ImageIO;
@@ -18,6 +19,8 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
 import com.socialcoisa.rede.colagem.application.port.out.ColagemRepository;
+import com.socialcoisa.rede.media.application.port.out.MediaRenderJobRepository;
+import com.socialcoisa.rede.media.domain.MediaRenderJobStatus;
 import com.socialcoisa.rede.feed.application.port.out.CommentRepository;
 import com.socialcoisa.rede.feed.application.port.out.PostRepository;
 import com.socialcoisa.rede.feed.domain.PostId;
@@ -55,6 +58,8 @@ class ReportedMediaAdapter implements ReportedMediaReader,
 	private static final Set<String> IMAGE_TYPES = Set.of(
 		"image/jpeg", "image/png", "image/gif", "image/webp", "image/avif");
 
+	private static final String PDF_MIME = "application/pdf";
+
 	private final PostRepository posts;
 	private final CommentRepository comments;
 	private final ColagemRepository colagem;
@@ -68,11 +73,14 @@ class ReportedMediaAdapter implements ReportedMediaReader,
 	private final com.socialcoisa.rede.moderation.application.port.out.CallReportContextRepository callReports;
 	/** A imagem de uma figurinha denunciada é o próprio asset do cadastro dela. */
 	private final FigurinhasComunidadeRepository figurinhas;
+	/** O PDF chega ao modelo pela folha de capa, que o render gravou como página. */
+	private final MediaRenderJobRepository jobs;
 
 	ReportedMediaAdapter(PostRepository posts, CommentRepository comments, MediaAssetRepository assets,
 			ObjectProvider<MediaSourceDownloader> downloader,
 			com.socialcoisa.rede.moderation.application.port.out.CallReportContextRepository callReports,
-			ColagemRepository colagem, FigurinhasComunidadeRepository figurinhas) {
+			ColagemRepository colagem, FigurinhasComunidadeRepository figurinhas,
+			MediaRenderJobRepository jobs) {
 		this.posts = posts;
 		this.comments = comments;
 		this.assets = assets;
@@ -80,6 +88,7 @@ class ReportedMediaAdapter implements ReportedMediaReader,
 		this.callReports = callReports;
 		this.colagem = colagem;
 		this.figurinhas = figurinhas;
+		this.jobs = jobs;
 	}
 
 	@Override
@@ -133,6 +142,23 @@ class ReportedMediaAdapter implements ReportedMediaReader,
 		return List.of();
 	}
 
+	/**
+	 * PDF não é imagem para o modelo. Ele vira a PÁGINA COBERTURA: se a folha de capa está explícita,
+	 * o documento é barrado pelo mesmo caminho de qualquer imagem (takedown e sanção). O resto das
+	 * folhas fica para a varredura de páginas, que confere uma por uma e não deixa a peça publicar
+	 * enquanto alguma não tem veredito — a cobertura aqui é da varredura, não um "aprovado" do PDF.
+	 */
+	private Optional<String> capaDeDocumento(String mediaId) {
+		MediaAsset asset = assets.findById(mediaId).orElse(null);
+		if (asset == null || !PDF_MIME.equals(asset.mimeType())) {
+			return Optional.ofNullable(mediaId);
+		}
+		return jobs.find(mediaId)
+			.filter(job -> job.status() == MediaRenderJobStatus.RENDERED && !job.pageKeyList().isEmpty())
+			.flatMap(job -> assets.findByObjectKey(job.pageKeyList().get(0)))
+			.map(MediaAsset::id);
+	}
+
 	@Override
 	public List<byte[]> imagesOf(String targetType, String targetId, int limit) {
 		if (limit <= 0 || targetId == null) {
@@ -165,7 +191,7 @@ class ReportedMediaAdapter implements ReportedMediaReader,
 	private List<String> mediaIdsOf(String targetType, String targetId) {
 		return switch (targetType == null ? "" : targetType) {
 			// A varredura de mídia não parte de um post: o alvo JÁ é a mídia.
-			case "MEDIA" -> List.of(targetId);
+			case "MEDIA" -> capaDeDocumento(targetId).map(List::of).orElse(List.of());
 			case "POST" -> posts.findById(new PostId(targetId)).map(post -> post.mediaIds()).orElse(List.of());
 			case "COMMENT" -> comments.findById(targetId).map(comment -> comment.mediaIds()).orElse(List.of());
 			case "FIGURINHA_COMUNIDADE" -> figurinhas.findById(targetId).map(figurinha -> List.of(figurinha.mediaId()))

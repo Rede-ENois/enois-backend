@@ -19,6 +19,16 @@ public interface MediaSafetyCheckRepository {
 	 */
 	List<String> findUncheckedMediaIdsSince(Instant since, int limit);
 
+	/**
+	 * Donos de mídia no ar enviada na janela que ainda têm algo sem veredito: imagem sem linha no
+	 * ledger, ou PDF com folha sem linha. A varredura pergunta o resto por dono, porque documento
+	 * recém-desenhado não se alcança por lista ordenada de mídia.
+	 */
+	List<String> findUncheckedOwnersSince(Instant since, int limit);
+
+	/** Mídias com violação gravada na janela e ainda no ar, das mais recentes para as mais antigas. */
+	List<String> findViolatorsSince(Instant since, int limit);
+
 	/** Mídias já barradas, para o painel acompanhar o que a automação derrubou. */
 	List<MediaSafetyCheck> findViolationsSince(Instant since, int limit);
 }

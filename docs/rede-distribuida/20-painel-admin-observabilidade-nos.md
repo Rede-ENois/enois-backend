@@ -467,7 +467,7 @@ intervalo entre eles não pode ser refeita depois: o intervalo de cada amostra n
 |---|---|
 | runtime | guarda contadores e instante da medida anterior em `$NODE_HOME/net-prev` e manda `netInMbps`/`netOutMbps` — MiB/s do intervalo — ao lado do acumulado |
 | heartbeat | `observed.netInMbps`/`observed.netOutMbps` (novos, aditivos) |
-| série do minuto | colunas `net_in_mbps`/`net_out_mbps` (V391); o resumo do nó publica `netInMbpsLatest`/`netOutMbpsLatest` |
+| série do minuto | colunas `net_in_mbps`/`net_out_mbps` (V392); o resumo do nó publica `netInMbpsLatest`/`netOutMbpsLatest` |
 | painel global | `GET /admin/network/nodes/dashboard` ganha `throughput`: `inMbps`, `outMbps`, `measuredNodes` e `measuredBytesSinceBoot` |
 
 Decisões:
@@ -485,7 +485,7 @@ Decisões:
   para o acumulado não aparecer como se fosse taxa.
 
 Provas: `node-network-throughput-test.sh` (11 casos: roda o `cycle` real com `/proc/net/dev` forjado
-e intervalo fixado no estado); `node-network-throughput-migration-test.sh` (V391 2× em MariaDB
+e intervalo fixado no estado); `node-network-throughput-migration-test.sh` (V392 2× em MariaDB
 11.4 real, dados preservados); `NetworkDashboardThroughputTests` (4 casos);
 `NetworkNodeMemoryPressureTests` (3 casos novos: taxa do heartbeat vira amostra, runtime antigo deixa
 nulo, o ponto novo sem taxa não apaga a última medida). Mutações conferidas: taxa derivada do

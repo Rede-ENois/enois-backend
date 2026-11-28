@@ -180,6 +180,16 @@ public class PortfolioService {
 		if (page.draftHtml() == null && draft.isEmpty()) {
 			throw new ApiException(409, "PORTFOLIO_EMPTY", "Monte a pagina ou uma peca antes de publicar.");
 		}
+		// Mídia pode ter sido trocada ou apagada depois de entrar na peça: confere de novo na hora de
+		// ir ao ar, com a mesma regra da gravação (do dono, tipo certo, checagem de conteúdo feita).
+		for (PortfolioBlock block : draft) {
+			if (block.mediaId() != null && (block.type() == PortfolioBlockType.MEDIA
+					|| block.type() == PortfolioBlockType.PDF)
+					&& !mediaCatalog.usable(userId, block.mediaId(), block.type())) {
+				throw new ApiException(400, "PORTFOLIO_MEDIA_NOT_CHECKED",
+					"Uma peca usa midia que ainda nao foi liberada pela checagem de conteudo ou nao esta mais disponivel.");
+			}
+		}
 		int version = page.publishedVersion() + 1;
 		Instant now = clock.instant();
 		List<PortfolioBlock> snapshot = new ArrayList<>();
@@ -271,10 +281,19 @@ public class PortfolioService {
 				requireHttpsLink(input.linkUrl());
 			}
 			case MEDIA, PDF -> {
-				if (!StringUtils.hasText(input.mediaId())
-						|| !mediaCatalog.usable(userId, input.mediaId(), input.type())) {
+				if (!StringUtils.hasText(input.mediaId())) {
 					throw new ApiException(400, "PORTFOLIO_BLOCK_MEDIA_INVALID",
-						"A peca precisa de uma midia sua, pronta" + (input.type() == PortfolioBlockType.PDF
+						"A peca precisa de uma midia sua" + (input.type() == PortfolioBlockType.PDF
+							? " e em PDF." : "."));
+				}
+				if (!mediaCatalog.usable(userId, input.mediaId(), input.type())) {
+					// Duas causas diferentes com o mesmo olhar: mídia de outra pessoa/tipo errado, ou
+					// mídia do dono que a checagem de conteúdo ainda não liberou (PDF sem página).
+					boolean awaitingCheck = mediaCatalog.uncheckedMedia(List.of(input.mediaId()))
+						.containsKey(input.mediaId());
+					throw new ApiException(400, "PORTFOLIO_BLOCK_MEDIA_INVALID", awaitingCheck
+						? "A midia desta peca ainda esta em analise de conteudo. Tente de novo em instantes."
+						: "A peca precisa de uma midia sua" + (input.type() == PortfolioBlockType.PDF
 							? " e em PDF." : "."));
 				}
 			}

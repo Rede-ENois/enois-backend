@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Migração V391 (taxa de rede do nó, brief §8.2 "Throughput de entrada e saída" / §8.3
+# Migração V392 (taxa de rede do nó, brief §8.2 "Throughput de entrada e saída" / §8.3
 # "Throughput global") contra um MariaDB real, aplicada DUAS vezes.
 #
 # O que esta migração promete e o que aqui se mede:
@@ -25,13 +25,13 @@ FAIL=0
 pass() { printf '[PASS] %s\n' "$1"; PASS=$((PASS + 1)); }
 fail() { printf '[FAIL] %s\n' "$1" >&2; FAIL=$((FAIL + 1)); }
 
-# A V391 pede `after memory_pressure_percent`: a base tem de chegar até a V389 (quando swap e pressão
+# A V392 pede `after memory_pressure_percent`: a base tem de chegar até a V389 (quando swap e pressão
 # entraram), como a instalação que recebe esta migração.
 BASE_MIGRATIONS=(V305__network_nodes.sql V325__network_node_observability.sql
   V321__network_node_observed_disk.sql V341__network_node_observed_disk_total.sql
   V343__network_node_observed_disk_total.sql V380__network_node_disk_io.sql
   V381__network_node_memory_split.sql V389__network_node_memory_pressure.sql)
-for migration in "${BASE_MIGRATIONS[@]}" V391__network_node_network_throughput.sql; do
+for migration in "${BASE_MIGRATIONS[@]}" V392__network_node_network_throughput.sql; do
   [[ -f "$MIGRATIONS/$migration" ]] || { fail "migração ausente: $migration"; exit 1; }
 done
 
@@ -81,7 +81,7 @@ for migration in "${BASE_MIGRATIONS[@]}"; do
   apply "$migration" >/dev/null 2>&1 || { fail "base $migration falhou"; exit 1; }
 done
 
-# Nó e amostra do contrato ANTES da V391: só as colunas que já existiam.
+# Nó e amostra do contrato ANTES da V392: só as colunas que já existiam.
 db >/dev/null 2>&1 <<'SQL'
 insert into network_nodes (id, display_name, owner_user_id, status, region, country, created_at)
 values ('nd_net_mig001', 'no-net', 'user-net', 'ACTIVE', 'sa-east-1', 'BR', now());
@@ -96,11 +96,11 @@ else
   exit 1
 fi
 
-if apply V391__network_node_network_throughput.sql >/dev/null 2>&1; then
-  pass "V391 aplica sobre a tabela existente"
+if apply V392__network_node_network_throughput.sql >/dev/null 2>&1; then
+  pass "V392 aplica sobre a tabela existente"
 else
-  fail "V391 falhou na 1ª aplicação"
-  db < "$MIGRATIONS/V391__network_node_network_throughput.sql" 2>&1 | head -3 >&2
+  fail "V392 falhou na 1ª aplicação"
+  db < "$MIGRATIONS/V392__network_node_network_throughput.sql" 2>&1 | head -3 >&2
 fi
 
 if [[ "$(n "select count(*) from information_schema.columns where table_schema = database()
@@ -172,10 +172,10 @@ else
   fail "soma das taxas inesperada"
 fi
 
-if apply V391__network_node_network_throughput.sql >/dev/null 2>&1; then
-  pass "V391 é idempotente (2ª aplicação sem erro)"
+if apply V392__network_node_network_throughput.sql >/dev/null 2>&1; then
+  pass "V392 é idempotente (2ª aplicação sem erro)"
 else
-  fail "V391 falhou na 2ª aplicação"
+  fail "V392 falhou na 2ª aplicação"
 fi
 
 if [[ "$(n "select concat_ws('|', net_in_mbps, net_out_mbps) from network_node_samples
