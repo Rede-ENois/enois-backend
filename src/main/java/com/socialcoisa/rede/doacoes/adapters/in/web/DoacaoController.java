@@ -83,24 +83,38 @@ class DoacaoController {
 		return Map.of("doacao", view(resultado.doacao()), "situacao", resultado.situacao());
 	}
 
-	/** O que a tela da pessoa mostra: o selo e o histórico. */
+	/**
+	 * O que a tela da pessoa mostra: o selo e o histórico.
+	 *
+	 * <p>O histórico é o EXTRATO de dinheiro: a linha de selo manual (origem {@code MANUAL}, valor
+	 * zero) não entra. Ela não é uma doação da pessoa, e mostrá-la em "minhas doações" pintava um
+	 * registro financeiro confirmado de R$ 0,00 que ela nunca fez. O selo vem em {@code selo}.</p>
+	 */
 	@GetMapping("/doacoes/minhas")
 	Map<String, Object> mine(@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		CurrentUser user = currentUserResolver.resolve(sessionToken);
 		return Map.of(
 			"selo", doacoes.sealState(user.id().value()),
-			"doacoes", doacoes.byUser(user.id().value()).stream().map(DoacaoController::view).toList());
+			"doacoes", doacoes.byUser(user.id().value()).stream()
+				.filter(doacao -> doacao.origem() != DoacaoStatus.Origem.MANUAL)
+				.map(DoacaoController::view)
+				.toList());
 	}
 
 	// ---- conferência: quem recebe (admin) ----
 
 	/**
-	 * A fila do que precisa de conferência no extrato da conta. O resumo é público e sempre foi
-	 * (contador total de doações); o nome de quem doou fica só para a administração.
+	 * O resumo público: quantas doações de dinheiro foram confirmadas. O nome de quem doou fica só
+	 * para a administração.
+	 *
+	 * <p>A chave continua {@code confirmed} e o número continua sendo dinheiro: a linha de selo
+	 * manual (origem {@code MANUAL}, valor zero) fica FORA. Ela existe para o selo, não para o
+	 * extrato — contá-la aqui faria o resumo público dizer "doações confirmadas" incluindo selos
+	 * registrados à mão pela administração.</p>
 	 */
 	@GetMapping("/doacoes/resumo")
 	Map<String, Object> summary() {
-		return Map.of("confirmed", doacoes.countByStatus(DoacaoStatus.CONFIRMADA));
+		return Map.of("confirmed", doacoes.countConfirmedMoney());
 	}
 
 	@GetMapping("/admin/doacoes")

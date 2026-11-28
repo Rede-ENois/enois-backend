@@ -23,6 +23,9 @@ public interface DoacaoRepository {
 
 	long countByStatus(DoacaoStatus status);
 
+	/** Quantas doações daquele status têm aquela origem. O resumo público desconta a MANUAL. */
+	long countByStatusAndOrigem(DoacaoStatus status, DoacaoStatus.Origem origem);
+
 	/** Se algum destes identificadores de pix já confirmou uma doação (para barrar comprovante repetido). */
 	boolean anyPixIdUsed(Collection<String> pixIds);
 

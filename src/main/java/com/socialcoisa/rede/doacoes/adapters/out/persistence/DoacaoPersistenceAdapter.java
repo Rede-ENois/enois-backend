@@ -54,6 +54,11 @@ class DoacaoPersistenceAdapter implements DoacaoRepository {
 	}
 
 	@Override
+	public long countByStatusAndOrigem(DoacaoStatus status, DoacaoStatus.Origem origem) {
+		return repository.countByStatusAndOrigem(status, origem);
+	}
+
+	@Override
 	public boolean anyPixIdUsed(Collection<String> pixIds) {
 		return pixIds != null && !pixIds.isEmpty() && repository.countUsingPixIds(pixIds) > 0;
 	}

@@ -22,6 +22,8 @@ interface SpringDataDoacaoRepository extends JpaRepository<DoacaoJpaEntity, Stri
 
 	long countByStatus(DoacaoStatus status);
 
+	long countByStatusAndOrigem(DoacaoStatus status, DoacaoStatus.Origem origem);
+
 	/**
 	 * Quem já tem uma doação confirmada — uma consulta só, para carimbar o selo nas listas.
 	 * Os ids vêm de quem chama, que já sabe quem aparece na tela.
