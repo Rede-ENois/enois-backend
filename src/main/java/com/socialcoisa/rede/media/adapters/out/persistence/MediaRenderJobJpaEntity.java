@@ -33,7 +33,7 @@ class MediaRenderJobJpaEntity {
 	@Column(nullable = false)
 	private int pages;
 
-	@Column(name = "page_keys", length = 1000)
+	@Column(name = "page_keys", length = 2000)
 	private String pageKeys;
 
 	@Column(name = "last_error", length = 300)

@@ -17,8 +17,12 @@ create table if not exists media_render_jobs (
   status varchar(20) character set utf8mb4 collate utf8mb4_unicode_ci not null,
   attempt int not null default 0,
   pages int not null default 0,
-  -- chaves das páginas gravadas no bucket, separadas por vírgula (a página é achada pela chave)
-  page_keys varchar(1000) character set utf8mb4 collate utf8mb4_unicode_ci null,
+  -- chaves das páginas gravadas no bucket, separadas por vírgula (a página é achada pela chave).
+  -- 2000, e não 1000: o renderizador tem MAX_PAGES = 20 e cada chave tem 60 caracteres
+  -- (`paginas/media_<32 hex>/pagina-20.png`), então o pior caso é 20 x 60 + 19 vírgulas = 1219.
+  -- Com 1000 a 17ª página estourava na gravação e o documento ficava RENDERED sem chave — nunca
+  -- retentado e sem página para moderar. Cabe o máximo que o código produz, com folga.
+  page_keys varchar(2000) character set utf8mb4 collate utf8mb4_unicode_ci null,
   last_error varchar(300) character set utf8mb4 collate utf8mb4_unicode_ci null,
   created_at timestamp not null,
   updated_at timestamp not null,
