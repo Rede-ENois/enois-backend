@@ -104,6 +104,23 @@ public record Doacao(
 			DoacaoStatus.Origem.CONTA, createdAt, confirmedAt != null ? confirmedAt : now, reviewerId);
 	}
 
+	/**
+	 * O selo dado à mão por um administrador (o comprovante não foi reconhecido, ou a doação foi
+	 * feita por outro caminho). Nasce <b>já confirmada</b> e com valor zero: valor zero diz "esta
+	 * linha não é dinheiro lido, é o selo registrado" — o extrato e os totais nunca a somam como
+	 * doação, e a tela de quem doou não mostra um valor que ninguém pagou.
+	 *
+	 * <p>Como toda doação confirmada, só há uma registrada por pessoa (o serviço recusa a segunda):
+	 * o selo é pelo gesto, e não se acumula por clique.</p>
+	 */
+	public static Doacao manualSeal(String userId, Instant now, String adminId) {
+		if (userId == null || userId.isBlank()) {
+			throw new IllegalArgumentException("USER_ID_REQUIRED");
+		}
+		return new Doacao("dona_" + UUID.randomUUID().toString().replace("-", ""), userId, "MANUAL-" + newTxid(),
+			0L, java.util.List.of(), DoacaoStatus.CONFIRMADA, DoacaoStatus.Origem.MANUAL, now, now, adminId);
+	}
+
 	/** O extrato da conta não mostrou o pix. Revisão humana, com o nome de quem decidiu. */
 	public Doacao reject(String byUserId) {
 		if (status != DoacaoStatus.ABERTA) {

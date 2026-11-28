@@ -31,7 +31,8 @@ o mesmo pagamento e tentar se declarar "quem doou". Por isso:
 - o txid identifica **a doação**, nunca a pessoa;
 - o selo só nasce de comprovante com E2E (do doador) ou de linha de ENTRADA do extrato da conta
   (conferência, abaixo);
-- a confirmada por revisão no extrato é a prova forte (`origem = CONTA`).
+- a confirmada por revisão no extrato é a prova forte (`origem = CONTA`); o selo dado à mão pela
+  administração tem `origem = MANUAL` e valor zero (seção própria abaixo).
 
 ## Conferência por quem recebe
 
@@ -42,6 +43,30 @@ sinal de entrada só entra se disser "recebido". `GET /admin/doacoes` lista aber
 
 Não há webhook: o webhook do Pix pertence à API Pix do PSP da conta (a NuPay não é PSP do recebedor
 nesse arranjo, a leitura dela sobre pagador vale para a cobrança dela, não para Pix direto).
+
+## Selo registrado à mão (administração)
+
+Quando o dinheiro chega e o comprovante não é reconhecido (comprovante de outro formato, Pix feito
+por outra conta, transferência combinada fora do app), a pessoa ficou sem o selo que o gesto dela
+merece. `POST /admin/doacoes/sele/{username}` registra o selo pelo perfil, e o corpo leva o motivo:
+
+```json
+{ "reason": "Pix de 25/11 chegou na conta e o comprovante não foi reconhecido" }
+```
+
+Regras, e por que cada uma existe:
+
+- **Só admin** (`AdminGuard`), e o nome de quem registrou fica na linha (`decided_by`).
+- **Motivo obrigatório** (`REASON_REQUIRED`), como nas outras ações administrativas de conta.
+- **Um selo manual por conta**: a segunda tentativa responde `409 SUPPORTER_SEAL_ALREADY_GRANTED`.
+  Sem isso, o botão viraria clique sem consequência — e "apoiador" deixaria de significar um gesto.
+- **Quem já é apoiador por doação confirmada** não recebe (`409 SUPPORTER_ALREADY_CONFIRMED`): não
+  há o que registrar, e a linha manual não pode substituir a prova que já existe.
+- A linha nasce **com valor zero** e `origem = MANUAL`. É a única forma de o selo manual não entrar
+  como dinheiro recebido: o extrato soma entradas de valor, e a tela de quem doou não mostra um valor
+  que ninguém pagou. O resumo público (`confirmed`) continua contando pessoas, não reais.
+- O selo manual dá ao perfil exatamente o que uma doação confirmada dá — `GET /users/{username}/apoiador`
+  e o selo nas projeções do feed. Nada mais: nenhum dado financeiro sai da conta.
 
 ## Janela e troca de código
 
@@ -70,7 +95,8 @@ abertos multiplicariam comprovantes a conferir e o txid antigo pode chegar atras
 - Domínio: `BrCode`, `EndToEndId`, `PixStatement`, `ComprovanteTexto`, `Doacao`, `DoacaoStatus`.
 - Aplicação: `DoacaoService` (open, confirmWithProof, reconcile, decide, sealState).
 - Web: `DoacaoController` (`/doacoes/pix`, `/doacoes/{id}/comprovante`, `/doacoes/minhas`,
-  `/admin/doacoes*`) e `ApoiadorSealController` (`/users/{username}/apoiador`).
+  `/admin/doacoes*`, `/admin/doacoes/sele/{username}`) e `ApoiadorSealController`
+  (`/users/{username}/apoiador`).
 - Migração: `V372__doacoes.sql` (tabelas `doacoes` e `doacoes_pix_ids`).
 - Projeções: `PostView.authorApoiador` e `CommentView.authorApoiador`, carimbados em lote no
   `GetFeedService`.
