@@ -1,6 +1,5 @@
 package com.socialcoisa.rede.portfolio.adapters.out.persistence;
 
-import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -31,17 +30,15 @@ class PortfolioPublicationAdapter implements PortfolioPublicationRepository {
 	}
 
 	@Override
-	public Map<String, Map<Integer, String>> publishedHtml(Collection<String> userIds, Collection<Integer> versions) {
-		if (userIds.isEmpty() || versions.isEmpty()) {
+	public Map<String, Map<Integer, String>> publishedHtml(Map<String, Integer> live) {
+		if (live == null || live.isEmpty()) {
 			return Map.of();
 		}
 		Map<String, Map<Integer, String>> byOwner = new HashMap<>();
-		for (PortfolioPublication publication : jpaRepository.findPublished(userIds, versions).stream()
-			.map(PortfolioPublicationJpaEntity::toDomain)
-			.toList()) {
-			byOwner.computeIfAbsent(publication.userId(), owner -> new HashMap<>())
-				.put(publication.version(), publication.html());
-		}
+		// Uma consulta por dono, com a versão DELE: o par (dono, versão) é o que a página lê.
+		live.forEach((userId, version) -> jpaRepository.findPublishedVersion(userId, version)
+			.ifPresent(entity -> byOwner.computeIfAbsent(userId, owner -> new HashMap<>())
+				.put(version, entity.toDomain().html())));
 		return byOwner;
 	}
 
