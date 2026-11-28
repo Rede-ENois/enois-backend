@@ -1,6 +1,5 @@
 package com.socialcoisa.rede.portfolio.adapters.out.persistence;
 
-import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -15,12 +14,14 @@ interface SpringDataPortfolioPublicationJpaRepository extends JpaRepository<Port
 	Optional<PortfolioPublicationJpaEntity> findFirstByUserIdOrderByVersionDesc(String userId);
 
 	/**
-	 * Toda versão publicada dos donos informados, para o título da lista. O rascunho nunca vira
-	 * versão, então não aparece aqui; as peças são lidas junto com a linha.
+	 * A versão publicada de UM dono, pelo número dela — o par (dono, versão) que a página lê.
+	 * Filtrar donos e versões como dois conjuntos soltos carrega o histórico inteiro de cada dono
+	 * (html e peças são {@code longtext}) para usar uma linha. O rascunho nunca vira versão.
 	 */
 	@Query("""
 		select p from PortfolioPublicationJpaEntity p
-		where p.userId in :userIds and p.version > 0
+		where p.userId = :userId and p.version = :version
 		""")
-	List<PortfolioPublicationJpaEntity> findPublished(@Param("userIds") Collection<String> userIds);
+	Optional<PortfolioPublicationJpaEntity> findPublishedVersion(@Param("userId") String userId,
+			@Param("version") int version);
 }
