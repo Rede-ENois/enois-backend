@@ -83,9 +83,18 @@ public class DoacaoService {
 			doacao.createdAt().plusSeconds(QR_WINDOW_HOURS * 3600L));
 	}
 
-	/** Doações da pessoa, da mais nova para a mais velha — é o histórico do perfil e da tela. */
+	/**
+	 * Doações da pessoa, da mais nova para a mais velha — é o histórico de pagamentos da tela.
+	 *
+	 * <p>A linha de <b>selo manual</b> não entra: ela não é uma doação da pessoa. Existe para
+	 * registrar que a administração concedeu o selo (valor zero, origem {@code MANUAL}); mostrá-la
+	 * aqui faria a pessoa ver uma doação confirmada de R$ 0,00 com {@code txid MANUAL-…} que ela
+	 * nunca fez — um registro financeiro apresentado como dela.</p>
+	 */
 	public List<Doacao> byUser(String userId) {
-		return doacoes.byUser(userId);
+		return doacoes.byUser(userId).stream()
+			.filter(d -> d.origem() != DoacaoStatus.Origem.MANUAL)
+			.toList();
 	}
 
 	/**
@@ -171,6 +180,14 @@ public class DoacaoService {
 
 	public long countByStatus(DoacaoStatus status) {
 		return doacoes.countByStatus(status);
+	}
+
+	/**
+	 * Doações confirmadas de verdade — o selo registrado à mão não conta. É o número do resumo
+	 * público ({@code confirmed}): o que ele mede é dinheiro recebido, não quantas pessoas têm selo.
+	 */
+	public long countConfirmedDonations() {
+		return doacoes.countConfirmedExcludingManual();
 	}
 
 	/**
@@ -306,10 +323,15 @@ public class DoacaoService {
 
 	/** O estado do selo para a tela da pessoa: apoiador e quantas doações confirmadas. */
 	public Map<String, Object> sealState(String userId) {
-		List<Doacao> confirmadas = doacoes.byUser(userId).stream()
+		List<Doacao> todas = doacoes.byUser(userId).stream()
 			.filter(d -> d.status() == DoacaoStatus.CONFIRMADA).toList();
+		List<Doacao> confirmadas = todas.stream()
+			.filter(d -> d.origem() != DoacaoStatus.Origem.MANUAL).toList();
+		// O selo vale com qualquer confirmação, inclusive a concedida à mão; a CONTAGEM é só de
+		// doações reais. Contar a linha manual diria "1 doação confirmada" para quem nunca apareceu
+		// em extrato nenhum.
 		return Map.of(
-			"apoiador", !confirmadas.isEmpty(),
+			"apoiador", !todas.isEmpty(),
 			"confirmedCount", confirmadas.size(),
 			"lastConfirmedAt", confirmadas.isEmpty() ? "" : confirmadas.get(0).confirmedAt().toString());
 	}

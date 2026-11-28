@@ -62,9 +62,14 @@ Regras, e por que cada uma existe:
   Sem isso, o botão viraria clique sem consequência — e "apoiador" deixaria de significar um gesto.
 - **Quem já é apoiador por doação confirmada** não recebe (`409 SUPPORTER_ALREADY_CONFIRMED`): não
   há o que registrar, e a linha manual não pode substituir a prova que já existe.
-- A linha nasce **com valor zero** e `origem = MANUAL`. É a única forma de o selo manual não entrar
-  como dinheiro recebido: o extrato soma entradas de valor, e a tela de quem doou não mostra um valor
-  que ninguém pagou. O resumo público (`confirmed`) continua contando pessoas, não reais.
+- A linha nasce **com valor zero** e `origem = MANUAL`, e **não aparece em "minhas doações"**
+  (`GET /doacoes/minhas` filtra `MANUAL`): ela não é uma doação da pessoa, e mostrá-la faria a tela
+  apresentar um pagamento de R$ 0,00 com `txid MANUAL-…` que ninguém fez. O selo continua vindo por
+  `GET /users/{username}/apoiador`, que é onde ele pertence.
+- `selo.confirmedCount` conta **doações reais** (a linha manual não entra), e `selo.apoiador` vale
+  `true` com qualquer confirmação, inclusive a concedida à mão.
+- O resumo público `GET /doacoes/resumo` → `confirmed` conta **doações** confirmadas, e o selo manual
+  não entra: o número é de dinheiro recebido, não de quantas pessoas têm selo.
 - O selo manual dá ao perfil exatamente o que uma doação confirmada dá — `GET /users/{username}/apoiador`
   e o selo nas projeções do feed. Nada mais: nenhum dado financeiro sai da conta.
 

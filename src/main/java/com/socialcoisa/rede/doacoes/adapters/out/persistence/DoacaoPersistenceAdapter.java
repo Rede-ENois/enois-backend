@@ -54,6 +54,11 @@ class DoacaoPersistenceAdapter implements DoacaoRepository {
 	}
 
 	@Override
+	public long countConfirmedExcludingManual() {
+		return repository.countConfirmedExcludingOrigem(DoacaoStatus.CONFIRMADA, DoacaoStatus.Origem.MANUAL);
+	}
+
+	@Override
 	public boolean anyPixIdUsed(Collection<String> pixIds) {
 		return pixIds != null && !pixIds.isEmpty() && repository.countUsingPixIds(pixIds) > 0;
 	}

@@ -83,6 +83,50 @@ class ManualSupporterSealTests {
 		assertThat(linha.decidedBy()).isEqualTo(admin.userId());
 	}
 
+	/**
+	 * A linha manual não é uma doação da pessoa: ela não pode aparecer em "minhas doações" como se
+	 * fosse R$ 0,00 pago por ela, e não pode entrar como dinheiro no resumo público.
+	 *
+	 * <p>O `amountCents: 0` resolve soma, não leitura — antes deste filtro a tela mostrava uma doação
+	 * confirmada de zero com {@code txid MANUAL-…}.</p>
+	 */
+	@Test
+	void aLinhaManualNaoApareceNasDoacoesDaPessoaNemNoResumoPublico() throws Exception {
+		String nome = "selo_leitura_" + System.nanoTime();
+		var pessoa = auth(nome);
+		var admin = admin("admin_leitura_" + System.nanoTime());
+
+		// Uma doação de VERDADE confirmada, para o resumo ter o que contar.
+		var outra = auth("selo_leitura_outra_" + System.nanoTime());
+		var codigo = mockMvc.perform(post("/doacoes/pix")
+				.header("X-Session-Token", outra.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("amountCents", 1500))))
+			.andExpect(status().isOk())
+			.andReturn();
+		String id = objectMapper.readTree(codigo.getResponse().getContentAsString()).get("id").asText();
+		mockMvc.perform(post("/doacoes/{id}/comprovante", id)
+				.header("X-Session-Token", outra.token())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(objectMapper.writeValueAsString(Map.of("comprovante",
+					"13/11/2026 Pix recebido R$ 15,00 id: EG1B2C3D4E5F6A7B8C9D0E1F2A3B4C5D"))))
+			.andExpect(status().isOk());
+		long antes = resumoConfirmado();
+
+		registra(admin.token(), usernameOf(nome)).andExpect(status().isOk());
+
+		// O selo vale...
+		mockMvc.perform(get("/doacoes/minhas").header("X-Session-Token", pessoa.token()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.selo.apoiador").value(true))
+			// ...mas a contagem é de doações reais: nenhuma.
+			.andExpect(jsonPath("$.selo.confirmedCount").value(0))
+			.andExpect(jsonPath("$.doacoes.length()").value(0));
+
+		// E o resumo público não subiu: o selo manual não é dinheiro recebido.
+		assertThat(resumoConfirmado()).as("o resumo conta doações, não selos").isEqualTo(antes);
+	}
+
 	@Test
 	void naoRegistraODozeASegundoSelo() throws Exception {
 		String nome = "selo_dois_" + System.nanoTime();
@@ -164,6 +208,11 @@ class ManualSupporterSealTests {
 	}
 
 	// ---- apoio ----
+	private long resumoConfirmado() throws Exception {
+		var result = mockMvc.perform(get("/doacoes/resumo")).andExpect(status().isOk()).andReturn();
+		return objectMapper.readTree(result.getResponse().getContentAsString()).get("confirmed").asLong();
+	}
+
 
 	/** O @ da conta: o cadastro do harness deriva o username do nome, com hífen no lugar do "_". */
 	private static String usernameOf(String nome) {

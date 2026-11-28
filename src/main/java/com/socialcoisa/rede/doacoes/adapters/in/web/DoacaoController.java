@@ -96,11 +96,16 @@ class DoacaoController {
 
 	/**
 	 * A fila do que precisa de conferência no extrato da conta. O resumo é público e sempre foi
-	 * (contador total de doações); o nome de quem doou fica só para a administração.
+	 * (contador de doações); o nome de quem doou fica só para a administração.
+	 *
+	 * <p>{@code confirmed} conta <b>doações</b> confirmadas, e por isso exclui o selo manual: aquela
+	 * linha é um selo concedido pela administração, de valor zero, e não dinheiro recebido. Quem
+	 * quer saber quantas <b>pessoas</b> têm selo pergunta ao perfil de cada uma — o número aqui é de
+	 * doações, e é assim que ele está documentado.</p>
 	 */
 	@GetMapping("/doacoes/resumo")
 	Map<String, Object> summary() {
-		return Map.of("confirmed", doacoes.countByStatus(DoacaoStatus.CONFIRMADA));
+		return Map.of("confirmed", doacoes.countConfirmedDonations());
 	}
 
 	@GetMapping("/admin/doacoes")

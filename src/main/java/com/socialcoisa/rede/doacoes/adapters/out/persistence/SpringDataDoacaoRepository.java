@@ -23,6 +23,15 @@ interface SpringDataDoacaoRepository extends JpaRepository<DoacaoJpaEntity, Stri
 	long countByStatus(DoacaoStatus status);
 
 	/**
+	 * Confirmações por dinheiro: exclui as linhas cuja origem é a passada (o selo manual). O resumo
+	 * público conta doação, não pessoa.
+	 */
+	@Query("select count(d) from DoacaoJpaEntity d where d.status = :status and "
+		+ "(d.origem is null or d.origem <> :origem)")
+	long countConfirmedExcludingOrigem(@Param("status") DoacaoStatus status,
+		@Param("origem") DoacaoStatus.Origem origem);
+
+	/**
 	 * Quem já tem uma doação confirmada — uma consulta só, para carimbar o selo nas listas.
 	 * Os ids vêm de quem chama, que já sabe quem aparece na tela.
 	 */

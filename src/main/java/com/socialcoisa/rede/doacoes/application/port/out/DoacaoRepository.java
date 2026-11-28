@@ -23,6 +23,9 @@ public interface DoacaoRepository {
 
 	long countByStatus(DoacaoStatus status);
 
+	/** Doações confirmadas por dinheiro — o selo registrado à mão ({@code MANUAL}) não entra. */
+	long countConfirmedExcludingManual();
+
 	/** Se algum destes identificadores de pix já confirmou uma doação (para barrar comprovante repetido). */
 	boolean anyPixIdUsed(Collection<String> pixIds);
 
