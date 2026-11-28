@@ -25,6 +25,47 @@ class TaskLatencyTests {
 		assertThat(vazia.p99Ms()).isNull();
 	}
 
+	/**
+	 * O percentil de TENTATIVAS é uma contagem, não uma duração: não passa por {@code bucketOf} e
+	 * não interpola.
+	 *
+	 * <p>Este é o caso que a versão anterior errava: 45 tarefas concluídas de primeira e 5 que
+	 * precisaram de 3 retentativas. Com a duração como chave, a chave 3 virava a faixa 4, e o p50
+	 * respondia 4 — "quatro tentativas" para quem fez quatro. E chave 0 e chave 1 caíam na mesma
+	 * faixa (1), achatando o caso mais comum no segundo mais comum.</p>
+	 */
+	@Test
+	void percentilDeTentativasEContagemDireta() {
+		TaskLatency rede = new TaskLatency(Map.of(64, 50), Map.of(0, 45, 3, 5));
+
+		// As 50 posições são contíguas: 1..45 são "0 perdidas" e 46..50 são "3 perdidas".
+		assertThat(rede.retriesP50()).as("posição 25: concluiu de primeira").isEqualTo(0);
+		assertThat(rede.retriesP95()).as("posição 48: as de 3 entraram").isEqualTo(3);
+		assertThat(rede.retries()).as("só quem precisou entra na contagem").isEqualTo(50);
+
+		// Sem as de primeira, todo o percentil é a contagem medida — e nunca a faixa de tempo.
+		TaskLatency soRetentativas = new TaskLatency(Map.of(), Map.of(3, 5));
+		assertThat(soRetentativas.retriesP50()).isEqualTo(3);
+		assertThat(soRetentativas.retriesP99()).isEqualTo(3);
+
+		// Contagem discreta não interpola: nunca "1,5 tentativas".
+		assertThat(new TaskLatency(Map.of(), Map.of(1, 1, 2, 1)).retriesP50()).isEqualTo(1);
+
+		// Sem retentativa medida, nulo — não zero.
+		assertThat(new TaskLatency(Map.of(64, 10), Map.of()).retriesP50()).isNull();
+	}
+
+	/**
+	 * Uma tarefa que concluiu na 3ª tentativa (2 perdidas) responde "2" — o valor medido, e não uma
+	 * faixa de tempo.
+	 */
+	@Test
+	void concluirNaTerceiraTentativaRespondeDuasTentativasPerdidas() {
+		TaskLatency uma = new TaskLatency(Map.of(), Map.of(2, 1));
+		assertThat(uma.retriesP50()).isEqualTo(2);
+		assertThat(uma.retriesP95()).isEqualTo(2);
+	}
+
 	@Test
 	void faixaDobraAteSaturar() {
 		assertThat(TaskLatency.bucketOf(0)).isEqualTo(1);

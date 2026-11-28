@@ -136,9 +136,11 @@ class NodeObservabilityPersistenceAdapter implements NodeObservabilityRepository
 	}
 
 	@Override
-	public void addRetrySample(String nodeId, Instant at, long durationMs) {
+	public void addRetrySample(String nodeId, Instant at, long attempts) {
+		// A contagem vai direto na coluna de faixa: é a quantidade de tentativas perdidas, não uma
+		// duração. `bucketOf` aqui achatava 0 e 1 na mesma faixa e respondia o percentil em "ms".
 		jdbc.update(UPSERT_RETRY, nodeId, Timestamp.from(at.truncatedTo(java.time.temporal.ChronoUnit.HOURS)),
-			com.socialcoisa.rede.network.domain.TaskLatency.bucketOf(durationMs));
+			(int) Math.max(0L, attempts));
 	}
 
 	@Override

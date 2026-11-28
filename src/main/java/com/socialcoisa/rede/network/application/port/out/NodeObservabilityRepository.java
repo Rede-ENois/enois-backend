@@ -88,11 +88,16 @@ public interface NodeObservabilityRepository {
 	void addLatencySample(String nodeId, Instant at, int bucketUpperMs);
 
 	/**
-	 * Soma, para uma tarefa que precisou de {@code durationMs} ms, quantas tentativas foram perdidas
-	 * antes de concluir (brief §8.2, "retentativas"). Entra na faixa da hora de {@code at}, somando
-	 * no banco como {@link #addLatencySample}.
+	 * Soma, para uma tarefa concluída, quantas tentativas foram perdidas antes de concluir (brief
+	 * §8.2, "retentativas"). Entra na faixa da hora de {@code at}.
+	 *
+	 * <p>É uma <b>contagem</b>: {@code attempts} é quantas tentativas falharam antes da que
+	 * concluiu (0, 1, 2…), e vai para a coluna como está — nada de milissegundos. A versão anterior
+	 * recebia uma duração e passava por {@code TaskLatency.bucketOf}, e o percentil respondia em
+	 * escala de tempo uma pergunta de contagem: uma tarefa que precisou de 3 tentativas caía na faixa
+	 * "4", e o p50 saía "4 tentativas" no lugar de "3".</p>
 	 */
-	void addRetrySample(String nodeId, Instant at, long durationMs);
+	void addRetrySample(String nodeId, Instant at, long attempts);
 
 	/**
 	 * Contagem por faixa deste nó nas últimas {@code hours} horas, até {@code now}. Faixa sem tarefa

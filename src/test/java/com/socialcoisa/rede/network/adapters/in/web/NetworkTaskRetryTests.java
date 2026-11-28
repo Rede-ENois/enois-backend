@@ -123,8 +123,8 @@ class NetworkTaskRetryTests {
 			"select bucket_upper_ms, retries from network_task_latency_buckets where node_id = ? and retries > 0",
 			node.id());
 		assertThat(((Number) faixaDaTentativa.get("BUCKET_UPPER_MS")).intValue())
-			.as("a faixa da contagem é a das tentativas perdidas, não a da duração")
-			.isEqualTo(com.socialcoisa.rede.network.domain.TaskLatency.bucketOf(naEntrega - 1L));
+			.as("a chave é a CONTAGEM de tentativas perdidas, não uma faixa de duração")
+			.isEqualTo(naEntrega - 1);
 		assertThat(((Number) faixaDaTentativa.get("RETRIES")).intValue()).isEqualTo(1);
 
 		mockMvc
@@ -132,8 +132,9 @@ class NetworkTaskRetryTests {
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.latency.samplesInWindow").value(1))
 			.andExpect(jsonPath("$.latency.retriesInWindow").value(1))
-			// A faixa da contagem de tentativas: é tentativa, não duração em segundos.
-			.andExpect(jsonPath("$.latency.retriesP50").isNumber());
+			// O percentil responde a CONTAGEM medida (uma tentativa perdida), e não uma faixa de
+			// tempo: com a duração como chave, `bucketOf(1)` responderia 1 por acaso, mas `3` viraria 4.
+			.andExpect(jsonPath("$.latency.retriesP50").value(naEntrega - 1));
 	}
 
 	@Test
