@@ -2,8 +2,8 @@
 
 Vitrine de trabalho que cada pessoa monta no próprio perfil: uma **página com aparência própria**
 (HTML do autor, no mesmo formato de página do resto do enois) e uma lista ordenada de **peças**
-(projeto, texto, mídia, PDF, link). Esta fase entrega o modelo, a API e as regras; o editor, o
-render público da página no front e a moderação de PDF são fases seguintes.
+(projeto, texto, mídia, PDF, link). Esta fase entrega o modelo, a API, as regras e a mídia/PDF das
+peças; o editor e o render público da página no front são fases seguintes.
 
 ## Regras do espaço
 

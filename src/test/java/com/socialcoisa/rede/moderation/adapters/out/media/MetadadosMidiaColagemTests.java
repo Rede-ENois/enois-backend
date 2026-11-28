@@ -54,7 +54,8 @@ class MetadadosMidiaColagemTests {
 		Map.of("origem", origem)).getBeanProvider(MediaSourceDownloader.class);
 	private final ReportedMediaAdapter metadados = new ReportedMediaAdapter(
 		posts, comentarios, assets, downloader, chamadas, colagem,
-		mock(com.socialcoisa.rede.figurinhas.application.port.out.FigurinhasComunidadeRepository.class));
+		mock(com.socialcoisa.rede.figurinhas.application.port.out.FigurinhasComunidadeRepository.class),
+		mock(com.socialcoisa.rede.media.application.port.out.MediaRenderJobRepository.class));
 
 	@ParameterizedTest
 	@MethodSource("associacoesPersistidas")

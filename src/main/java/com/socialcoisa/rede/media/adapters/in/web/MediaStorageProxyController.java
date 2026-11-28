@@ -51,6 +51,10 @@ class MediaStorageProxyController {
 	/** Opcional: sem registry (testes que montam o controller na mao) nada e registrado. */
 	private final ObjectProvider<io.micrometer.core.instrument.MeterRegistry> meters;
 	private final com.socialcoisa.rede.media.application.MediaUploadStageMetrics stageMetrics;
+	/** PDF não passa pelo classificador de imagem; as páginas dele passam, e isto as dispara. */
+	private final com.socialcoisa.rede.media.application.MediaPageRenderService pageRender;
+	/** Leitura do documento enquanto as páginas ainda estão em análise. */
+	private final com.socialcoisa.rede.media.application.port.out.MediaPageSets pages;
 
 	MediaStorageProxyController(ObjectProvider<MediaObjectStore> storeProvider, MediaAssetRepository assets,
 			CurrentUserResolver currentUserResolver,
@@ -58,7 +62,9 @@ class MediaStorageProxyController {
 			com.socialcoisa.rede.media.application.MediaImageModerationService imageModeration,
 			com.socialcoisa.rede.media.application.MediaDimensionsService dimensions,
 			ObjectProvider<io.micrometer.core.instrument.MeterRegistry> meters,
-			com.socialcoisa.rede.media.application.MediaUploadStageMetrics stageMetrics) {
+			com.socialcoisa.rede.media.application.MediaUploadStageMetrics stageMetrics,
+			com.socialcoisa.rede.media.application.MediaPageRenderService pageRender,
+			com.socialcoisa.rede.media.application.port.out.MediaPageSets pages) {
 		this.storeProvider = storeProvider;
 		this.assets = assets;
 		this.currentUserResolver = currentUserResolver;
@@ -67,6 +73,8 @@ class MediaStorageProxyController {
 		this.dimensions = dimensions;
 		this.meters = meters;
 		this.stageMetrics = stageMetrics;
+		this.pageRender = pageRender;
+		this.pages = pages;
 	}
 
 	private MediaObjectStore store() {
@@ -90,7 +98,8 @@ class MediaStorageProxyController {
 	@GetMapping("/{*key}")
 	ResponseEntity<StreamingResponseBody> read(@PathVariable String key,
 			@RequestHeader(value = HttpHeaders.RANGE, required = false) String range,
-			@RequestParam(value = "disposition", required = false) String disposition) {
+			@RequestParam(value = "disposition", required = false) String disposition,
+			@RequestHeader(value = "X-Session-Token", required = false) String sessionToken) {
 		String objectKey = objectKey(key);
 		MediaAsset asset = assets.findById(mediaIdOf(objectKey)).orElse(null);
 		boolean moderatorOnly = asset != null && com.socialcoisa.rede.media.application.MediaService
@@ -106,6 +115,11 @@ class MediaStorageProxyController {
 			object = store().read(objectKey, range);
 		}
 		catch (RuntimeException missing) {
+			throw new ApiException(404, "MEDIA_NOT_FOUND", "Midia nao encontrada.");
+		}
+		if (asset != null && awaitingPages(asset, sessionToken)) {
+			// Documento cujas páginas ainda estão em análise: só quem enviou o vê. A leitura pública
+			// dele abriria justamente o que a checagem ainda não liberou.
 			throw new ApiException(404, "MEDIA_NOT_FOUND", "Midia nao encontrada.");
 		}
 		String mime = asset != null ? asset.mimeType() : object.contentType();
@@ -139,6 +153,26 @@ class MediaStorageProxyController {
 				body.transferTo(output);
 			}
 		});
+	}
+
+	/**
+	 * PDF com página ainda sem veredito, lido por outra pessoa: responder 404 mantém a rota pública e
+	 * não confirma o conteúdo a quem só sabe a chave.
+	 */
+	private boolean awaitingPages(MediaAsset asset, String sessionToken) {
+		if (asset.mimeType() == null || !"application/pdf".equals(asset.mimeType())
+				|| pages.uncheckedOf(asset.id()).isEmpty()) {
+			return false;
+		}
+		if (sessionToken == null) {
+			return true;
+		}
+		try {
+			return !asset.ownerId().value().equals(currentUserResolver.resolve(sessionToken).id().value());
+		}
+		catch (RuntimeException semSessao) {
+			return true;
+		}
 	}
 
 	/**
@@ -232,6 +266,15 @@ class MediaStorageProxyController {
 					startedAt);
 				dimensions.recordUploaded(asset, clean);
 			}
+			// O classificador de imagem não lê PDF: o arquivo passa inteiro e o que está desenhado nas
+			// folhas nunca é olhado. Cada página é desenhada, checada e só então gravada — fora da
+			// resposta, para não segurar o envio. O tipo já é o do asset, então para não-PDF não faz nada.
+			//
+			// O asset é relido: o pedido de páginas pode já ter marcado a remoção deste PDF (e um asset
+			// relido de versão antiga apagaria essa marca na próxima gravação).
+			// A checagem das páginas é o que as libera — e ela custa download e modelo. Roda na mesma
+			// tarefa, depois do render: a análise de um PDF nunca começa antes das páginas existirem.
+			pageRender.renderLater(assets.findById(asset.id()).orElse(asset));
 		}
 		catch (com.socialcoisa.rede.media.application.MediaTemporaryFiles.UnavailableException failure) {
 			// Disco do pod recusando o temporario do video grande: nao e erro do arquivo que a pessoa
